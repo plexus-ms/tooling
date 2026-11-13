@@ -26,16 +26,16 @@ test('a manifest read back is the catalogue readCatalog builds from the checkout
   const text = renderManifest(buildManifest(fromCheckout, '0.3.0', '2026-01-02'));
   const manifest = parseManifest(text);
   assert.deepEqual(catalogOf(manifest), fromCheckout);
-  assert.equal(manifest.train, '0.3.0');
+  assert.equal(manifest.version, '0.3.0');
   assert.equal(manifest.date, '2026-01-02');
-  assert.equal(MANIFEST_FILE, 'train.json');
+  assert.equal(MANIFEST_FILE, 'modules.json');
 });
 
 test('the manifest is plain data: modules by code, a module without changed has none, notes are absent', async () => {
   const text = renderManifest(buildManifest(await catalog(), '0.3.0', '2026-01-02'));
   assert.ok(text.endsWith('}\n'));
   const data = JSON.parse(text);
-  assert.deepEqual(Object.keys(data), ['schema', 'train', 'date', 'modules']);
+  assert.deepEqual(Object.keys(data), ['schema', 'version', 'date', 'modules']);
   assert.deepEqual(
     data.modules.map((m: { code: string }) => m.code),
     ['PLX-Host', 'PLX-Platform', 'PLX-Repo'],
@@ -58,7 +58,7 @@ test('what is not a manifest is refused with what is wrong', async () => {
   assert.throws(() => parseManifest('<html>Not Found</html>'), /is not JSON/);
   assert.throws(() => parseManifest('[]'), /is not an object/);
   assert.throws(bad({ schema: 2 }), /has schema 2; this plx reads 1/);
-  assert.throws(bad({ train: 'v0.3' }), /names 'v0.3', not a train/);
+  assert.throws(bad({ version: 'v0.3' }), /names 'v0.3', not a version/);
   assert.throws(bad({ date: 'yesterday' }), /is dated 'yesterday'/);
   assert.throws(bad({ modules: undefined }), /lists no modules/);
   assert.throws(bad({ modules: [{ code: 'PLX-X', kind: 'note' }] }), /module PLX-X is neither contract nor approach/);

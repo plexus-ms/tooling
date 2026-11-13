@@ -3,7 +3,7 @@
 # what the jobs expect of GitHub's runners and the official image leaves
 # out. One container runs one job and is removed after it; nothing here is a
 # cache or a secret. Built and pushed by runner-image.yml as
-# ghcr.io/plexus-ms/ci-runner at the train number, with provenance, or built
+# ghcr.io/plexus-ms/ci-runner at the Plexus version, with provenance, or built
 # on the host itself (actions_runners_image_build); Renovate moves the base.
 #
 # The tools the jobs install themselves (mise and what it pins, exo, crane,

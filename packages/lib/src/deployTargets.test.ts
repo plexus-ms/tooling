@@ -10,7 +10,7 @@ import {
   targetsIn,
 } from './deployTargets.ts';
 import { fakeIo } from './testing/fakeIo.ts';
-import { UsageError } from './train.ts';
+import { UsageError } from './version.ts';
 
 const vm101 = `---
 plexus_deploy_target: "ssh://deploy@vm101.example:22"

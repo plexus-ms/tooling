@@ -10,7 +10,7 @@ export const TEMPLATE_FILES = ['copier.yml', 'copier.yaml'];
 // The copier every propagation runs, pinned here so that it travels with plx:
 // a consumer's update never depends on whichever copier the operator's machine
 // has on its PATH. mise installs it on first use. The update bot moves the pin
-// (the regex manager in renovate.json); the next train ships it.
+// (the regex manager in renovate.json); the next version ships it.
 // renovate: datasource=pypi depName=copier
 export const COPIER_VERSION = '9.19.1';
 
@@ -20,7 +20,7 @@ export const copierVia = (args: string[]): string[] => ['exec', `copier@${COPIER
 export interface Answers {
   /** The template's ref the project was last updated to, if recorded. */
   commit?: string;
-  /** Where the template comes from, e.g. `gh:plexus-ms/preset-repo-web`. */
+  /** Where the template comes from, e.g. `gh:plexus-ms/template-repo-turbo`. */
   src?: string;
   /** Every other answer, by question name. */
   answers: Record<string, unknown>;

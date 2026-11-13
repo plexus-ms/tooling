@@ -3,7 +3,7 @@
 # (actions_runners); IMAGE, PULL (false for an image built on the host),
 # REGISTRY (true | false), REGISTRY_IMAGE and DISK_ALERT_PERCENT come from
 # the unit's environment. Hand-runnable as root:
-#   IMAGE=ghcr.io/plexus-ms/ci-runner:<train> PULL=true REGISTRY=true \
+#   IMAGE=ghcr.io/plexus-ms/ci-runner:<version> PULL=true REGISTRY=true \
 #   REGISTRY_IMAGE=registry:2 DISK_ALERT_PERCENT=85 ci-runner-housekeeping
 set -eu
 : "${IMAGE:?}" "${PULL:?}" "${REGISTRY:?}" "${REGISTRY_IMAGE:?}" "${DISK_ALERT_PERCENT:?}"

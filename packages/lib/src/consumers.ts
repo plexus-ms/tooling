@@ -1,7 +1,7 @@
-// The consumers of the presets: every copier-managed site under a directory
+// The consumers of the templates: every copier-managed site under a directory
 // (tenant repo roots and their apps/*) and the repo each belongs to. A
 // consumer is updated in a scratch checkout of its origin's branch, never in
-// its own checkout, on the branch the train lands on: a platform repo (declares
+// its own checkout, on the branch the version lands on: a platform repo (declares
 // PLX-Platform) rides main, an app repo (declares PLX-Repo) rides develop
 // (§ 3 PLX-Delivery), and a package repo (its root answers say
 // `publishes_packages`) is trunk-based on main (§ 5 PLX-Delivery). A repo
@@ -10,23 +10,23 @@ import { relative } from 'node:path';
 import type { Context } from './context.ts';
 import type { Declaration } from './marker.ts';
 import type { Directory } from './model.ts';
-import { TRAIN_REPOS } from './train.ts';
+import { VERSIONED_REPOS } from './version.ts';
 
-/** The train repos that are templates: what a repo can be generated from. */
-export const PRESETS: readonly string[] = TRAIN_REPOS.filter((r) => r.startsWith('preset-'));
+/** The versioned repos that are templates: what a repo can be generated from. */
+export const TEMPLATES: readonly string[] = VERSIONED_REPOS.filter((r) => r.startsWith('template-'));
 
 export interface Site {
   path: string;
   /** Relative to the workspace. */
   rel: string;
-  /** The preset the site is generated from, e.g. `preset-repo-web`. */
-  preset: string;
+  /** The template the site is generated from, e.g. `template-repo-turbo`. */
+  template: string;
 }
 
 export interface Consumer {
   path: string;
   rel: string;
-  /** The branch the train lands on: the expected one, or the checkout's own when the marker names none. */
+  /** The branch the version lands on: the expected one, or the checkout's own when the marker names none. */
   branch: string;
   expected?: 'main' | 'develop';
   /** The URL of `origin`, which the scratch clone is made from. */
@@ -45,44 +45,48 @@ export function expectedBranch(declaration?: Declaration, answers: Record<string
   return undefined;
 }
 
-/** The template source copier records for a preset of the upstream organisation. */
-export const presetSource = (preset: string): string => `gh:plexus-ms/${preset}`;
+/** The template source copier records for a template of the upstream organisation. */
+export const templateSource = (template: string): string => `gh:plexus-ms/${template}`;
 
 /**
- * Presets renamed on a train, old name → current (0.114.0: the web preset
- * became the Turborepo preset, the platform repo the operations repo). A
+ * Templates renamed on a version, old name → current (0.114.0: the web template
+ * became the Turborepo template, the platform repo the operations repo; 0.120.0:
+ * the repos' `preset-` prefix became `template-`, copier's own word). A
  * consumer whose answers still name the old one is a consumer of the current
  * one, and its next update points the answers at the new name.
  */
-export const RENAMED_PRESETS: Readonly<Record<string, string>> = {
-  'preset-repo-web': 'preset-repo-turbo',
-  'preset-repo-platform': 'preset-repo-operations',
+export const RENAMED_TEMPLATES: Readonly<Record<string, string>> = {
+  'preset-repo-web': 'template-repo-turbo',
+  'preset-repo-platform': 'template-repo-operations',
+  'preset-repo-turbo': 'template-repo-turbo',
+  'preset-app-nextjs': 'template-app-nextjs',
+  'preset-repo-operations': 'template-repo-operations',
 };
 
-/** The current preset a recorded template source stands for, or undefined when it is none of the given presets. */
-export function presetOf(src: string, presets: readonly string[]): string | undefined {
-  for (const p of presets) if (presetSource(p) === src) return p;
-  for (const [old, current] of Object.entries(RENAMED_PRESETS))
-    if (presetSource(old) === src && presets.includes(current)) return current;
+/** The current template a recorded template source stands for, or undefined when it is none of the given templates. */
+export function templateOf(src: string, templates: readonly string[]): string | undefined {
+  for (const p of templates) if (templateSource(p) === src) return p;
+  for (const [old, current] of Object.entries(RENAMED_TEMPLATES))
+    if (templateSource(old) === src && templates.includes(current)) return current;
   return undefined;
 }
 
 /**
  * The consumers under a scanned workspace (`overview` with git facets), for
- * the given presets. A site inside a template directory is the template's own
+ * the given templates. A site inside a template directory is the template's own
  * and never a consumer; a site outside any git repo is reported, not updated;
  * a repo without an origin has nowhere to clone from and is skipped.
  */
-export async function findConsumers(ctx: Context, root: Directory, presets: readonly string[]): Promise<Consumer[]> {
+export async function findConsumers(ctx: Context, root: Directory, templates: readonly string[]): Promise<Consumer[]> {
   const consumers = new Map<string, Consumer>();
   const orphans: Site[] = [];
 
   const visit = (dir: Directory, repo: Directory | undefined, inTemplate: boolean) => {
     const here = dir.git ? dir : repo;
-    const template = inTemplate || Boolean(dir.template);
-    const preset = dir.copier?.src ? presetOf(dir.copier.src, presets) : undefined;
-    if (preset && !template) {
-      const site: Site = { path: dir.path, rel: relative(root.path, dir.path) || '.', preset };
+    const within = inTemplate || Boolean(dir.template);
+    const template = dir.copier?.src ? templateOf(dir.copier.src, templates) : undefined;
+    if (template && !within) {
+      const site: Site = { path: dir.path, rel: relative(root.path, dir.path) || '.', template };
       if (!here) orphans.push(site);
       else {
         let consumer = consumers.get(here.path);
@@ -100,7 +104,7 @@ export async function findConsumers(ctx: Context, root: Directory, presets: read
         consumer.sites.push(site);
       }
     }
-    for (const child of dir.children) visit(child, here, template);
+    for (const child of dir.children) visit(child, here, within);
   };
   visit(root, undefined, false);
 

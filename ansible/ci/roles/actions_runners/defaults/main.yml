@@ -61,8 +61,8 @@ actions_runners_slots:
 actions_runners_extra_labels: []
 
 # The runner image, one for every size, built upstream in
-# plexus-ms/primitives from this role's files/ci-runner by runner-image.yml,
-# with provenance. The tag is the train's to write, never the update bot's; a host trying an unreleased image
+# plexus-ms/tooling from this role's files/ci-runner by runner-image.yml,
+# with provenance. The tag is the version's to write, never the update bot's; a host trying an unreleased image
 # overrides it with `…:sha-<commit>` from a manual run of runner-image.yml,
 # or builds it (below). A new pin reaches each slot when its current
 # container ends; `systemctl restart ci-runner@<slot>` takes it at once,

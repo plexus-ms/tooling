@@ -17,13 +17,13 @@ const workspace: Tree = {
       apps: {
         website: {
           'PLEXUS.md': marker('PLX-App, PLX-AppStateless'),
-          '.copier-answers.yml': answers('gh:plexus-ms/preset-app-nextjs'),
+          '.copier-answers.yml': answers('gh:plexus-ms/template-app-nextjs'),
         },
       },
       docs: { 'readme.md': 'x' },
     },
   },
-  preset: { '.git': {}, 'copier.yml': '' },
+  template: { '.git': {}, 'copier.yml': '' },
   broken: { 'PLEXUS.md': 'no frontmatter here' },
   empty: {},
 };
@@ -37,7 +37,7 @@ const gitOf = (cwd: string, args: string[]): string | undefined => {
     if (a === 'symbolic-ref --short -q refs/remotes/origin/HEAD') return 'origin/main\n';
     if (a === 'describe --tags --abbrev=0 origin/main') return undefined;
   }
-  if (cwd === '/ws/preset') {
+  if (cwd === '/ws/template') {
     if (a === 'symbolic-ref --short -q HEAD') return 'main\n';
     if (a === 'status --porcelain') return '';
     if (a === 'remote get-url origin') return 'https://github.com/plexus-ms/preset-repo-web\n';
@@ -54,17 +54,17 @@ test('overview maps the facets of a workspace and prunes what carries none', asy
   assert.equal(tree.name, 'ws');
   assert.deepEqual(
     tree.children.map((c) => c.name),
-    ['broken', 'preset', 'tenant'],
+    ['broken', 'template', 'tenant'],
   );
-  const [broken, preset, tenant] = tree.children;
+  const [broken, template, tenant] = tree.children;
   assert.match(broken?.problems?.[0] ?? '', /PLEXUS.md: no frontmatter/);
-  assert.deepEqual(preset?.git, {
+  assert.deepEqual(template?.git, {
     branch: 'main',
     dirty: false,
     tag: '0.62.0',
     remote: 'gh:plexus-ms/preset-repo-web',
   });
-  assert.deepEqual(preset?.template, { tag: '0.62.0' });
+  assert.deepEqual(template?.template, { tag: '0.62.0' });
 
   const web = tenant?.children[0];
   assert.equal(web?.name, 'web');
@@ -87,15 +87,15 @@ test('overview --sync fetches every repo and counts the drift from its upstream'
       fetched.push(cwd);
       return cwd === '/ws/tenant/web' ? undefined : '';
     }
-    if (a === 'rev-list --left-right --count HEAD...@{upstream}') return cwd === '/ws/preset' ? '1\t3\n' : undefined;
+    if (a === 'rev-list --left-right --count HEAD...@{upstream}') return cwd === '/ws/template' ? '1\t3\n' : undefined;
     return gitOf(cwd, args);
   };
   const ctx = new Context({}, fakeIo({ ws: workspace }, synced));
   const tree = await overview(ctx, '/ws', { fetch: true });
-  assert.deepEqual(fetched.sort(), ['/ws/preset', '/ws/tenant/web']);
-  const [, preset, tenant] = tree.children;
-  assert.equal(preset?.git?.ahead, 1);
-  assert.equal(preset?.git?.behind, 3);
+  assert.deepEqual(fetched.sort(), ['/ws/template', '/ws/tenant/web']);
+  const [, template, tenant] = tree.children;
+  assert.equal(template?.git?.ahead, 1);
+  assert.equal(template?.git?.behind, 3);
   const web = tenant?.children[0];
   assert.equal(web?.git?.behind, undefined);
   assert.match(web?.problems?.[0] ?? '', /^git fetch: /);

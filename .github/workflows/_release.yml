@@ -64,10 +64,10 @@ on:
         required: false
         type: boolean
         default: false
-      primitives-ref:
+      tooling-ref:
         description: >-
-          A trial of an unreleased primitives: plx-ci and plx are built from a
-          checkout of plexus-ms/primitives at this ref instead of the caller's
+          A trial of unreleased tooling: plx-ci and plx are built from a
+          checkout of plexus-ms/tooling at this ref instead of the caller's
           pins. Empty for the pins.
         required: false
         type: string
@@ -100,21 +100,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        if: ${{ inputs.primitives-ref == '' }}
+        if: ${{ inputs.tooling-ref == '' }}
         with:
           install_args: node npm:@plexus-ms/cli-ci
       - uses: actions/checkout@v7
-        if: ${{ inputs.primitives-ref != '' }}
+        if: ${{ inputs.tooling-ref != '' }}
         with:
-          repository: plexus-ms/primitives
-          ref: ${{ inputs.primitives-ref }}
+          repository: plexus-ms/tooling
+          ref: ${{ inputs.tooling-ref }}
           path: .plx-ci
       - uses: actions/setup-node@v7
-        if: ${{ inputs.primitives-ref != '' }}
+        if: ${{ inputs.tooling-ref != '' }}
         with:
           node-version-file: .plx-ci/mise.toml
-      - name: plx-ci from the unreleased primitives
-        if: ${{ inputs.primitives-ref != '' }}
+      - name: plx-ci from the unreleased tooling
+        if: ${{ inputs.tooling-ref != '' }}
         run: |
           cd .plx-ci && corepack enable && pnpm install --frozen-lockfile --ignore-scripts >/dev/null
           pnpm --filter @plexus-ms/cli-ci... run build >/dev/null
@@ -149,10 +149,10 @@ jobs:
 
   # One deploy per app with a target in the environment; an app without a
   # record there has no deployment there, which the plan said. The nested
-  # workflow is named with the train ref, never as ./…: a tenant calls this
-  # file at a train tag, which is annotated, and the forge resolves a relative
+  # workflow is named with the version ref, never as ./…: a tenant calls this
+  # file at a version tag, which is annotated, and the forge resolves a relative
   # nested call to the tag object rather than its commit and fails to start
-  # the run. The train's bookkeeping moves the ref with every other.
+  # the run. The version's bookkeeping moves the ref with every other.
   deploy:
     needs: publish
     if: ${{ inputs.deploys != '[]' }}
@@ -160,7 +160,7 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(inputs.deploys) }}
-    uses: plexus-ms/primitives/.github/workflows/_deploy.yml@0.119.0
+    uses: plexus-ms/tooling/.github/workflows/_deploy.yml@0.119.0
     with:
       strategy: ${{ inputs.strategy }}
       app: ${{ matrix.app }}
@@ -170,6 +170,6 @@ jobs:
       overlay: ${{ inputs.overlay }}
       vault: ${{ inputs.vault }}
       dry-run: ${{ inputs.dry-run }}
-      primitives-ref: ${{ inputs.primitives-ref }}
+      tooling-ref: ${{ inputs.tooling-ref }}
     secrets:
       op-service-account-token: ${{ secrets.op-service-account-token }}

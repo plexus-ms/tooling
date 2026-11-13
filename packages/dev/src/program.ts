@@ -1,9 +1,9 @@
 // The commander program of plx-dev: the global options plx has, and the
 // upstream's verbs. plx-dev is the maintainers' half of the Plexus tooling
-// (PLX-CLI § 1): what cuts a train, which works with no knowledge of any
+// (PLX-CLI § 1): what cuts a version, which works with no knowledge of any
 // consumer. It is never published; the maintainers run it from the source of
-// their primitives checkout (`mise ship` there), so the tool that releases the
-// train is the code at main and never a release that lags behind it. Same
+// their tooling checkout (`mise ship` there), so the tool that releases the
+// version is the code at main and never a release that lags behind it. Same
 // shape as plx: argv in, a lib Context is the only way a command touches the
 // world. Adding a command is one module under commands/ exporting
 // `register(program)`, listed in commands/index.ts.
@@ -14,7 +14,7 @@ import { commands } from './commands/index.ts';
 
 export function buildProgram(): Command {
   const program = new Command('plx-dev')
-    .description("the upstream's verbs of Plexus, run from the primitives checkout: cutting a train")
+    .description("the upstream's verbs of Plexus, run from the tooling checkout: cutting a version")
     .showHelpAfterError('(run with --help for usage)')
     .showSuggestionAfterError()
     .configureOutput({ writeErr: (s) => process.stderr.write(s) });

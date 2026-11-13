@@ -2,7 +2,7 @@
   "name": "@plexus-ms/dev",
   "version": "0.0.0",
   "private": true,
-  "description": "plx-dev, the upstream's verbs of Plexus: cutting a train. Never published; run from the primitives checkout",
+  "description": "plx-dev, the upstream's verbs of Plexus: cutting a version. Never published; run from the tooling checkout",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "bin": {

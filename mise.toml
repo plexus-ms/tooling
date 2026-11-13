@@ -1,7 +1,7 @@
-# primitives ships the methodology's primitives (§ 1.6 PLX): the four plexus.*
+# tooling ships the methodology's primitives (§ 1.6 PLX): the four plexus.*
 # collections and the Terraform modules, the reusable workflows, the
-# train-versioned packages @plexus-ms/{cli,cli-ci,lib,config}, and the shared
-# Renovate preset; and, never published, plx-dev, which cuts the train
+# Plexus-versioned packages @plexus-ms/{cli,cli-ci,lib,config}, and the shared
+# Renovate preset; and, never published, plx-dev, which cuts the version
 # (`mise ship`). Two toolchains live here, owned in PLEXUS.md: the JS/TS one of
 # PLX-JS (node pinned here, everything else a devDependency) and the ops one
 # (ansible and ansible-lint for the roles, actionlint for the workflows). The
@@ -43,7 +43,7 @@ _.path = ["{{config_root}}/node_modules/.bin"]
 
 [tasks.dev]
 description = "No-op: nothing to start; the roles are applied by tenant playbooks, the workflows run on the forge"
-run = 'echo "dev: nothing to start in primitives"'
+run = 'echo "dev: nothing to start in tooling"'
 
 [tasks.build]
 depends = ["install"]
@@ -58,8 +58,8 @@ description = "Perform all steps that verify code quality"
 
 [tasks.ship]
 depends = ["build"]
-description = "Cut the train from this checkout's own build: plx-dev ship over the workspace this checkout sits in (plexus-ms/primitives under it)"
-# Never a published package: the tool that releases the train is the code at
+description = "Cut the version from this checkout's own build: plx-dev ship over the workspace this checkout sits in (plexus-ms/tooling under it)"
+# Never a published package: the tool that releases the version is the code at
 # main, built here, so it cannot lag behind the release it cuts. Flags follow
 # `--`: `mise ship -- -n` previews, `mise ship -- -y` runs unattended.
 run = "plx-dev ship {{config_root}}/../.."

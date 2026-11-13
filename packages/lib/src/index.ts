@@ -1,7 +1,7 @@
 // @plexus-ms/lib: the core layer of plx, usable without the CLI.
 //
 // It holds what a tenant repo and an operator of many repos need, and nothing
-// that cuts a train: that is the upstream's, in the unpublished
+// that cuts a version: that is the upstream's, in the unpublished
 // `@plexus-ms/dev` (packages/dev), which builds on this package.
 //
 // A verb here is either a reader returning data, or a pure planner returning
@@ -28,11 +28,11 @@ export {
   type Consumer,
   expectedBranch,
   findConsumers,
-  PRESETS,
-  presetOf,
-  presetSource,
-  RENAMED_PRESETS,
+  RENAMED_TEMPLATES,
   type Site,
+  TEMPLATES,
+  templateOf,
+  templateSource,
 } from './consumers.ts';
 export { Context, type Options } from './context.ts';
 export { ANSWERS_FILE, type Answers, COPIER_VERSION, copierVia, parseAnswers, TEMPLATE_FILES } from './copier.ts';
@@ -51,7 +51,7 @@ export {
   selectDeployTargets,
   targetsIn,
 } from './deployTargets.ts';
-export { compareTrains, type Diagnosis, diagnose, type Report } from './doctor.ts';
+export { compareVersions, type Diagnosis, diagnose, type Report } from './doctor.ts';
 export { body, describe, type Plan, run, type Step, write } from './effects.ts';
 export { frontmatterField, setFrontmatterField } from './frontmatter.ts';
 export { type DirEntry, ExecError, type ExecOptions, type Io, orAbsent, realIo, render } from './io.ts';
@@ -60,9 +60,9 @@ export {
   catalogOf,
   MANIFEST_FILE,
   MANIFEST_SCHEMA,
+  type ModuleManifest,
   parseManifest,
   renderManifest,
-  type TrainManifest,
 } from './manifest.ts';
 export { type Declaration, MARKER_FILE, parseMarker, splitFrontmatter } from './marker.ts';
 export {
@@ -101,6 +101,6 @@ export {
   scanPage,
 } from './requirements.ts';
 export { mergeLine, renderSummary } from './summary.ts';
-export { detail, emptySummary, isClean, type Summary, type Take, takeTrain } from './take.ts';
-export { COMPENDIUM, isTrainVersion, preflightForge, TRAIN_REPOS, UsageError } from './train.ts';
+export { detail, emptySummary, isClean, type Summary, type Take, takeVersion } from './take.ts';
 export { type UpdateOptions, update } from './update.ts';
+export { COMPENDIUM, isPlexusVersion, preflightForge, UsageError, VERSIONED_REPOS } from './version.ts';

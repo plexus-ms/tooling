@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseModule, readCatalog } from './catalog.ts';
 import { Context } from './context.ts';
-import { compareTrains, diagnose } from './doctor.ts';
+import { compareVersions, diagnose } from './doctor.ts';
 import { overview } from './overview.ts';
 import { fakeIo, type Tree } from './testing/fakeIo.ts';
 
@@ -110,8 +110,8 @@ test('parseModule skips notes and reads every field', () => {
   });
 });
 
-test('compareTrains compares numerically and ignores suffixes', () => {
-  assert.equal(compareTrains('0.10.0', '0.9.0'), 1);
-  assert.equal(compareTrains('0.62.0', '0.62.0'), 0);
-  assert.equal(compareTrains('0.62.0-rc1', '0.62.1'), -1);
+test('compareVersions compares numerically and ignores suffixes', () => {
+  assert.equal(compareVersions('0.10.0', '0.9.0'), 1);
+  assert.equal(compareVersions('0.62.0', '0.62.0'), 0);
+  assert.equal(compareVersions('0.62.0-rc1', '0.62.1'), -1);
 });

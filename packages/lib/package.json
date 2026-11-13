@@ -16,7 +16,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/plexus-ms/primitives.git",
+    "url": "git+https://github.com/plexus-ms/tooling.git",
     "directory": "packages/lib"
   },
   "publishConfig": {

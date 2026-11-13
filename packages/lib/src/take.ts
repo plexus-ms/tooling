@@ -1,8 +1,8 @@
-// take: one repo takes a train (§ 3 PLX-Updates), in a scratch checkout of the
-// branch the train lands on (consumers.ts). `copier update` runs at the
+// take: one repo takes a version (§ 3 PLX-Updates), in a scratch checkout of the
+// branch the version lands on (consumers.ts). `copier update` runs at the
 // version plx pins (copier.ts) at every site (the repo root, then its apps/*),
 // the marker is synced to the answers file, the lockfile refreshed where
-// manifests moved, the hand-owned workflows pinned to the train; then one
+// manifests moved, the hand-owned workflows pinned to the version; then one
 // commit, pushed as `plexus/<version>`, and a pull request against the branch.
 // A conflict is committed with its markers and reported, and the pull request
 // is opened all the same: that is where it gets resolved. Nothing here aborts
@@ -10,19 +10,19 @@
 // what needs a human. Reviewing and merging the pull request stays human.
 //
 // `update` (update.ts) is the verb on top of it, and the only thing that
-// opens a train's pull request; `propagate` (propagate.ts) runs that verb over
-// many repos. The maintainers' preview of an unreleased train (preview.ts of
-// @plexus-ms/dev) uses the same steps against the local preset checkouts, and opens nothing.
+// opens a version's pull request; `propagate` (propagate.ts) runs that verb over
+// many repos. The maintainers' preview of an unreleased version (preview.ts of
+// @plexus-ms/dev) uses the same steps against the local template checkouts, and opens nothing.
 import { join, relative } from 'node:path';
 import { bumpWorkflowRefs, hasConflictMarkers, hasUnmergedEntries, syncMarker, WORKFLOW_REF } from './bookkeeping.ts';
-import { type Consumer, presetSource, RENAMED_PRESETS, type Site } from './consumers.ts';
+import { type Consumer, RENAMED_TEMPLATES, type Site, templateSource } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, copierVia, parseAnswers } from './copier.ts';
 import { run, write } from './effects.ts';
 import { MARKER_FILE } from './marker.ts';
 
 export interface Summary {
-  train: string;
+  version: string;
   /** True for a dry run: nothing in the workspace changed. */
   preview: boolean;
   /** Sites, relative to the workspace. */
@@ -32,7 +32,7 @@ export interface Summary {
   failed: string[];
   /** Consumers left untouched, with the reason. */
   skipped: { path: string; reason: string }[];
-  /** Repos that need no train yet and rest on the one they have (need.ts), with what would end the rest. */
+  /** Repos that need no version yet and rest on the one they have (need.ts), with what would end the rest. */
   resting: { path: string; reason: string }[];
   /** The pull requests opened or updated, one per consumer that changed. */
   pulls: string[];
@@ -55,8 +55,8 @@ export function mergeSummary(into: Summary, from: Summary): void {
   into.mergeable.push(...from.mergeable);
 }
 
-export const emptySummary = (train: string, preview: boolean): Summary => ({
-  train,
+export const emptySummary = (version: string, preview: boolean): Summary => ({
+  version,
   preview,
   clean: [],
   conflicted: [],
@@ -74,21 +74,21 @@ export const CLEAN_BODY = 'Merged clean at every site.';
 const ofConsumer = (list: string[], consumer: Consumer): string[] =>
   list.filter((p) => p === consumer.rel || p.startsWith(`${consumer.rel}/`));
 
-export const trainBranch = (train: string): string => `plexus/${train}`;
+export const versionBranch = (version: string): string => `plexus/${version}`;
 
-/** How a consumer takes the train: the knobs the preview and update set differently. */
+/** How a consumer takes the version: the knobs the preview and update set differently. */
 export interface Take {
-  train: string;
+  version: string;
   /**
-   * Preview from the local preset checkouts under this upstream directory at
+   * Preview from the local template checkouts under this upstream directory at
    * main (preview.ts of @plexus-ms/dev), instead of the published template.
    */
   previewFrom?: string;
-  /** The template ref copier updates to; unset, copier takes the newest tag, which the train just cut. */
+  /** The template ref copier updates to; unset, copier takes the newest tag, which the version just cut. */
   ref?: string;
   /** Who opened the pull request, named in its body. */
   opener: string;
-  /** Why the repo takes the train now (need.ts), named in the body beside the opener. */
+  /** Why the repo takes the version now (need.ts), named in the body beside the opener. */
   why?: string;
 }
 
@@ -104,15 +104,15 @@ const copierIn = (dir: string, args: string[]): [string, string[]] => [
 ];
 
 /**
- * One consumer takes the train in `dir`, a scratch checkout of its branch:
+ * One consumer takes the version in `dir`, a scratch checkout of its branch:
  * every site updated, the lockfile refreshed, the workflow refs bumped, then
  * the commit, the branch and the pull request.
  */
-export async function takeTrain(ctx: Context, consumer: Consumer, dir: string, take: Take, summary: Summary) {
+export async function takeVersion(ctx: Context, consumer: Consumer, dir: string, take: Take, summary: Summary) {
   const base = (await ctx.read('git', ['rev-parse', 'HEAD'], { cwd: dir })).trim();
   for (const site of consumer.sites) await updateSite(ctx, consumer, site, dir, take, summary);
   await refreshLockfile(ctx, consumer, dir, base, summary);
-  await bumpConsumerRefs(ctx, consumer, dir, take.train);
+  await bumpConsumerRefs(ctx, consumer, dir, take.version);
   await openPull(ctx, consumer, dir, take, summary);
 }
 
@@ -154,15 +154,15 @@ async function updateSite(
   const target = join(dir, relative(consumer.path, site.path));
   try {
     if (take.previewFrom) {
-      const localPreset = join(take.previewFrom, site.preset);
-      ctx.say(`→ ${site.rel}: copier update (preview from ${localPreset}@main)`);
-      // Point the answers at the local preset so the preview reads it; copier
+      const localTemplate = join(take.previewFrom, site.template);
+      ctx.say(`→ ${site.rel}: copier update (preview from ${localTemplate}@main)`);
+      // Point the answers at the local template so the preview reads it; copier
       // refuses a dirty subproject, hence the commit.
       const answers = await ctx.readFile(join(target, ANSWERS_FILE));
       await ctx.stage(
-        write(join(target, ANSWERS_FILE), answers.replace(/^_src_path: .*$/m, `_src_path: ${localPreset}`)),
+        write(join(target, ANSWERS_FILE), answers.replace(/^_src_path: .*$/m, `_src_path: ${localTemplate}`)),
       );
-      await previewCommit(ctx, dir, `plx preview: ${site.rel} reads ${localPreset} from the local checkout`);
+      await previewCommit(ctx, dir, `plx preview: ${site.rel} reads ${localTemplate} from the local checkout`);
       await ctx.stage(
         run(
           ...copierIn(dir, ['update', '--skip-answered', '--trust', '--defaults', '--skip-tasks', '--vcs-ref', 'main']),
@@ -171,23 +171,23 @@ async function updateSite(
       );
     } else {
       ctx.say(`→ ${site.rel}: copier update${take.ref ? ` to ${take.ref}` : ''}`);
-      // A preset renamed on a train: the answers still name the old source,
+      // A template renamed on a version: the answers still name the old source,
       // which copier would clone through the forge's redirect; point them at
       // the current name first, committed because copier refuses a dirty
       // subproject.
       const answers = await ctx.readFile(join(target, ANSWERS_FILE));
-      const current = presetSource(site.preset);
+      const current = templateSource(site.template);
       const recorded = /^_src_path: (.*)$/m.exec(answers)?.[1];
       if (
         recorded &&
         recorded !== current &&
-        Object.keys(RENAMED_PRESETS).some((old) => presetSource(old) === recorded)
+        Object.keys(RENAMED_TEMPLATES).some((old) => templateSource(old) === recorded)
       ) {
-        ctx.say(`  ${site.rel}: the preset is ${current} now; the answers follow`);
+        ctx.say(`  ${site.rel}: the template is ${current} now; the answers follow`);
         await ctx.stage(
           write(join(target, ANSWERS_FILE), answers.replace(/^_src_path: .*$/m, `_src_path: ${current}`)),
         );
-        await previewCommit(ctx, dir, `plx: ${site.rel} reads ${current}, the preset's name since its rename`);
+        await previewCommit(ctx, dir, `plx: ${site.rel} reads ${current}, the template's name since its rename`);
       }
       // Template tasks (mise install, hook setup) serve a developer's checkout,
       // not a pull request. Unattended, a new question takes its default; on a
@@ -280,8 +280,8 @@ async function refreshLockfile(ctx: Context, consumer: Consumer, dir: string, ba
   }
 }
 
-/** Consumers' hand-owned workflows pin the reusable workflows by tag; lockstep them to the train. */
-async function bumpConsumerRefs(ctx: Context, consumer: Consumer, dir: string, train: string): Promise<void> {
+/** Consumers' hand-owned workflows pin the reusable workflows by tag; lockstep them to the version. */
+async function bumpConsumerRefs(ctx: Context, consumer: Consumer, dir: string, version: string): Promise<void> {
   const workflows = join(dir, '.github', 'workflows');
   const entries = await ctx.readDir(workflows).catch(() => []);
   const files = entries
@@ -291,29 +291,29 @@ async function bumpConsumerRefs(ctx: Context, consumer: Consumer, dir: string, t
   for (const f of files) {
     const text = await ctx.readFile(join(workflows, f));
     if (!text.includes(WORKFLOW_REF)) continue;
-    const bumped = bumpWorkflowRefs(text, train);
+    const bumped = bumpWorkflowRefs(text, version);
     if (bumped === text) continue;
-    ctx.say(`→ ${consumer.rel}: ${f} workflow refs → @${train}`);
+    ctx.say(`→ ${consumer.rel}: ${f} workflow refs → @${version}`);
     await ctx.stage(write(join(workflows, f), bumped));
   }
 }
 
-/** The URL of the open pull request from the train branch against the consumer's branch, if any. */
-export async function openPullUrl(ctx: Context, consumer: Consumer, dir: string, train: string): Promise<string> {
-  const args = ['pr', 'list', '--head', trainBranch(train), '--base', consumer.branch, '--state', 'open'];
+/** The URL of the open pull request from the version branch against the consumer's branch, if any. */
+export async function openPullUrl(ctx: Context, consumer: Consumer, dir: string, version: string): Promise<string> {
+  const args = ['pr', 'list', '--head', versionBranch(version), '--base', consumer.branch, '--state', 'open'];
   return (await ctx.read('gh', [...args, '--json', 'url', '--jq', '.[0].url'], { cwd: dir }).catch(() => '')).trim();
 }
 
 /**
- * One commit, the train branch pushed, and a pull request against the
+ * One commit, the version branch pushed, and a pull request against the
  * consumer's branch: opened once, found again on a re-run. The branch is plx's
  * own, so a re-run may move it, with a lease on what it fetched. Hooks are
  * skipped: the checks are the pull request's job, and the mount's own
  * checkout may carry the repo's hooks.
  */
 async function openPull(ctx: Context, consumer: Consumer, dir: string, take: Take, summary: Summary) {
-  const { train } = take;
-  const branch = trainBranch(train);
+  const { version } = take;
+  const branch = versionBranch(version);
   if (ctx.dryRun) {
     ctx.say(
       `  (preview) ${consumer.rel}: would commit, push ${branch} and open a pull request against ${consumer.branch}`,
@@ -328,7 +328,7 @@ async function openPull(ctx: Context, consumer: Consumer, dir: string, take: Tak
   try {
     await ctx.apply([
       run('git', ['add', '-A'], { cwd: dir }),
-      run('git', ['commit', '--quiet', '--no-verify', '-m', `chore: train ${train}`], { cwd: dir }),
+      run('git', ['commit', '--quiet', '--no-verify', '-m', `chore: Plexus ${version}`], { cwd: dir }),
     ]);
     // The lease needs the remote-tracking ref; a fresh clone has none for a branch it did not check out.
     await ctx
@@ -349,7 +349,7 @@ async function openPull(ctx: Context, consumer: Consumer, dir: string, take: Tak
   const conflicted = ofConsumer(summary.conflicted, consumer);
   const failed = ofConsumer(summary.failed, consumer);
   const clean = conflicted.length === 0 && failed.length === 0;
-  const existing = await openPullUrl(ctx, consumer, dir, train);
+  const existing = await openPullUrl(ctx, consumer, dir, version);
   if (existing) {
     ctx.say(`• ${consumer.rel}: pull request updated: ${existing}`);
     summary.pulls.push(existing);
@@ -358,7 +358,7 @@ async function openPull(ctx: Context, consumer: Consumer, dir: string, take: Tak
   }
   const sites = consumer.sites.map((s) => s.rel);
   const body = [
-    `Train ${train} (§ 1.5 PLX): \`copier update\` at ${sites.join(', ')}, the marker, the lockfile where manifests moved, and the workflow refs.`,
+    `Plexus ${version} (§ 1.5 PLX): \`copier update\` at ${sites.join(', ')}, the marker, the lockfile where manifests moved, and the workflow refs.`,
     ...(conflicted.length > 0 ? [`Conflicts to resolve, committed with their markers: ${conflicted.join(', ')}.`] : []),
     ...(failed.length > 0 ? [`Failed, and left as it was: ${failed.join(', ')}.`] : []),
     ...(clean ? [CLEAN_BODY] : []),
@@ -376,7 +376,7 @@ async function openPull(ctx: Context, consumer: Consumer, dir: string, take: Tak
           '--head',
           branch,
           '--title',
-          `chore: train ${train}`,
+          `chore: Plexus ${version}`,
           '--body',
           body,
         ],
@@ -388,7 +388,7 @@ async function openPull(ctx: Context, consumer: Consumer, dir: string, take: Tak
     summary.failed.push(consumer.rel);
     return;
   }
-  const url = await openPullUrl(ctx, consumer, dir, train);
+  const url = await openPullUrl(ctx, consumer, dir, version);
   ctx.say(`• ${consumer.rel}: pull request opened${url ? `: ${url}` : ''}`);
   summary.pulls.push(url || `${consumer.rel} ${branch}`);
   if (url && clean) summary.mergeable.push(url);

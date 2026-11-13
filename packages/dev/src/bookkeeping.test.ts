@@ -18,7 +18,7 @@ test('bumpGalaxyVersion keeps the trailing comment', () => {
   );
 });
 
-test('bumpRunnerImagePin moves a train tag and leaves a trial tag and other images', () => {
+test('bumpRunnerImagePin moves a version tag and leaves a trial tag and other images', () => {
   const defaults =
     'actions_runners_image: ghcr.io/plexus-ms/ci-runner:0.109.0\n# e.g. ghcr.io/plexus-ms/ci-runner:sha-abc\nactions_runners_registry_image: registry:2\n';
   assert.equal(bumpRunnerImagePin(defaults, '0.110.0'), defaults.replace('ci-runner:0.109.0', 'ci-runner:0.110.0'));
@@ -26,7 +26,7 @@ test('bumpRunnerImagePin moves a train tag and leaves a trial tag and other imag
 
 test('bumpCollectionPin touches every plexus.* collection and nothing else', () => {
   const reqs =
-    'collections:\n  - name: community.docker\n    version: 9.9.9\n  - name: https://github.com/plexus-ms/primitives.git#/ansible/host/\n    type: git\n    version: v0.1.0\n  - name: https://github.com/plexus-ms/primitives.git#/ansible/platform/\n    type: git\n    version: 0.1.0\n  - name: other\n    version: 1.0.0\n';
+    'collections:\n  - name: community.docker\n    version: 9.9.9\n  - name: https://github.com/plexus-ms/tooling.git#/ansible/host/\n    type: git\n    version: v0.1.0\n  - name: https://github.com/plexus-ms/tooling.git#/ansible/platform/\n    type: git\n    version: 0.1.0\n  - name: other\n    version: 1.0.0\n';
   assert.equal(bumpCollectionPin(reqs, '0.2.0'), reqs.replaceAll(/version: v?0\.1\.0/g, 'version: 0.2.0'));
   assert.equal(bumpCollectionPin('collections: []\n', '0.2.0'), 'collections: []\n');
 });

@@ -45,7 +45,7 @@ import type { Context } from './context.ts';
 import { DEFAULT_ENVIRONMENT, deploymentSlug } from './deployTargets.ts';
 import { run } from './effects.ts';
 import { orAbsent } from './io.ts';
-import { UsageError } from './train.ts';
+import { UsageError } from './version.ts';
 
 export interface DeployOptions {
   /** ssh target, `deploy@host`. */

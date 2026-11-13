@@ -4,7 +4,7 @@ import { mergeLine, renderSummary } from './summary.ts';
 
 test('renderSummary lists every site and ends with the verdict', () => {
   const base = {
-    train: '0.2.0',
+    version: '0.2.0',
     preview: false,
     clean: ['acme/web'],
     conflicted: [],
@@ -15,15 +15,15 @@ test('renderSummary lists every site and ends with the verdict', () => {
     mergeable: [] as string[],
   };
   assert.equal(
-    renderSummary(base, 'plx-dev -y ship --train 0.2.0 .').split('\n').slice(1).join('\n'),
+    renderSummary(base, 'plx-dev -y ship --to 0.2.0 .').split('\n').slice(1).join('\n'),
     '  ✓ clean:      acme/web\n  → pull:       https://github.com/acme/web/pull/7\n✓ done — review and merge the pull requests',
   );
   assert.equal(
-    renderSummary({ ...base, preview: true }, 'plx-dev -y ship --train 0.2.0 .')
+    renderSummary({ ...base, preview: true }, 'plx-dev -y ship --to 0.2.0 .')
       .split('\n')
       .slice(1)
       .join('\n'),
-    '  ✓ clean:      acme/web\n  → pull:       https://github.com/acme/web/pull/7\n  (preview only — nothing was changed)\n✓ dry run clean — run it for real: plx-dev -y ship --train 0.2.0 .',
+    '  ✓ clean:      acme/web\n  → pull:       https://github.com/acme/web/pull/7\n  (preview only — nothing was changed)\n✓ dry run clean — run it for real: plx-dev -y ship --to 0.2.0 .',
   );
   const bad = renderSummary(
     {
@@ -42,22 +42,22 @@ test('renderSummary lists every site and ends with the verdict', () => {
       ...base,
       clean: [],
       pulls: [],
-      resting: [{ path: 'web', reason: '1 newer train, the oldest (0.2.0) cut 3 days ago' }],
+      resting: [{ path: 'web', reason: '1 newer version, the oldest (0.2.0) cut 3 days ago' }],
     },
     '',
   );
-  assert.match(resting, /^ {2}• resting: {4}web \(1 newer train, the oldest \(0\.2\.0\) cut 3 days ago\)$/m);
+  assert.match(resting, /^ {2}• resting: {4}web \(1 newer version, the oldest \(0\.2\.0\) cut 3 days ago\)$/m);
   assert.match(resting, /^✓ done — no pull request$/m, 'a resting repo needs nobody');
   assert.doesNotMatch(
     renderSummary({ ...base, preview: true, clean: [], pulls: [], resting: [{ path: 'web', reason: 'r' }] }, 'real'),
     /run it for real/,
-    'a resting dry run names no command that would take the train',
+    'a resting dry run names no command that would take the version',
   );
 });
 
 test('the summary ends the pull requests with one line that merges the clean ones', () => {
   const s = {
-    train: '0.2.0',
+    version: '0.2.0',
     preview: false,
     clean: ['acme/web', 'acme/platform'],
     conflicted: ['acme/docs'],

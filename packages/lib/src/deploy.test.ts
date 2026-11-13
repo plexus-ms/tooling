@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { Context, type Options } from './context.ts';
 import { defaultAppDir, deploy, q, renderCompose } from './deploy.ts';
 import { fakeIo, type Tree } from './testing/fakeIo.ts';
-import { UsageError } from './train.ts';
+import { UsageError } from './version.ts';
 
 const COMPOSE = 'services:\n  web:\n    image: ${PLEXUS_DEPLOYMENT_IMAGE:?set}\n';
 const PINNED = 'services:\n  web:\n    image: ghcr.io/x/beszel:1.0\n';

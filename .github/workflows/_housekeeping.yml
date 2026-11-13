@@ -38,7 +38,7 @@ on:
         type: string
         default: ''
       alerts-email:
-        description: The address mailed when the sweep removes something or a kept instance is still there; empty for no mail. A preset answer, never a vault item (§ 3 PLX-Secrets).
+        description: The address mailed when the sweep removes something or a kept instance is still there; empty for no mail. A template answer, never a vault item (§ 3 PLX-Secrets).
         required: false
         type: string
         default: ''
@@ -47,10 +47,10 @@ on:
         required: false
         type: boolean
         default: false
-      primitives-ref:
+      tooling-ref:
         description: >-
-          A trial of an unreleased primitives: plx-ci and plx are built from a
-          checkout of plexus-ms/primitives at this ref instead of the caller's
+          A trial of unreleased tooling: plx-ci and plx are built from a
+          checkout of plexus-ms/tooling at this ref instead of the caller's
           pins. Empty for the pins.
         required: false
         type: string
@@ -76,21 +76,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        if: ${{ inputs.primitives-ref == '' }}
+        if: ${{ inputs.tooling-ref == '' }}
         with:
           install_args: node npm:@plexus-ms/cli-ci
       - uses: actions/checkout@v7
-        if: ${{ inputs.primitives-ref != '' }}
+        if: ${{ inputs.tooling-ref != '' }}
         with:
-          repository: plexus-ms/primitives
-          ref: ${{ inputs.primitives-ref }}
+          repository: plexus-ms/tooling
+          ref: ${{ inputs.tooling-ref }}
           path: .plx-ci
       - uses: actions/setup-node@v7
-        if: ${{ inputs.primitives-ref != '' }}
+        if: ${{ inputs.tooling-ref != '' }}
         with:
           node-version-file: .plx-ci/mise.toml
-      - name: plx-ci from the unreleased primitives
-        if: ${{ inputs.primitives-ref != '' }}
+      - name: plx-ci from the unreleased tooling
+        if: ${{ inputs.tooling-ref != '' }}
         run: |
           cd .plx-ci && corepack enable && pnpm install --frozen-lockfile --ignore-scripts >/dev/null
           pnpm --filter @plexus-ms/cli-ci... run build >/dev/null

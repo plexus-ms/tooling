@@ -18,11 +18,11 @@ test('parseMarker rejects what is not a marker', () => {
 
 test('parseAnswers separates copier bookkeeping from the answers', () => {
   const a = parseAnswers(
-    '# Maintained by Copier\n_commit: 0.62.0\n_src_path: gh:plexus-ms/preset-app-nextjs\nname: web\nprofile: stateless-app\n',
+    '# Maintained by Copier\n_commit: 0.62.0\n_src_path: gh:plexus-ms/template-app-nextjs\nname: web\nprofile: stateless-app\n',
   );
   assert.deepEqual(a, {
     commit: '0.62.0',
-    src: 'gh:plexus-ms/preset-app-nextjs',
+    src: 'gh:plexus-ms/template-app-nextjs',
     answers: { name: 'web', profile: 'stateless-app' },
   });
 });

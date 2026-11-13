@@ -3,11 +3,11 @@ name: runner-image
 # Builds the runner image of a runner host's slots (the Dockerfile actions_runners
 # ships, ansible/ci/roles/actions_runners/files/ci-runner, § 8
 # PLX-Delivery) and pushes it to ghcr.io/plexus-ms/ci-runner with a provenance
-# attestation. On the train's GitHub release it is tagged with the train
+# attestation. On the version's GitHub release it is tagged with the version
 # number, which is the pin actions_runners carries; run by hand on a branch it
 # is tagged `sha-<commit>`, which is how a host tries an unreleased image
-# before the train (the role's `actions_runners_image`). A tag already in the
-# registry is pushed again, from the same source: the train number names one
+# before the version (the role's `actions_runners_image`). A tag already in the
+# registry is pushed again, from the same source: the Plexus version names one
 # commit.
 
 on:

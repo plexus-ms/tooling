@@ -4,7 +4,7 @@ name: verify
 # verify` the pre-push hook runs, through this repo's own reusable _check.yml
 # with the whole contract verb as its task.
 # Every push includes the update bot's branches, whose pull requests merge
-# unattended only once a check is green, and the train's bookkeeping commits.
+# unattended only once a check is green, and the version's bookkeeping commits.
 
 on:
   push:

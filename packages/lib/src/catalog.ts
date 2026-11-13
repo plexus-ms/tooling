@@ -10,7 +10,7 @@ export interface Module {
   kind: 'contract' | 'approach';
   maturity: string;
   binds: string;
-  /** The train in which the module's requirements last changed; standard modules only. */
+  /** The version in which the module's requirements last changed; standard modules only. */
   changed?: string;
   /** Codes on the same side of every seam that a declaration of this module has to accompany. */
   depends: string[];

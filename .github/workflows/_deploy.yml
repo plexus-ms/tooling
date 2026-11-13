@@ -77,8 +77,8 @@ on:
         required: false
         type: boolean
         default: false
-      primitives-ref:
-        description: A trial of an unreleased primitives, plx built from this ref instead of the caller's pin; empty for the pin.
+      tooling-ref:
+        description: A trial of unreleased tooling, plx built from this ref instead of the caller's pin; empty for the pin.
         required: false
         type: string
         default: ''
@@ -113,13 +113,13 @@ jobs:
       # The caller's tools, plx among them.
       - uses: jdx/mise-action@v5
       - uses: actions/checkout@v7
-        if: ${{ inputs.primitives-ref != '' }}
+        if: ${{ inputs.tooling-ref != '' }}
         with:
-          repository: plexus-ms/primitives
-          ref: ${{ inputs.primitives-ref }}
+          repository: plexus-ms/tooling
+          ref: ${{ inputs.tooling-ref }}
           path: .plx-ci
-      - name: plx from the unreleased primitives
-        if: ${{ inputs.primitives-ref != '' }}
+      - name: plx from the unreleased tooling
+        if: ${{ inputs.tooling-ref != '' }}
         run: |
           cd .plx-ci && corepack enable && pnpm install --frozen-lockfile --ignore-scripts >/dev/null
           pnpm --filter @plexus-ms/cli... run build >/dev/null

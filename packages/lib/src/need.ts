@@ -1,37 +1,37 @@
-// need: does a repo need the newest train (§ 3 PLX-Updates)? Cutting a train
-// and a repo taking it are separate events: that a newer train exists is not
+// need: does a repo need the newest version (§ 3 PLX-Updates)? Cutting a version
+// and a repo taking it are separate events: that a newer version exists is not
 // a need. Three triggers are, tried in this order:
 //
-//   asked     somebody told the verb to take the train now, or named one
+//   asked     somebody told the verb to take the version now, or named one
 //   module    a module one of the repo's markers declares has a `changed`
 //             newer than that marker's `plexus` (§ 1.4 PLX), read from the
-//             manifest the train publishes about itself (manifest.ts)
-//   backstop  the oldest train the repo has not taken was cut longer ago than
+//             manifest the version publishes about itself (manifest.ts)
+//   backstop  the oldest version the repo has not taken was cut longer ago than
 //             the tenant's maximum age (30 days unless its answers say
-//             otherwise; zero takes every train as it is cut)
+//             otherwise; zero takes every version as it is cut)
 //
-// While none holds the repo rests on the train it has, which its immutable
+// While none holds the repo rests on the version it has, which its immutable
 // pins make safe (§ 1.6 PLX). Pure: the caller reads the releases, the
 // manifest, the markers and the clock.
 import type { Catalog } from './catalog.ts';
-import { compareTrains } from './doctor.ts';
-import { isTrainVersion } from './train.ts';
+import { compareVersions } from './doctor.ts';
+import { isPlexusVersion } from './version.ts';
 
 /** The backstop age, in days, of a repo whose answers do not set one. */
 export const DEFAULT_MAX_AGE = 30;
-/** The answer of the repo presets that sets the backstop age, in days. */
+/** The answer of the repo templates that sets the backstop age, in days. */
 export const MAX_AGE_ANSWER = 'update_max_age';
 
-/** A train as the forge knows it: its number and when its release was published. */
+/** A version as the forge knows it: its number and when its release was published. */
 export interface Release {
-  train: string;
+  version: string;
   /** ISO 8601, as the forge gives it. */
   published: string;
 }
 
 export type Trigger = 'asked' | 'module' | 'backstop';
 
-/** A marker as the decision needs it: where it is, the train it was brought up to, the modules it declares. */
+/** A marker as the decision needs it: where it is, the version it was brought up to, the modules it declares. */
 export interface Marked {
   where: string;
   plexus: string;
@@ -47,17 +47,17 @@ export interface Stale {
 }
 
 export type Need =
-  /** Take the newest train; `why` is a clause for the narration and the pull request. */
+  /** Take the newest version; `why` is a clause for the narration and the pull request. */
   | { take: true; trigger: Trigger; why: string }
-  /** Rest on the train the repo has; `why` says what would end the rest. */
+  /** Rest on the version the repo has; `why` says what would end the rest. */
   | { take: false; why: string };
 
 export interface NeedInput {
-  /** What each site of the repo records as its train (the answers' `_commit`). */
+  /** What each site of the repo records as its version (the answers' `_commit`). */
   recorded: (string | undefined)[];
-  /** The preset's releases, in any order. */
+  /** The template's releases, in any order. */
   releases: Release[];
-  /** How the run was asked, if it was: `--now`, `--train 0.2.0`. */
+  /** How the run was asked, if it was: `--now`, `--to 0.2.0`. */
   asked?: string;
   /** The declared modules that changed since their markers (`staleModules`); empty when none, or when no manifest was read. */
   stale?: Stale[];
@@ -78,37 +78,37 @@ export function needOf({ recorded, releases, asked, stale = [], maxAge, now }: N
       trigger: 'module',
       why: `${first.code} changed in ${first.changed}, declared at ${first.declared} in ${first.where}${more.length > 0 ? `, and ${more.length} more` : ''}`,
     };
-  // A site that records no train (a commit, a branch) cannot be placed among
-  // the releases; it is brought onto the train rather than left there.
-  const odd = recorded.findIndex((r) => !r || !isTrainVersion(r));
+  // A site that records no version (a commit, a branch) cannot be placed among
+  // the releases; it is brought onto the version rather than left there.
+  const odd = recorded.findIndex((r) => !r || !isPlexusVersion(r));
   if (recorded.length === 0 || odd >= 0)
     return {
       take: true,
       trigger: 'backstop',
-      why: `a site records ${recorded[odd] ? `'${recorded[odd]}'` : 'no version'}, not a train`,
+      why: `a site records ${recorded[odd] ? `'${recorded[odd]}'` : 'no version'}, not a version`,
     };
 
-  const trains = recorded as string[];
-  const oldest = trains.reduce((a, b) => (compareTrains(a, b) <= 0 ? a : b));
+  const versions = recorded as string[];
+  const oldest = versions.reduce((a, b) => (compareVersions(a, b) <= 0 ? a : b));
   const untaken = releases
-    .filter((r) => isTrainVersion(r.train) && compareTrains(r.train, oldest) > 0)
+    .filter((r) => isPlexusVersion(r.version) && compareVersions(r.version, oldest) > 0)
     .sort((a, b) => Date.parse(a.published) - Date.parse(b.published));
   const oldestUntaken = untaken[0];
-  if (!oldestUntaken) return { take: false, why: `no train newer than ${oldest}` };
+  if (!oldestUntaken) return { take: false, why: `no version newer than ${oldest}` };
 
   const age = Math.max(0, Math.floor((now.getTime() - Date.parse(oldestUntaken.published)) / DAY));
-  const count = `${untaken.length} newer train${untaken.length === 1 ? '' : 's'}`;
+  const count = `${untaken.length} newer version${untaken.length === 1 ? '' : 's'}`;
   if (maxAge === 0)
-    return { take: true, trigger: 'backstop', why: `a backstop age of zero takes every train (${count})` };
+    return { take: true, trigger: 'backstop', why: `a backstop age of zero takes every version (${count})` };
   if (age >= maxAge)
     return {
       take: true,
       trigger: 'backstop',
-      why: `${oldestUntaken.train}, the oldest train not taken, was cut ${days(age)} ago (backstop: ${days(maxAge)}; ${count})`,
+      why: `${oldestUntaken.version}, the oldest version not taken, was cut ${days(age)} ago (backstop: ${days(maxAge)}; ${count})`,
     };
   return {
     take: false,
-    why: `${count}, the oldest (${oldestUntaken.train}) cut ${days(age)} ago; the backstop is ${days(maxAge)}`,
+    why: `${count}, the oldest (${oldestUntaken.version}) cut ${days(age)} ago; the backstop is ${days(maxAge)}`,
   };
 }
 
@@ -121,10 +121,10 @@ export function needOf({ recorded, releases, asked, stale = [], maxAge, now }: N
 export function staleModules(markers: Marked[], catalog: Catalog): Stale[] {
   const stale: Stale[] = [];
   for (const { where, plexus, modules } of markers) {
-    if (!isTrainVersion(plexus)) continue;
+    if (!isPlexusVersion(plexus)) continue;
     for (const code of modules) {
       const changed = catalog.get(code)?.changed;
-      if (changed && isTrainVersion(changed) && compareTrains(changed, plexus) > 0)
+      if (changed && isPlexusVersion(changed) && compareVersions(changed, plexus) > 0)
         stale.push({ code, changed, where, declared: plexus });
     }
   }

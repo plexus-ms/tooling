@@ -18,7 +18,7 @@
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import type { Context } from './context.ts';
-import { UsageError } from './train.ts';
+import { UsageError } from './version.ts';
 
 const VARS_DIRS = ['group_vars', 'host_vars'];
 

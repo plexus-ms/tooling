@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Context } from './context.ts';
 import { fakeIo } from './testing/fakeIo.ts';
-import { isTrainVersion, preflightForge } from './train.ts';
+import { isPlexusVersion, preflightForge } from './version.ts';
 
 const withGh = (gh: () => string | undefined) =>
   new Context(
@@ -15,8 +15,8 @@ test('preflightForge needs a logged-in gh', async () => {
   await assert.rejects(preflightForge(withGh(() => undefined)), /gh is not logged in/);
 });
 
-test('a train version is plain semver', () => {
-  assert.equal(isTrainVersion('0.118.0'), true);
-  assert.equal(isTrainVersion('v0.21'), false);
-  assert.equal(isTrainVersion('0.100.0-rc.1'), false);
+test('a Plexus version is plain semver', () => {
+  assert.equal(isPlexusVersion('0.118.0'), true);
+  assert.equal(isPlexusVersion('v0.21'), false);
+  assert.equal(isPlexusVersion('0.100.0-rc.1'), false);
 });

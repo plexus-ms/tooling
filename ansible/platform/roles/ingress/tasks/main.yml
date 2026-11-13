@@ -39,9 +39,9 @@
     validate: "caddy validate --config %s --adapter caddyfile"
   notify: Reload caddy
 
-# Trains before 0.114.0 wrote the routes to tenants/<tenant>.caddy; the stub
+# Versions before 0.114.0 wrote the routes to tenants/<tenant>.caddy; the stub
 # no longer imports that directory, and a leftover would only confuse.
-- name: Remove the per-tenant routing directory of earlier trains
+- name: Remove the per-tenant routing directory of earlier versions
   ansible.builtin.file:
     path: /etc/caddy/tenants
     state: absent

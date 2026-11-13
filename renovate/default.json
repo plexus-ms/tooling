@@ -3,7 +3,7 @@
   "description": [
     "The shared Plexus update-bot preset (§ 2 PLX-Updates); every Plexus repo extends it with one line.",
     "Third-party patch, minor and digest updates from every manager arrive once a week in one pull request, merged on green CI; lock file maintenance arrives the same morning in a pull request of its own, merged the same way. Majors, third-party 0.x minors, prereleases and security fixes come one by one; all but the security fixes wait for a human.",
-    "One writer per pin (§ 1 PLX-Updates): the release train writes the plexus-ms/primitives workflow refs and collection pin, and the plx pin in mise.toml, so the bot leaves them alone; it proposes everything else.",
+    "One writer per pin (§ 1 PLX-Updates): `plx-dev ship` writes the plexus-ms/tooling workflow refs and collection pin, and the plx pin in mise.toml, so the bot leaves them alone; it proposes everything else.",
     "A third-party release waits three days before it is proposed, security fixes included, long enough for a compromised version to be pulled; pnpm enforces the same age at install time (pnpm-workspace.yaml), so a PR never carries a version the lockfile check rejects.",
     "The sub-presets `library` and `operations` sharpen this one for a package repo and an operations repo; the repo presets extend them.",
     "In a package repo `plx changeset` commits the changeset a bump owes to the bot's branch (§ 5 PLX-Delivery); that author is ignored, so the branch stays the bot's to rebase."
@@ -14,15 +14,15 @@
   "minimumReleaseAge": "3 days",
   "gitIgnoredAuthors": ["plx-bot@users.noreply.github.com"],
   "copier": {
-    "description": "The hosted bot cannot run `copier update`; the release train's ship step owns template propagation.",
+    "description": "The hosted bot cannot run `copier update`; a repo's own `plx update` owns template propagation.",
     "enabled": false
   },
   "packageRules": [
     {
-      "description": "The train's pins (§ 1 PLX-Updates): the plexus-ms/primitives workflow refs and collection pin, and the plx pin in mise.toml are written by `plx ship` in lockstep with the train; the bot never proposes them.",
+      "description": "The version's pins (§ 1 PLX-Updates): the plexus-ms/tooling workflow refs and collection pin, and the plx pin in mise.toml are written by `plx-dev ship` with each Plexus version; the bot never proposes them.",
       "matchPackageNames": [
-        "plexus-ms/primitives",
-        "https://github.com/plexus-ms/primitives.git",
+        "plexus-ms/tooling",
+        "https://github.com/plexus-ms/tooling.git",
         "@plexus-ms/cli",
         "@plexus-ms/cli-ci",
         "@plexus-ms/lib"
@@ -47,7 +47,7 @@
       "automerge": true
     },
     {
-      "description": "Third-party patch and digest updates from every manager (npm, compose images, Dockerfile base images, tools, actions) move together once a week and merge on green CI: one pull request to review when one goes red, one deploy per week per repo. The initiative's own packages and the train's pins keep their own rules. A dependency on a prerelease is left out: a prerelease promises nothing, so its updates keep Renovate's own grouping (one pull request per monorepo) and wait for a human; the tag list leaves image variants such as -alpine or -slim in the group.",
+      "description": "Third-party patch and digest updates from every manager (npm, compose images, Dockerfile base images, tools, actions) move together once a week and merge on green CI: one pull request to review when one goes red, one deploy per week per repo. The initiative's own packages and the version's pins keep their own rules. A dependency on a prerelease is left out: a prerelease promises nothing, so its updates keep Renovate's own grouping (one pull request per monorepo) and wait for a human; the tag list leaves image variants such as -alpine or -slim in the group.",
       "matchPackageNames": ["!@plexus-ms/**"],
       "matchUpdateTypes": ["patch", "digest"],
       "matchCurrentVersion": "!/^v?\\d+\\.\\d+\\.\\d+-(alpha|beta|rc|canary|next|pre|dev)/",

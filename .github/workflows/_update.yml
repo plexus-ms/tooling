@@ -1,18 +1,18 @@
 name: _update
 
-# Mounts the update verb (§ 3 PLX-Updates): the repo takes the train itself,
+# Mounts the update verb (§ 3 PLX-Updates): the repo takes the version itself,
 # when it needs one and not whenever one is cut. `plx update` asks the forge
-# for the trains (the compendium's releases) and decides: it takes the newest
-# train when it is asked (`now`, or a `train` named), when a module the repo
-# declares has changed since its marker (the manifest on the train's release),
-# or when the oldest train the repo has not taken is older than the backstop
+# for the versions (the compendium's releases) and decides: it takes the newest
+# version when it is asked (`now`, or a `version` named), when a module the repo
+# declares has changed since its marker (the manifest on the version's release),
+# or when the oldest version the repo has not taken is older than the backstop
 # age (the repo's answer `update_max_age`, 30 days unless it says otherwise);
-# otherwise the repo rests, and the run says why in one line and ends green. Taking a train is copier update at every
-# site in a worktree of the branch the train lands on, the marker, the
+# otherwise the repo rests, and the run says why in one line and ends green. Taking a version is copier update at every
+# site in a worktree of the branch the version lands on, the marker, the
 # lockfile, the workflow refs, and the pull request on `plexus/<version>`. A
 # branch already on origin is never moved, so a scheduled run cannot overwrite
 # a conflict somebody is resolving. The caller pins plx in its mise.toml, so
-# the pull is made by the tool of the train the repo rests on; a change to the
+# the pull is made by the tool of the version the repo rests on; a change to the
 # pull itself therefore takes effect one pull late.
 #
 # The push and the pull request are made with a token minted for a GitHub App
@@ -25,14 +25,14 @@ name: _update
 on:
   workflow_call:
     inputs:
-      train:
-        description: The train to take; empty for the preset's newest release.
+      version:
+        description: The version to take; empty for the template's newest release.
         required: false
         type: string
         default: ''
       now:
         description: >-
-          Take the newest train whatever the triggers say: somebody asks. The
+          Take the newest version whatever the triggers say: somebody asks. The
           callers pass true on their manual trigger and false on the schedule.
         required: false
         type: boolean
@@ -82,7 +82,7 @@ jobs:
           token: ${{ steps.app.outputs.token || secrets.token || github.token }}
       - uses: jdx/mise-action@v5
       - run: command -v gh >/dev/null || mise use --global gh@latest
-      - run: plx -y update ${{ inputs.train != '' && format('--train {0}', inputs.train) || '' }} ${{ inputs.now && '--now' || '' }}
+      - run: plx -y update ${{ inputs.version != '' && format('--to {0}', inputs.version) || '' }} ${{ inputs.now && '--now' || '' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || secrets.token || github.token }}
           GIT_AUTHOR_NAME: plx[bot]

@@ -1,12 +1,12 @@
 name: release
 
-# Publishes the train-versioned packages (§ 1.6 PLX) when `plx-dev ship` creates
-# the train's GitHub release: a release, not a tag push, so that what is
+# Publishes the Plexus-versioned packages (§ 1.6 PLX) when `plx-dev ship` creates
+# the version's GitHub release: a release, not a tag push, so that what is
 # published always comes from a tag an immutable release has locked. The
 # packages take their version from the release's tag, which is what the
 # bookkeeping commit under it wrote into their manifests; a prerelease tag
 # (`0.100.0-rc.1`) publishes under the `next` dist-tag, which is how OIDC and
-# this workflow are rehearsed without spending a train number. A version that
+# this workflow are rehearsed without spending a Plexus version. A version that
 # is on npm already is skipped, so a re-run is a no-op. Token-less through
 # OIDC trusted publishing, with provenance.
 

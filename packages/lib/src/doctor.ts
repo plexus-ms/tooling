@@ -1,7 +1,7 @@
 // doctor: the staleness check (§ 13.4 PLX), a verb, not a system.
 //
 // Every PLEXUS.md marker under a directory is read, and for each module it
-// declares the module's `changed` train is compared with the marker's
+// declares the module's `changed` version is compared with the marker's
 // `plexus`; every `depends` entry of a declared module has to be declared
 // where § 1.4 says it is satisfied: by the unit itself, by an enclosing
 // declaration (an app's repo, a repo's tenant) or by a contained one (a
@@ -68,7 +68,7 @@ function diagnoseUnit(unit: Unit, units: Unit[], catalog: Catalog, root: string)
       findings.push(`declares ${code}, which no module carries`);
       continue;
     }
-    if (module.changed && compareTrains(module.changed, plexus) > 0)
+    if (module.changed && compareVersions(module.changed, plexus) > 0)
       findings.push(`${code} changed in ${module.changed}, declared at ${plexus}`);
     for (const dep of module.depends)
       if (!modules.includes(dep) && !context.has(dep))
@@ -95,8 +95,8 @@ function descendants(dir: Directory): Directory[] {
   return dir.children.flatMap((c) => [...(c.declaration ? [c] : []), ...descendants(c)]);
 }
 
-/** Numeric comparison of two train versions; suffixes ignored. */
-export function compareTrains(a: string, b: string): number {
+/** Numeric comparison of two Plexus versions; suffixes ignored. */
+export function compareVersions(a: string, b: string): number {
   const nums = (v: string) =>
     v
       .split('.')
