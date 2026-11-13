@@ -160,7 +160,7 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(inputs.deploys) }}
-    uses: plexus-ms/tooling/.github/workflows/_deploy.yml@0.119.0
+    uses: plexus-ms/tooling/.github/workflows/_deploy.yml@0.120.0
     with:
       strategy: ${{ inputs.strategy }}
       app: ${{ matrix.app }}
