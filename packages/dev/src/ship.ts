@@ -278,10 +278,10 @@ async function awaitPublished(ctx: Context, next: string, wait: PublishWait): Pr
   const names: string[] = VERSIONED_PACKAGES.map((p) => p.name);
   const list = names.map((n) => `${n}@${next}`).join(', ');
   if (ctx.dryRun) {
-    ctx.say(`⏳ [dry-run] would wait for ${list} on npm (${TOOLING}' release workflow publishes them)`);
+    ctx.say(`⏳ [dry-run] would wait for ${list} on npm (the release workflow of ${TOOLING} publishes them)`);
     return;
   }
-  ctx.say(`⏳ waiting for ${list} on npm (${TOOLING}' release workflow publishes them)`);
+  ctx.say(`⏳ waiting for ${list} on npm (the release workflow of ${TOOLING} publishes them)`);
   const started = Date.now();
   let missing = [...names];
   for (;;) {
