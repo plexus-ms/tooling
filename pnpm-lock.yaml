@@ -179,8 +179,8 @@ importers:
         specifier: workspace:*
         version: link:packages/cli
       '@plexus-ms/config':
-        specifier: workspace:*
-        version: link:packages/config
+        specifier: ^0.119.0
+        version: 0.119.0
       '@plexus-ms/dev':
         specifier: workspace:*
         version: link:packages/dev
@@ -231,8 +231,6 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
-
-  packages/config: {}
 
   packages/dev:
     dependencies:
@@ -627,6 +625,9 @@ packages:
       '@types/node':
         optional: true
 
+  '@plexus-ms/config@0.119.0':
+    resolution: {integrity: sha512-oZ/+gj7ra+TbU2IK7Q5qMPiBz5Pp/HlIhbM3e+E5fJ5nEZABh+sVwLX2cbz/rfcAyYYfEdf3RItDeDI5pYhOUQ==}
+
   '@turbo/darwin-64@2.11.10':
     resolution: {integrity: sha512-By4idRap5+nLnMuRzLB4qkOPRlvNdyY1ne4VJYDyUoUB11H94k7uif9mbe3JT8JSNXs1D68uMcBj6hJ/jMQRvA==}
     cpu: [x64]
@@ -958,6 +959,8 @@ snapshots:
   '@inquirer/type@4.2.1(@types/node@24.19.2)':
     optionalDependencies:
       '@types/node': 24.19.2
+
+  '@plexus-ms/config@0.119.0': {}
 
   '@turbo/darwin-64@2.11.10':
     optional: true

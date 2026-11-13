@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  bumpCatalogPin,
   bumpCollectionPin,
-  bumpConfigPin,
   bumpGalaxyVersion,
   bumpManifestVersion,
   bumpPlxPin,
@@ -45,18 +43,6 @@ test('bumpPlxPin pins plx exactly in either spelling of a mise tool', () => {
   assert.equal(bumpPlxPin('"npm:@plexus-ms/cli" = "0.6.0"\n', '0.100.0'), '"npm:@plexus-ms/cli" = "0.100.0"\n');
   const both = table + '"npm:@plexus-ms/cli-ci" = { version = "0.6.0", allow_low_downloads = true }\n';
   assert.equal(bumpPlxPin(both, '0.100.0'), both.replaceAll('0.6.0', '0.100.0'));
-});
-
-test('bumpConfigPin pins the config dependency exactly and leaves workspace references alone', () => {
-  const tpl = '"devDependencies": {\n    "@plexus-ms/config": "^0.3.1",\n    "turbo": "^2.0.0"\n  }\n';
-  assert.equal(bumpConfigPin(tpl, '0.100.0'), tpl.replace('"^0.3.1"', '"0.100.0"'));
-  const ws = '"devDependencies": { "@plexus-ms/config": "workspace:*" }\n';
-  assert.equal(bumpConfigPin(ws, '0.100.0'), ws);
-});
-
-test('bumpCatalogPin pins the config entry of the plexus catalog', () => {
-  const ws = 'catalog:\n  typescript: ^6\ncatalogs:\n  plexus:\n    "@plexus-ms/config": 0.100.0\n';
-  assert.equal(bumpCatalogPin(ws, '0.101.0'), ws.replace('0.100.0', '0.101.0'));
 });
 
 test('stampStandard and stampChanged edit the frontmatter only', () => {

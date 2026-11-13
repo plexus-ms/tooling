@@ -8,7 +8,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.6.6",
     "@plexus-ms/cli": "workspace:*",
-    "@plexus-ms/config": "workspace:*",
+    "@plexus-ms/config": "^0.119.0",
     "@plexus-ms/dev": "workspace:*",
     "turbo": "^2.11.10"
   }

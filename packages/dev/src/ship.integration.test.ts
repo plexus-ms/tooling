@@ -202,11 +202,11 @@ function fixture(name: string): void {
   const prim = up('primitives');
   for (const c of ['host', 'platform', 'infrastructure', 'ci'])
     put(join(prim, `ansible/${c}/galaxy.yml`), 'version: 0.1.0                # mirrors the release-train tag\n');
-  for (const p of ['cli', 'cli-ci', 'lib', 'config'])
+  for (const p of ['cli', 'cli-ci', 'lib'])
     put(join(prim, `packages/${p}/package.json`), `{\n  "name": "@plexus-ms/${p}",\n  "version": "0.1.0"\n}\n`);
   put(
     join(prim, 'package.json'),
-    '{\n  "name": "primitives",\n  "devDependencies": { "@plexus-ms/config": "workspace:*" }\n}\n',
+    '{\n  "name": "primitives",\n  "devDependencies": { "@plexus-ms/config": "^0.0.1" }\n}\n',
   );
   put(join(prim, '.github/workflows/pipeline.yml'), `jobs:\n  ci:\n    uses: ${PRIMITIVES_REF}ci.yml@0.1.0\n`);
   const web = up('preset-repo-turbo');
@@ -458,16 +458,13 @@ test('dry run previews both phases and the propagation in scratch clones, and ch
   assert.ok(has(out, '→ phase: primitives'), 'phase one announced');
   assert.ok(has(out, '→ phase: preset-repo-turbo, preset-app-nextjs, preset-repo-operations, compendium'), 'phase two');
   assert.ok(
-    has(
-      out,
-      '⏳ [dry-run] would wait for @plexus-ms/cli@0.2.0, @plexus-ms/cli-ci@0.2.0, @plexus-ms/lib@0.2.0, @plexus-ms/config@0.2.0 on npm',
-    ),
+    has(out, '⏳ [dry-run] would wait for @plexus-ms/cli@0.2.0, @plexus-ms/cli-ci@0.2.0, @plexus-ms/lib@0.2.0 on npm'),
     'the wait is a step of the preview',
   );
   assert.ok(!fakeLog().some((l) => l.startsWith('npm ')), 'registry not polled');
   assert.ok(has(out, 'primitives: packages/cli/package.json: @plexus-ms/cli → 0.2.0'), 'preview lists package bumps');
   assert.ok(has(out, 'preset-repo-turbo: template/mise.toml: plx pin → 0.2.0'));
-  assert.ok(has(out, 'preset-app-nextjs: template/package.json.jinja: @plexus-ms/config pin → 0.2.0'));
+  assert.ok(!has(out, '@plexus-ms/config'), 'the config is a library on its own version line: no pin of it is written');
   assert.ok(has(out, 'compendium: mise.toml: plx pin → 0.2.0'));
   assert.ok(
     has(out, 'compendium: contracts/alpha.md: requirements changed since 0.1.0 → changed: 0.2.0'),
@@ -543,9 +540,9 @@ test('happy path: primitives first, the npm wait, the rest, and no pull request 
   // Phase one: primitives' bookkeeping, tag, release.
   const prim = up('primitives');
   assert.match(read(join(prim, 'ansible/host/galaxy.yml')), /^version: 0\.2\.0 /);
-  for (const p of ['cli', 'cli-ci', 'lib', 'config'])
+  for (const p of ['cli', 'cli-ci', 'lib'])
     assert.match(read(join(prim, `packages/${p}/package.json`)), /"version": "0\.2\.0"/, `${p} at the train number`);
-  assert.match(read(join(prim, 'package.json')), /"workspace:\*"/, 'workspace reference left alone');
+  assert.match(read(join(prim, 'package.json')), /"@plexus-ms\/config": "\^0\.0\.1"/, 'the config range left alone');
   assert.match(read(join(prim, '.github/workflows/pipeline.yml')), /ci\.yml@0\.2\.0/);
   assert.equal(git(prim, 'log', '-1', '--format=%s'), 'chore: train 0.2.0 bookkeeping');
   assert.equal(
@@ -566,9 +563,7 @@ test('happy path: primitives first, the npm wait, the rest, and no pull request 
     log.filter((l) => has(l, 'npm view @plexus-ms/cli@0.2.0')).length >= 2,
     'polled more than once, until the publish',
   );
-  assert.ok(
-    has(out, '✓ @plexus-ms/cli@0.2.0, @plexus-ms/cli-ci@0.2.0, @plexus-ms/lib@0.2.0, @plexus-ms/config@0.2.0 on npm'),
-  );
+  assert.ok(has(out, '✓ @plexus-ms/cli@0.2.0, @plexus-ms/cli-ci@0.2.0, @plexus-ms/lib@0.2.0 on npm'));
   assert.ok(has(out, '→ phase: primitives\n'), 'phase one narrated');
 
   // Phase two: the presets and the compendium.
@@ -598,14 +593,13 @@ test('happy path: primitives first, the npm wait, the rest, and no pull request 
   assert.match(read(join(up('preset-repo-turbo'), 'template/mise.toml')), /version = "0\.2\.0"/);
   assert.match(
     read(join(up('preset-repo-turbo'), 'template/package.json.jinja')),
-    /"@plexus-ms\/config": "0\.2\.0"/,
-    'exact',
+    /"@plexus-ms\/config": "\^0\.0\.1"/,
+    'the config is not a pin of the train: the manifest keeps its range',
   );
-  assert.match(read(join(up('preset-app-nextjs'), 'template/package.json.jinja')), /"@plexus-ms\/config": "0\.2\.0"/);
   assert.match(
     read(join(up('preset-repo-turbo'), 'template/pnpm-workspace.yaml')),
-    /"@plexus-ms\/config": 0\.2\.0$/m,
-    'the catalog entry',
+    /"@plexus-ms\/config": 0\.0\.1$/m,
+    'and so does the catalog entry',
   );
   assert.match(read(join(up('preset-repo-turbo'), 'template/.github/workflows/ci.yml.jinja')), /changes\.yml@0\.2\.0/);
 
@@ -837,7 +831,7 @@ test('a registry that never answers stops the run resumably; the re-run skips wh
   delete process.env.FAKE_NPM_NEVER;
   assert.match(
     first.error ?? '',
-    /@plexus-ms\/cli, @plexus-ms\/cli-ci, @plexus-ms\/lib, @plexus-ms\/config not on npm at 0\.2\.0 after \d+ min/,
+    /@plexus-ms\/cli, @plexus-ms\/cli-ci, @plexus-ms\/lib not on npm at 0\.2\.0 after \d+ min/,
   );
   assert.match(first.error ?? '', /re-run with --train 0\.2\.0/);
   assert.ok(tagged('primitives', '0.2.0') && remoteTagged('primitives', '0.2.0') && released('primitives', '0.2.0'));

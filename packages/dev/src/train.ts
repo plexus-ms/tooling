@@ -22,7 +22,6 @@ export const TRAIN_PACKAGES = [
   { name: '@plexus-ms/cli', dir: 'packages/cli' },
   { name: '@plexus-ms/cli-ci', dir: 'packages/cli-ci' },
   { name: '@plexus-ms/lib', dir: 'packages/lib' },
-  { name: '@plexus-ms/config', dir: 'packages/config' },
 ] as const;
 
 /** The umbrella directory holding the train repos, relative to the workspace. */

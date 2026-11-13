@@ -8,7 +8,7 @@
 //     release — which locks the tag and runs primitives' release workflow
 //   → wait until the three packages are on npm at the train number
 //   → phase two: the presets' and the compendium's bookkeeping (collection
-//     pin, workflow refs, plx pins, the config pin and catalog entry, the map's version and
+//     pin, workflow refs, plx pins, the map's version and
 //     timestamp, `changed` on every standard module whose requirements moved),
 //     commit, tag, push, release, repo by repo; the compendium last, its
 //     release created as a draft, given the train manifest (manifest.ts) and
@@ -59,15 +59,12 @@ import {
   write,
 } from '@plexus-ms/lib';
 import {
-  bumpCatalogPin,
   bumpCollectionPin,
-  bumpConfigPin,
   bumpGalaxyVersion,
   bumpManifestVersion,
   bumpPlxPin,
   bumpRunnerImagePin,
   COLLECTIONS,
-  CONFIG_PIN,
   galaxyFile,
   PLX_PIN,
   RUNNER_IMAGE_PIN_FILE,
@@ -348,10 +345,6 @@ async function planBookkeeping(
       await edit(r, f, `workflow refs → @${next}`, (t) => bumpWorkflowRefs(t, next));
     for (const f of await grep(r, PLX_PIN, ['*.toml', '*.toml.jinja']))
       await edit(r, f, `plx pin → ${next}`, (t) => bumpPlxPin(t, next));
-    for (const f of await grep(r, `"${CONFIG_PIN}"`, ['*package.json', '*package.json.jinja']))
-      await edit(r, f, `${CONFIG_PIN} pin → ${next}`, (t) => bumpConfigPin(t, next));
-    for (const f of await grep(r, `"${CONFIG_PIN}"`, ['*pnpm-workspace.yaml', '*pnpm-workspace.yaml.jinja']))
-      await edit(r, f, `${CONFIG_PIN} catalog entry → ${next}`, (t) => bumpCatalogPin(t, next));
   }
 
   // The map carries the train version and the date it was cut (§ 1.5 PLX); a
