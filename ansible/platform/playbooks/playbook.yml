@@ -48,3 +48,21 @@
   roles:
     - { role: plexus.host.firewall, tags: [firewall] } # after the roles that open ports in it
     - { role: plexus.host.sshd, tags: [sshd] }         # last: closes root logins once an admin has logged in
+
+# The apps role records an app whose start failed and carries on with the
+# others; the failure is raised here, once per host and after the lock-down
+# roles, so that a broken app never leaves a host without its firewall and
+# sshd settings. Tagged `platform` and `apps`, so `--tags apps` reports it too.
+- name: Report the apps that failed to start
+  hosts: platform
+  gather_facts: false
+  tags: [platform, apps]
+  tasks:
+    - name: Fail the host for the apps that did not start
+      when: apps_failures | default([]) | length > 0
+      ansible.builtin.fail:
+        msg: |-
+          {{ apps_failures | length }} app(s) did not start:
+          {% for f in apps_failures %}
+          - {{ f.app }}: '{{ f.task }}' failed (rc {{ f.rc }}): {{ f.output }}
+          {% endfor %}

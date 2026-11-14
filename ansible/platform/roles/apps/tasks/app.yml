@@ -70,35 +70,40 @@
 # the verb), which is the operator's supervised act (§ 6 PLX-Delivery). The
 # verb pulls the image before it places compose.yaml, so a compose.yaml on the
 # host means its image existed: an absent file is the one "new app" case, and
-# a pull or start that fails once the file is there is a failure, not a pending
-# first deploy. (A registry such as GHCR answers `denied` for a missing image
+# a start that fails once the file is there is a failure, not a pending first
+# deploy. (A registry such as GHCR answers `denied` for a missing image
 # as for bad credentials, so the failure cannot be read for "not there yet".)
 - name: "{{ app.name }} | check whether the deploy verb has placed compose.yaml"
   ansible.builtin.stat:
     path: "{{ apps_dir }}/compose.yaml"
   register: apps_compose
 
-- name: "{{ app.name }} | nothing deployed yet (no compose.yaml), so nothing to pull or start"
+- name: "{{ app.name }} | nothing deployed yet (no compose.yaml), so nothing to start"
   when: plexus_up | bool and not apps_compose.stat.exists
   ansible.builtin.debug:
     msg: >-
-      {{ app.name }}: no compose.yaml in {{ apps_dir }}, so nothing has been deployed yet and there is no image to pull.
+      {{ app.name }}: no compose.yaml in {{ apps_dir }}, so nothing has been deployed yet and there is no image to start.
       Run the CI deploy (or the deploy verb by hand) to bring it up.
 
 # Runs as the deploy user so a private registry works: that's where the GHCR
 # login above put the credentials, and it's the same user the CI deploy verb
-# uses — playbook runs and CI deploys pull with one identity. A failure of
-# either command fails the host, naming the app.
-- name: "{{ app.name }} | pull + start"
+# uses. There is no separate pull: `up -d` pulls only the images the host does
+# not hold (compose's default pull policy, `missing`), so an app whose image is
+# on the host starts without the registry, and a playbook run no longer
+# refreshes a floating tag, which fits a playbook that is not a deploy.
+#
+# A failure of the start does not stop the other apps: it is recorded (app,
+# task, rc, output) in `apps_failures`, and the last play of the platform
+# playbook fails the host once, listing every failed app, after the handlers
+# and the lock-down roles have run. A failed app's dir is kept from the
+# rotation handlers (this role's and the secrets role's), which would only run
+# the failing `up -d` again; the next run's `up -d` re-creates it with the
+# rotated environment.
+- name: "{{ app.name }} | start"
   when: plexus_up | bool and apps_compose.stat.exists
   become: true
   become_user: "{{ plexus_deploy_user }}"
   block:
-    - name: "{{ app.name }} | docker compose pull"
-      ansible.builtin.command:
-        cmd: docker compose pull
-        chdir: "{{ apps_dir }}"
-      changed_when: false
     - name: "{{ app.name }} | docker compose up -d"
       ansible.builtin.command:
         cmd: docker compose up -d
@@ -106,12 +111,19 @@
       register: apps_up
       changed_when: "'Started' in apps_up.stderr or 'Recreated' in apps_up.stderr or 'Created' in apps_up.stderr"
   rescue:
-    - name: "{{ app.name }} | pull or start failed"
-      ansible.builtin.fail:
-        msg: >-
-          {{ app.name }}: '{{ ansible_failed_task.name }}' failed in {{ apps_dir }}:
-          {{ ansible_failed_result.stderr | default(ansible_failed_result.msg | default('no output')) }}
+    - name: "{{ app.name }} | record the failed start"
+      ansible.builtin.set_fact:
+        apps_failures: >-
+          {{ (apps_failures | default([])) + [{
+            'app': apps_slug,
+            'dir': apps_dir,
+            'task': ansible_failed_task.name,
+            'rc': ansible_failed_result.rc | default('none'),
+            'output': ([ansible_failed_result.stderr | default(''), ansible_failed_result.stdout | default(''),
+                        ansible_failed_result.msg | default('')] | map('trim') | select | first | default('no output'))
+          }] }}
 
 - name: "{{ app.name }} | remember the app dir for the rotation handler"
+  when: apps_slug not in (apps_failures | default([]) | map(attribute='app') | list)
   ansible.builtin.set_fact:
     apps_dirs: "{{ (apps_dirs | default([])) + [apps_dir] }}"
