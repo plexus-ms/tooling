@@ -95,9 +95,20 @@ run = 'turbo run check ${usage_package:+--filter=$usage_package}'
 
 [tasks.check-requirements]
 depends = ["build"]
-description = "plx requirements over this repo, with the workspace's own build: every cited section and requirement name exists, no issue identifier"
+description = "plx requirements over this repo, with the workspace's own build: every cited section and requirement name exists, no issue identifier; citations resolve against the sibling compendium checkout when there is one, else against the index of the last version (which lags the compendium's main)"
 hide = true
-run = "pnpm plx requirements ."
+# The sibling is where the workspace keeps the compendium (plexus-ms/compendium
+# beside plexus-ms/tooling, as ship expects it). A checkout elsewhere, a
+# worktree for one, has none, and checks against the index this build carries:
+# a citation of a section added since the last version fails there until the
+# next version is cut, or until the check is run by hand with --compendium.
+run = '''
+if [ -f "{{config_root}}/../compendium/essentials/standard.md" ]; then
+  pnpm plx requirements . --compendium "{{config_root}}/../compendium"
+else
+  pnpm plx requirements .
+fi
+'''
 
 [tasks.check-ops]
 description = "actionlint over the workflows; ansible-lint over the collections (their Galaxy dependencies installed on first use), a syntax check of their playbooks and of a playbook that lists every role"
