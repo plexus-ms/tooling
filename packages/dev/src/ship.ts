@@ -2,7 +2,10 @@
 // version, tagged identically whether or not it changed, in two phases:
 //
 //   preflight (every versioned repo on main, clean, not behind origin, the latest
-//   tags in agreement; gh logged in; no mutable release on any versioned repo)
+//   tags in agreement; gh logged in; no mutable release on any versioned repo;
+//   `plx requirements` passing in every versioned repo, as this source checks
+//   it; on a re-run, the compendium still yielding the citable index tooling
+//   was tagged with)
 //   → phase one: tooling's bookkeeping (galaxy versions, the Plexus-versioned
 //     packages' manifests, its own workflow refs, the citable index read from
 //     the compendium), commit, tag, push, GitHub
@@ -44,6 +47,7 @@ import {
   bumpWorkflowRefs,
   COMPENDIUM,
   type Context,
+  checkRepo,
   emptySummary,
   extractRequirements,
   frontmatterField,
@@ -51,6 +55,7 @@ import {
   MAP_PAGE,
   modulePages,
   type Plan,
+  parseStandardIndex,
   preflightForge,
   readCatalog,
   readCitable,
@@ -122,6 +127,8 @@ export async function ship(ctx: Context, options: ShipOptions): Promise<ShipResu
   await preflightRelease(ctx, versioned);
   await preflightImmutable(ctx, versioned);
   const next = resolveVersion(versioned, options.to);
+  await preflightRequirements(ctx, versioned);
+  await preflightIndex(ctx, versioned, next);
   await release(ctx, versioned, next, options.today ?? todayOf(), { ...DEFAULT_WAIT, ...options.wait });
   if (ctx.dryRun) return { ...(await previewConsumers(ctx, options.workspace, next)), released: true };
   ctx.say(`• Plexus ${next} is cut; every repo takes it itself, when it needs it (plx update)`);
@@ -144,6 +151,60 @@ async function preflightImmutable(ctx: Context, versioned: Versioned): Promise<v
     ).trim();
     if (newest === 'false') throw new Error(mutableRelease(`${repo.name}: its newest GitHub release is not immutable`));
   }
+}
+
+/**
+ * Every versioned repo passes `plx requirements` as the plx being cut checks it,
+ * citations resolved against the compendium being cut. Phase two commits in
+ * the compendium under its hook, which runs plx at the new pin; a repo that
+ * fails there stops the version halfway, after tooling and the templates are
+ * released. Tooling's pre-push after its tag runs the same check. The
+ * bookkeeping itself writes only frontmatter, pins and refs, which no lint reads
+ * as a violation, so a repo that passes here passes there.
+ */
+async function preflightRequirements(ctx: Context, versioned: Versioned): Promise<void> {
+  const compendium = versioned.repos.find((r) => r.name === COMPENDIUM)?.path;
+  const failing: string[] = [];
+  for (const repo of versioned.repos) {
+    const { defects } = await checkRepo(ctx, repo.path, { compendium });
+    if (defects.length === 0) continue;
+    failing.push(`  ${repo.name}: ${count(defects.length, 'defect')}`, ...defects.slice(0, 5).map((d) => `    ${d}`));
+    if (defects.length > 5) failing.push(`    … and ${defects.length - 5} more (plx requirements ${repo.path})`);
+  }
+  if (failing.length === 0) return;
+  const repos = failing.filter((l) => !l.startsWith('    ')).length;
+  throw new Error(
+    `plx requirements fails in ${count(repos, 'versioned repo')}:\n${failing.join('\n')}\nfix them, or record today's as known (plx requirements <repo> --write-baseline) and commit the baseline, before cutting a version`,
+  );
+}
+
+const count = (n: number, what: string): string => `${n} ${what}${n === 1 ? '' : 's'}`;
+
+/**
+ * On a re-run with tooling already tagged, its packages are published (or about
+ * to be) with the citable index at that tag, and phase two tags the compendium
+ * as it is now: the two must still agree. The bookkeeping does not write the
+ * index again, since a commit after the tag would never be released; a
+ * compendium that moved since is refused, naming what moved.
+ */
+async function preflightIndex(ctx: Context, versioned: Versioned, next: string): Promise<void> {
+  const tooling = versioned.repos.find((r) => r.name === TOOLING);
+  const compendium = versioned.repos.find((r) => r.name === COMPENDIUM);
+  if (!tooling?.tag || tooling.latest !== next || !compendium) return;
+  const atTag = await ctx
+    .read('git', ['show', `refs/tags/${tooling.tag}:${STANDARD_INDEX_FILE}`], { cwd: tooling.path })
+    .catch(() => undefined);
+  if (atTag === undefined) return; // a tag from before tooling carried an index
+  const tagged = parseStandardIndex(atTag).citable;
+  const now = await readCitable(ctx, compendium.path);
+  if (tagged.join('\n') === now.join('\n')) return;
+  const diff = [
+    ...now.filter((c) => !tagged.includes(c)).map((c) => `  + ${c}`),
+    ...tagged.filter((c) => !now.includes(c)).map((c) => `  - ${c}`),
+  ];
+  throw new Error(
+    `the citable index tooling carries at ${next} differs from the compendium:\n${(diff.length > 0 ? diff : ['  (the same entries, in another order)']).join('\n')}\nthe packages of ${next} carry the index at the tag; revert the compendium change and re-run with --to ${next}, or cut a new version`,
+  );
 }
 
 const mutableRelease = (what: string): string =>
@@ -350,9 +411,10 @@ async function planBookkeeping(
       await edit(tooling, `${p.dir}/package.json`, `${p.name} → ${next}`, (t) => bumpManifestVersion(t, next));
     // The citable index the packages carry (standardIndex.ts), read from the
     // compendium's main, which phase two tags with only stamps added: what a
-    // tenant's citations resolve against under the plx it pins.
+    // tenant's citations resolve against under the plx it pins. Once tooling is
+    // tagged it is not written again (preflightIndex holds the two together).
     const compendium = versioned.repos.find((r) => r.name === COMPENDIUM);
-    if (compendium) {
+    if (compendium && tooling.latest !== next) {
       const index = renderStandardIndex({ version: next, citable: await readCitable(ctx, compendium.path) });
       await edit(tooling, STANDARD_INDEX_FILE, `citable index → the compendium at ${next}`, () => index);
     }

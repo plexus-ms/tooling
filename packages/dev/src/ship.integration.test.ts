@@ -861,6 +861,72 @@ test('a registry that never answers stops the run resumably; the re-run skips wh
   assert.ok(allTagged('0.2.0') && allReleased('0.2.0'));
 });
 
+test('a re-run whose compendium moved since tooling was tagged refuses, and adds no commit after the tag', async () => {
+  fixture('rerun-index');
+  process.env.FAKE_NPM_NEVER = '1';
+  const first = await run({ yes: true });
+  delete process.env.FAKE_NPM_NEVER;
+  assert.match(first.error ?? '', /re-run with --to 0\.2\.0/);
+  assert.ok(tagged('tooling', '0.2.0') && !tagged('compendium', '0.2.0'), 'stopped between the phases');
+  // A fix in the compendium between the runs adds a section the published index does not have.
+  const comp = up('compendium');
+  put(join(comp, 'contracts/alpha.md'), `${read(join(comp, 'contracts/alpha.md'))}\n## § 2 Two\n\nProse.\n`);
+  commit(comp, 'alpha gains a section');
+  git(comp, 'push', '--quiet', 'origin', 'main');
+
+  const second = await run({ yes: true }, { to: '0.2.0' });
+  assert.match(second.error ?? '', /the citable index tooling carries at 0\.2\.0 differs from the compendium/);
+  assert.ok(has(second.error ?? '', `+ ${['§', '2', 'PLX-Alpha'].join(' ')}`), second.error);
+  assert.match(second.error ?? '', /revert the compendium|cut a new version/);
+  const prim = up('tooling');
+  assert.equal(git(prim, 'rev-parse', '0.2.0^{commit}'), git(prim, 'rev-parse', 'main'), 'no commit after the tag');
+  assert.equal(
+    git(prim, 'log', '--format=%s', '--grep', 'bookkeeping').split('\n').length,
+    1,
+    'one bookkeeping commit',
+  );
+  assert.ok(!tagged('compendium', '0.2.0'), 'phase two not started');
+
+  // Reverted, the re-run finishes the version with the index that was published.
+  git(comp, 'revert', '--no-edit', 'HEAD');
+  git(comp, 'push', '--quiet', 'origin', 'main');
+  const third = await run({ yes: true }, { to: '0.2.0' });
+  assert.equal(third.error, undefined, third.out);
+  assert.ok(allTagged('0.2.0') && allReleased('0.2.0'));
+  assert.equal(
+    git(prim, 'rev-parse', '0.2.0^{commit}'),
+    git(prim, 'rev-parse', 'main'),
+    'still no commit after the tag',
+  );
+});
+
+test('a versioned repo that fails plx requirements stops the version before anything is written', async () => {
+  fixture('requirements');
+  const comp = up('compendium');
+  put(join(comp, 'approaches/gamma.md'), `${read(join(comp, 'approaches/gamma.md'))}Measured on ${'2026-01-01'}.\n`);
+  commit(comp, 'a dated sentence');
+  git(comp, 'push', '--quiet', 'origin', 'main');
+  const web = up('template-repo-turbo');
+  put(join(web, 'notes.md'), `See ${['§', '9', 'PLX-Alpha'].join(' ')}.\n`);
+  commit(web, 'a stale citation');
+  git(web, 'push', '--quiet', 'origin', 'main');
+
+  const refused = await run({ yes: true });
+  assert.match(refused.error ?? '', /plx requirements fails in 2 versioned repos/);
+  assert.match(refused.error ?? '', /^ {2}template-repo-turbo: 1 defect$/m);
+  assert.match(refused.error ?? '', /^ {2}compendium: 1 defect$/m);
+  assert.match(refused.error ?? '', /--write-baseline/);
+  assert.ok(
+    VERSIONED_REPOS.every((r) => !tagged(r, '0.2.0')),
+    'nothing tagged',
+  );
+  assert.equal(git(up('tooling'), 'log', '-1', '--format=%s'), 'initial', 'no bookkeeping');
+
+  // The dry run refuses the same way.
+  const dry = await run({ dryRun: true });
+  assert.match(dry.error ?? '', /plx requirements fails in 2 versioned repos/);
+});
+
 test("a run that stops at the manifest leaves the compendium's release a draft, which no repo sees; the re-run publishes it", async () => {
   fixture('draft');
   process.env.FAKE_GH_UPLOAD_FAIL = '1';
@@ -893,6 +959,14 @@ test("a run that stops at the manifest leaves the compendium's release a draft, 
 
 test('disagreeing latest tags refuse a derived version and accept an explicit one', async () => {
   fixture('skew');
+  // The half version's tag carries the index the compendium yields, as ship would have written it.
+  const citable = ['Alpha', 'Beta', 'Delta'].map((m) => ['§', '1', `PLX-${m}`].join(' '));
+  put(
+    join(up('tooling'), 'packages/lib/src/standard-index.json'),
+    `${JSON.stringify({ version: '0.2.0', citable }, null, 2)}\n`,
+  );
+  commit(up('tooling'), 'the index of the half version');
+  git(up('tooling'), 'push', '--quiet', 'origin', 'main');
   git(up('tooling'), 'tag', '-a', '0.2.0', '-m', 'half version');
   git(up('tooling'), 'push', '--quiet', 'origin', '0.2.0');
   const first = await run({ yes: true });
