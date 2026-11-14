@@ -122,7 +122,7 @@ const NUMBER = '\\d+(?:\\.\\d+)*';
 /** Between a section number and the code: blanks, or a line break with a comment or blockquote marker. */
 const GAP = '(?:[ \\t\\u00a0]+|[ \\t]*\\r?\\n[ \\t]*(?:#+|//+|\\*|>)?[ \\t]*)';
 
-/** `PLX-Module/Name` or `PLX-Module/Profile/Name`: the name segments capitalised, as module codes are. */
+/** `PLX-<Module>/<Name>` or `PLX-<Module>/<Profile>/<Name>`: the name segments capitalised, as module codes are. */
 export const REQUIREMENT_NAME = 'PLX-[A-Z][A-Za-z]+(?:/[A-Z][A-Za-z0-9]*){1,2}';
 
 const SECTION_CITATION = new RegExp(`(?<!§)§[ \\t\\u00a0]*(${NUMBER})${GAP}(${CODE})`, 'g');
