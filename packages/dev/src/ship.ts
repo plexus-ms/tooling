@@ -192,7 +192,9 @@ async function preflightRequirements(ctx: Context, versioned: Versioned): Promis
  * version ship stopped, a tagged repo has nothing left to write, since its tag
  * is on its bookkeeping commit; anything still to write means the tag was made
  * elsewhere, or main moved since. Refused before anything is written, the dry
- * run included, naming every write it would have made.
+ * run included, naming every write it would have made. A requirement edit on a
+ * tagged compendium's main is no such write: it belongs to the next version,
+ * and no `changed` stamp is planned for it (planBookkeeping).
  */
 async function preflightAfterTag(ctx: Context, versioned: Versioned, next: string, today: string): Promise<void> {
   const { afterTag } = await planBookkeeping(ctx, versioned, versioned.repos, next, today, { quiet: true });
@@ -490,7 +492,12 @@ async function planBookkeeping(
     await edit(comp, MAP_PAGE, `version → ${next}, timestamp → ${today}`, (t) =>
       frontmatterField(t, 'version') === next ? t : stampStandard(t, next, today),
     );
-    for (const page of await modulePages(ctx, comp.path)) {
+    // A compendium already tagged with the version is that version: a
+    // requirement edit on main past the tag belongs to the next version, whose
+    // bookkeeping compares against this tag and stamps it there. So no stamp
+    // is planned from main, and the re-run finishes the version from its tag.
+    const stamped = comp.latest === next ? [] : await modulePages(ctx, comp.path);
+    for (const page of stamped) {
       const text = await ctx.readFile(join(comp.path, page));
       if (frontmatterField(text, 'maturity') !== 'standard') continue;
       const previous = comp.tag

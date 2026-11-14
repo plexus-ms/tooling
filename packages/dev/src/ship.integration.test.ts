@@ -974,6 +974,41 @@ test("a run that stops at the manifest leaves the compendium's release a draft, 
   assert.equal(fakeLog().filter((l) => has(l, 'gh[compendium] release upload')).length, 2, 'one failed, one done');
 });
 
+test('a requirement edit on the compendium past its tag belongs to the next version: the re-run finishes this one from its tag', async () => {
+  fixture('edit-after-tag');
+  process.env.FAKE_GH_UPLOAD_FAIL = '1';
+  const first = await run({ yes: true });
+  delete process.env.FAKE_GH_UPLOAD_FAIL;
+  assert.match(first.error ?? '', /upload failed on purpose/);
+  assert.ok(remoteTagged('compendium', '0.2.0'), 'the compendium is tagged');
+  // An ordinary edit to a requirement line reaches main after the tag.
+  const comp = up('compendium');
+  const beta = join(comp, 'approaches/beta.md');
+  put(beta, read(beta).replace('A host MUST beta.', 'A host MUST beta, twice.'));
+  commit(comp, 'beta sharpens its requirement');
+  git(comp, 'push', '--quiet', 'origin', 'main');
+
+  for (const options of [{ dryRun: true }, { yes: true }]) {
+    const rerun = await run(options, { to: '0.2.0' });
+    assert.equal(rerun.error, undefined, rerun.out);
+    assert.ok(!has(rerun.out, 'approaches/beta.md'), 'no stamp planned from main');
+  }
+  assert.ok(allTagged('0.2.0') && allReleased('0.2.0'));
+  assert.match(read(beta), /^changed: 0\.1\.0$/m, 'main not stamped with the version it is not part of');
+  assert.match(git(comp, 'show', '0.2.0:approaches/beta.md'), /A host MUST beta\.$/m, 'the version is its tag');
+  assert.equal(
+    git(comp, 'log', '--format=%s', '0.2.0..main'),
+    'beta sharpens its requirement',
+    'nothing else after the tag',
+  );
+
+  // The next version compares against the tag, and stamps the edit.
+  const next = await run({ yes: true });
+  assert.equal(next.error, undefined, next.out);
+  assert.ok(allTagged('0.3.0'));
+  assert.match(git(comp, 'show', '0.3.0:approaches/beta.md'), /^changed: 0\.3\.0$/m, 'stamped by the next version');
+});
+
 test('disagreeing latest tags refuse a derived version; a hand-made tag refuses the bookkeeping it lacks', async () => {
   fixture('skew');
   // The half version's tag carries the index the compendium yields, as ship would have written it.
