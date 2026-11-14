@@ -2,10 +2,14 @@
 // moved: a verb, not a system.
 //
 //   scanPage        one page: its defects, and for a standard module its
-//                   requirement lines, `§ <section> <text>`, in page order
+//                   requirement lines, `§ <section> <text>`, in page order,
+//                   its numbered sections and its requirement names
 //   checkCompendium the map and every module page, plus the cross-page rules:
-//                   unique codes, known dependencies, dependencies that respect
-//                   the seams (§ 1.3 PLX)
+//                   unique codes, unique requirement names, known
+//                   dependencies, dependencies that respect the seams (§ 1.3 PLX)
+//   checkRepo       any repo: the four lints of lints.ts over its tracked
+//                   files, against its baseline (baseline.ts); for the
+//                   compendium, checkCompendium too
 //
 // The map carries no requirements and no BCP 14 keyword. A module at standard
 // maturity carries its requirements as blockquoted bullets ("> - ") under
@@ -16,11 +20,42 @@
 // `plx-dev ship` compares a module's extracted lines across versions to stamp `changed`,
 // so the extractor and the linter are one function and cannot disagree.
 //
-//   plx requirements <compendium>              # lint; exit 1 on any defect
+// A requirement line carries its name, when it has one, as its first words:
+// the full name in a code span and a colon (requirementName),
+//
+//   > - `PLX-App/<Name>`: The app MUST ...
+//
+// (`<Name>` capitalised like a module code's word), the module part being the
+// page's code, or the code a profile's page has when the module and profile
+// parts are joined (`PLX-App/Stateful/<Name>` on the page of PLX-AppStateful).
+//
+// What a citation can name, the citable index of a version (`§ <n> <code>`
+// for every numbered section, and every requirement name), comes from the
+// compendium checked, from a checkout given with --compendium, or else from
+// the index this plx carries (standardIndex.ts), written by `plx-dev ship`
+// from the compendium at the version it cuts: a tenant repo, which has no
+// compendium, checks its citations against the version of plx it pins.
+//
+//   plx requirements <repo>                    # lint; exit 1 on any defect
+//   plx requirements <repo> --write-baseline   # record today's violations
+//   plx requirements --commit-msg <file>       # the commit-msg hook
 //   plx requirements --extract contracts/app.md
 import { join } from 'node:path';
+import { BASELINE_FILE, compareBaseline, parseBaseline, renderBaseline } from './baseline.ts';
 import { CATALOG_DIRS } from './catalog.ts';
 import type { Context } from './context.ts';
+import { type Plan, write } from './effects.ts';
+import {
+  type Citable,
+  lintCitations,
+  lintDateOrVersion,
+  lintIssueIds,
+  lintTemplateHeader,
+  REQUIREMENT_NAME,
+  renderViolation,
+  type Violation,
+} from './lints.ts';
+import { bundledIndex, type StandardIndex } from './standardIndex.ts';
 
 export type PageMode = 'map' | 'module';
 
@@ -29,6 +64,10 @@ export interface Scan {
   defects: string[];
   /** The requirement lines of a standard module; empty for anything else. */
   requirements: string[];
+  /** The numbers of the page's numbered sections, in page order. */
+  sections: string[];
+  /** The names its requirement lines carry, in page order. */
+  names: string[];
   /** The frontmatter fields the cross-page rules need. */
   code?: string;
   maturity?: string;
@@ -42,6 +81,21 @@ const KEYWORD = /MUST|SHOULD|MAY/;
 /** A BCP 14 keyword in a line, the informal plurals (MUSTs, SHOULDs, MAYs) not counting. */
 const hasKeyword = (line: string): boolean => KEYWORD.test(line.replace(/MUSTs|SHOULDs|MAYs/g, ''));
 
+/**
+ * The name a requirement line carries, from the text after its `> - `: the
+ * full name in a code span, then a colon, at the very start. The one parser of
+ * that syntax; undefined for an unnamed line.
+ */
+export function requirementName(bullet: string): string | undefined {
+  return new RegExp(`^\`(${REQUIREMENT_NAME})\`:\\s`).exec(bullet)?.[1];
+}
+
+/** Whether a requirement name belongs on the page of the module with this code (a profile's page joins the two parts). */
+const nameBelongs = (name: string, code: string): boolean => {
+  const [module = '', ...rest] = name.split('/');
+  return module === code || (rest.length === 2 && `${module}${rest[0]}` === code);
+};
+
 /** A bracketed, comma-separated list as the frontmatter writes it: `[A, B]`. */
 const list = (value: string): string[] =>
   value
@@ -52,7 +106,7 @@ const list = (value: string): string[] =>
     .filter(Boolean);
 
 export function scanPage(text: string, name: string, mode: PageMode): Scan {
-  const scan: Scan = { defects: [], requirements: [], depends: [], consumes: [] };
+  const scan: Scan = { defects: [], requirements: [], sections: [], names: [], depends: [], consumes: [] };
   const lines = text.split('\n');
   const defect = (n: number, msg: string) => scan.defects.push(`✗ ${name}: line ${n + 1}: ${msg}`);
 
@@ -92,6 +146,7 @@ export function scanPage(text: string, name: string, mode: PageMode): Scan {
     if (heading) {
       if (maintaining) defect(i, 'numbered section after Maintaining');
       section = heading[1] ?? '';
+      scan.sections.push(section);
       started = true;
       continue;
     }
@@ -100,7 +155,13 @@ export function scanPage(text: string, name: string, mode: PageMode): Scan {
       else if (scan.maturity !== 'standard') defect(i, `requirement in a module at ${scan.maturity} maturity: ${line}`);
       else if (maintaining) defect(i, `requirement under Maintaining: ${line}`);
       else if (!started) defect(i, 'requirement before the first § heading');
-      else scan.requirements.push(`§ ${section} ${line.slice(4)}`);
+      else {
+        scan.requirements.push(`§ ${section} ${line.slice(4)}`);
+        const named = requirementName(line.slice(4));
+        if (named && !nameBelongs(named, scan.code ?? ''))
+          defect(i, `requirement name ${named} does not belong to module ${scan.code}`);
+        else if (named) scan.names.push(named);
+      }
       continue;
     }
     if (line.startsWith('>')) {
@@ -164,6 +225,14 @@ export async function checkCompendium(ctx: Context, compendium: string): Promise
   for (const [page, s] of scans) if (s.code) byCode.set(s.code, [...(byCode.get(s.code) ?? []), page]);
   for (const [code, where] of byCode) if (where.length > 1) defects.push(`✗ duplicate module code: ${code}`);
 
+  // Requirement names are unique across pages: a citation names one line.
+  const named = new Set<string>();
+  for (const s of scans.values())
+    for (const name of s.names) {
+      if (named.has(name)) defects.push(`✗ duplicate requirement name: ${name}`);
+      named.add(name);
+    }
+
   // Every declared dependency names a module that exists.
   for (const s of scans.values())
     for (const dep of s.depends) if (!byCode.has(dep)) defects.push(`✗ unknown module in depends: ${dep}`);
@@ -202,4 +271,134 @@ export async function checkCompendium(ctx: Context, compendium: string): Promise
     contracts: pages.filter((p) => p.startsWith('contracts/')).length,
     approaches: pages.filter((p) => p.startsWith('approaches/')).length,
   };
+}
+
+/**
+ * Everything a citation can name in a compendium checkout, in page order: `§ <n>
+ * PLX` for the map's numbered sections, `§ <n> <code>` for a module's, and the
+ * requirement names. Notes have no code and cannot be cited by one.
+ */
+export async function readCitable(ctx: Context, compendium: string): Promise<string[]> {
+  const citable = scanPage(await ctx.readFile(join(compendium, MAP_PAGE)), MAP_PAGE, 'map').sections.map(
+    (n) => `§ ${n} PLX`,
+  );
+  for (const page of await modulePages(ctx, compendium)) {
+    const scan = scanPage(await ctx.readFile(join(compendium, page)), page, 'module');
+    if (!scan.code) continue;
+    citable.push(...scan.sections.map((n) => `§ ${n} ${scan.code}`), ...scan.names);
+  }
+  return citable;
+}
+
+/** What a repo is to the lints: the compendium (the map at its root), a copier template (a `_subdirectory`), or any other repo. */
+export type RepoKind = 'compendium' | 'template' | 'repo';
+
+export interface RepoOptions {
+  /** A compendium checkout to resolve citations against, instead of the index this plx carries. */
+  compendium?: string;
+}
+
+export interface RepoLint {
+  kind: RepoKind;
+  /** Where the citable sections and names came from. */
+  against: string;
+  /** The compendium's structural defects; never baselined. */
+  defects: string[];
+  violations: Violation[];
+  contracts?: number;
+  approaches?: number;
+}
+
+const COPIER_FILES = ['copier.yml', 'copier.yaml'];
+
+async function kindOf(ctx: Context, dir: string): Promise<{ kind: RepoKind; templateDir?: string }> {
+  if (
+    await ctx.readFile(join(dir, MAP_PAGE)).then(
+      () => true,
+      () => false,
+    )
+  )
+    return { kind: 'compendium' };
+  for (const file of COPIER_FILES) {
+    const text = await ctx.readFile(join(dir, file)).catch(() => undefined);
+    const sub = text === undefined ? undefined : /^_subdirectory:\s*["']?([^"'\s#]+)/m.exec(text)?.[1];
+    if (sub) return { kind: 'template', templateDir: sub.replace(/\/+$/, '') };
+  }
+  return { kind: 'repo' };
+}
+
+/** The repo's tracked files, relative to its root. */
+async function trackedFiles(ctx: Context, dir: string): Promise<string[]> {
+  const out = await ctx.read('git', ['ls-files', '-z'], { cwd: dir }).catch(() => {
+    throw new Error(`${dir} is not a git checkout; the lints read its tracked files`);
+  });
+  return out.split('\0').filter(Boolean).sort();
+}
+
+/** Every violation of the four lints in a repo's tracked files, before the baseline; the compendium's structure too. */
+export async function lintRepo(ctx: Context, dir: string, options: RepoOptions = {}): Promise<RepoLint> {
+  const { kind, templateDir } = await kindOf(ctx, dir);
+  const result: RepoLint = { kind, against: '', defects: [], violations: [] };
+  let index: StandardIndex;
+  if (kind === 'compendium') {
+    const check = await checkCompendium(ctx, dir);
+    Object.assign(result, { defects: check.defects, contracts: check.contracts, approaches: check.approaches });
+    index = { version: 'this checkout', citable: await readCitable(ctx, dir) };
+    result.against = 'this compendium';
+  } else if (options.compendium) {
+    index = { version: options.compendium, citable: await readCitable(ctx, options.compendium) };
+    result.against = `the compendium at ${options.compendium}`;
+  } else {
+    index = bundledIndex();
+    result.against = `Plexus ${index.version}, the index this plx carries`;
+  }
+  const citable: Citable = new Set(index.citable);
+
+  for (const file of await trackedFiles(ctx, dir)) {
+    if (file === BASELINE_FILE) continue;
+    const text = await ctx.readFile(join(dir, file)).catch(() => undefined);
+    if (text === undefined || text.includes('\0')) continue; // deleted in the worktree, a submodule, or binary
+    if (kind === 'compendium' && /\.mdx?$/.test(file)) result.violations.push(...lintDateOrVersion(text, file));
+    result.violations.push(...lintCitations(text, file, citable));
+    if (templateDir && file.startsWith(`${templateDir}/`)) result.violations.push(...lintTemplateHeader(text, file));
+    result.violations.push(...lintIssueIds(text, file));
+  }
+  return result;
+}
+
+export interface RepoCheck {
+  kind: RepoKind;
+  against: string;
+  /** Every reason the check fails, one line each: structural defects, violations the baseline does not hold, baseline entries that no longer occur. */
+  defects: string[];
+  /** Violations the baseline holds. */
+  known: number;
+  contracts?: number;
+  approaches?: number;
+}
+
+/** The repo's lints held against its baseline: a violation it does not hold fails, and so does an entry that no longer occurs. */
+export async function checkRepo(ctx: Context, dir: string, options: RepoOptions = {}): Promise<RepoCheck> {
+  const lint = await lintRepo(ctx, dir, options);
+  const baseline = parseBaseline(await ctx.readFile(join(dir, BASELINE_FILE)).catch(() => ''));
+  const { fresh, stale, known } = compareBaseline(lint.violations, baseline);
+  return {
+    kind: lint.kind,
+    against: lint.against,
+    defects: [
+      ...lint.defects,
+      ...fresh.map(renderViolation),
+      ...stale.map((key) => `✗ ${BASELINE_FILE}: no longer occurs, remove it: ${key}`),
+    ],
+    known,
+    contracts: lint.contracts,
+    approaches: lint.approaches,
+  };
+}
+
+/** The write that records every current violation as the repo's baseline. */
+export async function planBaseline(ctx: Context, dir: string, options: RepoOptions = {}): Promise<Plan> {
+  const lint = await lintRepo(ctx, dir, options);
+  ctx.say(`• ${lint.violations.length} known violations → ${BASELINE_FILE}`);
+  return [write(join(dir, BASELINE_FILE), renderBaseline(lint.violations))];
 }

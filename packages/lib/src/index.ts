@@ -10,6 +10,7 @@
 // package is an adapter that maps argv onto this. The parsers of Plexus's own
 // file shapes (marker.ts, copier.ts) live here, once, for every verb.
 // Conventions: compendium/miscellaneous/cli-design.md.
+export { BASELINE_FILE, type Compared, compareBaseline, parseBaseline, renderBaseline } from './baseline.ts';
 export { bumpWorkflowRefs, hasConflictMarkers, hasUnmergedEntries, syncMarker, WORKFLOW_REF } from './bookkeeping.ts';
 export { CATALOG_DIRS, type Catalog, type Module, parseModule, readCatalog } from './catalog.ts';
 export {
@@ -56,6 +57,20 @@ export { body, describe, type Plan, run, type Step, write } from './effects.ts';
 export { frontmatterField, setFrontmatterField } from './frontmatter.ts';
 export { type DirEntry, ExecError, type ExecOptions, type Io, orAbsent, realIo, render } from './io.ts';
 export {
+  type Citable,
+  ISSUE_KEYS,
+  keyOf,
+  type LintId,
+  lintCitations,
+  lintCommitMessage,
+  lintDateOrVersion,
+  lintIssueIds,
+  lintTemplateHeader,
+  REQUIREMENT_NAME,
+  renderViolation,
+  type Violation,
+} from './lints.ts';
+export {
   buildManifest,
   catalogOf,
   MANIFEST_FILE,
@@ -93,13 +108,23 @@ export { type PropagateOptions, propagate } from './propagate.ts';
 export {
   type CompendiumCheck,
   checkCompendium,
+  checkRepo,
   extractRequirements,
+  lintRepo,
   MAP_PAGE,
   modulePages,
   type PageMode,
+  planBaseline,
+  type RepoCheck,
+  type RepoKind,
+  type RepoLint,
+  type RepoOptions,
+  readCitable,
+  requirementName,
   type Scan,
   scanPage,
 } from './requirements.ts';
+export { bundledIndex, renderStandardIndex, STANDARD_INDEX_FILE, type StandardIndex } from './standardIndex.ts';
 export { mergeLine, renderSummary } from './summary.ts';
 export { detail, emptySummary, isClean, type Summary, type Take, takeVersion } from './take.ts';
 export { type UpdateOptions, update } from './update.ts';
