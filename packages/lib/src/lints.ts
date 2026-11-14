@@ -3,12 +3,14 @@
 //
 //   date-or-version  no date and no version number in the compendium's prose;
 //                    frontmatter and code, fenced or inline, are exempt
-//   citations        every `§ n PLX-Module` (or `§ n PLX`, the map) names a
-//                    numbered section that exists, and every requirement name
-//                    `PLX-Module[/Profile]/Name` a named requirement line
+//   citations        every section citation names a numbered section that
+//                    exists, `§ n PLX-Module` or `PLX-Module § n` (`PLX` for
+//                    the map), and on a page of the compendium a bare `§ n`
+//                    names one of the page's own; every requirement name,
+//                    `PLX-<Module>[/<Profile>]/<Name>`, a named requirement line
 //   template-header  a template file opens with at most two comment lines
-//   issue-id         no issue identifier, a tracker key, a dash and digits;
-//                    module codes (`PLX-App`, a key, a dash and a word) pass
+//   issue-id         no issue identifier: three capitals, a dash and digits;
+//                    module codes (`PLX-App`, a dash and a word) pass
 //
 // Each lint is a pure function of a file's text and reports violations with a
 // stable key, `<lint> <file>: <excerpt>`, that a baseline records (baseline.ts):
@@ -64,8 +66,8 @@ const YEAR = '(?:19|20)\\d{2}';
  */
 const DATE_OR_VERSION = new RegExp(
   [
-    // 2026-11-04, 2026-07
-    `(?<![\\w-])${YEAR}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\\d|3[01]))?(?![\\w-])`,
+    // 2026-11-04, 2026-07, 2026-11-04T10:00Z
+    `(?<![\\w-])${YEAR}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\\d|3[01])(?:T\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d+)?)?(?:Z|[+-]\\d{2}:?\\d{2})?)?)?(?![\\w-])`,
     // November 2026, Nov. 4, 2026
     `\\b(?:${MONTH})\\.?\\s+(?:\\d{1,2}(?:st|nd|rd|th)?,?\\s+)?${YEAR}\\b`,
     // in 2026, since 2025, Q3 2026
@@ -119,48 +121,83 @@ export function lintDateOrVersion(text: string, file: string): Violation[] {
 /** A module code, or `PLX` for the map. */
 const CODE = 'PLX(?:-[A-Z][A-Za-z]+)?(?![A-Za-z])';
 const NUMBER = '\\d+(?:\\.\\d+)*';
-/** Between a section number and the code: blanks, or a line break with a comment or blockquote marker. */
+/** One section number or several: `2`, `2 and 5`, `2, 3 or 6`, `2–4` (a range: its two ends are checked). */
+const NUMBERS = `${NUMBER}(?:[ \\t\\u00a0]*(?:,|and|or|&|–|-|to)[ \\t\\u00a0]*${NUMBER})*`;
+/** Between the numbers and the code: blanks, or a line break with a comment or blockquote marker. */
 const GAP = '(?:[ \\t\\u00a0]+|[ \\t]*\\r?\\n[ \\t]*(?:#+|//+|\\*|>)?[ \\t]*)';
+const SIGN = `(?<!§)§§?[ \\t\\u00a0]*`;
 
-/** `PLX-<Module>/<Name>` or `PLX-<Module>/<Profile>/<Name>`: the name segments capitalised, as module codes are. */
+/** `PLX-<Module>/<Name>` or `PLX-<Module>/<Profile>/<Name>`, each segment capitalised as a module code's word is. */
 export const REQUIREMENT_NAME = 'PLX-[A-Z][A-Za-z]+(?:/[A-Z][A-Za-z0-9]*){1,2}';
+/** Anything shaped like a name, well-formed or not: a lowercase segment, four segments. */
+const NAME_LIKE = 'PLX-[A-Z][A-Za-z]+(?:/[\\w-]+)+';
 
-const SECTION_CITATION = new RegExp(`(?<!§)§[ \\t\\u00a0]*(${NUMBER})${GAP}(${CODE})`, 'g');
-/** `§§ 2 and 5 PLX-Delivery`, `§§ 2, 3 and 6 PLX-Delivery`. */
-const SECTIONS_CITATION = new RegExp(
-  `§§[ \\t\\u00a0]*(${NUMBER}(?:\\s*(?:,|and|or|&)\\s*${NUMBER})+)${GAP}(${CODE})`,
-  'g',
-);
-const NAME_CITATION = new RegExp(`(?<![\\w/-])${REQUIREMENT_NAME}(?![\\w/])`, 'g');
+/** `§ 2 PLX-App`, `§§ 2 and 5 PLX-Delivery`, `§§ 2–4 PLX-Delivery`, wrapped onto a comment line or not. */
+const FORWARD = new RegExp(`${SIGN}(${NUMBERS})${GAP}(${CODE})`, 'g');
+/** `PLX-CLI § 1`, `(PLX-Delivery, § 8)`. */
+const REVERSE = new RegExp(`(?<![\\w-])(${CODE})[ \\t\\u00a0]*,?[ \\t\\u00a0]*${SIGN}(${NUMBERS})`, 'g');
+/** `§ 2`, `§§ 2 and 3`, with no code on either side: the page's own sections. */
+const BARE = new RegExp(`${SIGN}(${NUMBERS})`, 'g');
+const NAME_CITATION = new RegExp(`(?<![\\w/-])${NAME_LIKE}(?![\\w/])`, 'g');
 
 /** The citable facts of one Plexus version: `§ <n> <code>` for every numbered section, and every requirement name. */
 export type Citable = ReadonlySet<string>;
 
 const sectionKey = (n: string, code: string): string => `§ ${n} ${code}`;
+const numbersOf = (list: string): string[] => list.match(new RegExp(NUMBER, 'g')) ?? [];
 
-export function lintCitations(text: string, file: string, citable: Citable): Violation[] {
+/**
+ * The citations in a file that name nothing. `own` is the code a bare `§ n`
+ * stands for: the page's own, on a page of the compendium (`PLX` on the map);
+ * elsewhere a bare `§ n` has no page and is not checked.
+ */
+export function lintCitations(text: string, file: string, citable: Citable, own?: string): Violation[] {
   const codes = new Set([...citable].filter((c) => c.startsWith('§ ')).map((c) => c.replace(/^§ \S+ /, '')));
   const out: Violation[] = [];
-  const section = (n: string, code: string, line: number) => {
-    if (citable.has(sectionKey(n, code))) return;
-    const excerpt = sectionKey(n, code);
-    const message = codes.has(code)
-      ? `${excerpt} cites a section that does not exist`
-      : `${excerpt} cites ${code}, which is no module`;
-    out.push({ lint: 'citations', file, line, excerpt, message });
+  const sections = (list: string, code: string, line: number) => {
+    for (const n of numbersOf(list)) {
+      const excerpt = sectionKey(n, code);
+      if (citable.has(excerpt)) continue;
+      const message = codes.has(code)
+        ? `${excerpt} cites a section that does not exist`
+        : `${excerpt} cites ${code}, which is no module`;
+      out.push({ lint: 'citations', file, line, excerpt, message });
+    }
   };
-  for (const { match, line } of matches(text, SECTION_CITATION)) section(match[1] ?? '', match[2] ?? '', line);
-  for (const { match, line } of matches(text, SECTIONS_CITATION))
-    for (const n of (match[1] ?? '').split(/\s*(?:,|and|or|&)\s*/)) section(n, match[2] ?? '', line);
-  for (const { match, line } of matches(text, NAME_CITATION))
-    if (!citable.has(match[0]))
+  // A sign belongs to the first reading that takes it: a code after the
+  // numbers, then a code before them, then the page itself.
+  const taken = new Set<number>();
+  const signAt = (m: RegExpExecArray) => m.index + m[0].indexOf('§');
+  for (const { match, line } of matches(text, FORWARD)) {
+    taken.add(signAt(match));
+    sections(match[1] ?? '', match[2] ?? '', line);
+  }
+  for (const { match, line } of matches(text, REVERSE)) {
+    if (taken.has(signAt(match))) continue;
+    taken.add(signAt(match));
+    sections(match[2] ?? '', match[1] ?? '', line);
+  }
+  if (own)
+    for (const { match, line } of matches(text, BARE)) {
+      const at = signAt(match);
+      const lineStart = text.lastIndexOf('\n', at) + 1;
+      if (taken.has(at) || /^#+[ \t]*$/.test(text.slice(lineStart, at))) continue; // a heading defines, not cites
+      sections(match[1] ?? '', own, line);
+    }
+  const wellFormed = new RegExp(`^${REQUIREMENT_NAME}$`);
+  for (const { match, line } of matches(text, NAME_CITATION)) {
+    const name = match[0];
+    if (!wellFormed.test(name))
       out.push({
         lint: 'citations',
         file,
         line,
-        excerpt: match[0],
-        message: `${match[0]} names no requirement line`,
+        excerpt: name,
+        message: `${name} is no requirement name: PLX-<Module>[/<Profile>]/<Name>, each segment capitalised`,
       });
+    else if (!citable.has(name))
+      out.push({ lint: 'citations', file, line, excerpt: name, message: `${name} names no requirement line` });
+  }
   return out.sort((a, b) => a.line - b.line);
 }
 
@@ -168,49 +205,53 @@ export function lintCitations(text: string, file: string, citable: Citable): Vio
 
 export const MAX_HEADER_LINES = 2;
 
-/** The comment syntax of a template file by its extension, `.jinja` set aside; Markdown has only HTML comments. */
-function commentSyntax(file: string): { line?: RegExp; block?: [string, string] } {
+/** The comment syntax of a template file by its extension; a `.jinja` file has Jinja's comments too. Markdown has only HTML comments. */
+function commentSyntax(file: string): { line?: RegExp; blocks: [string, string][] } {
+  const jinja: [string, string][] = file.endsWith('.jinja') ? [['{#', '#}']] : [];
   const name = file.replace(/\.jinja$/, '');
-  if (/\.(md|mdx|html)$/.test(name)) return { block: ['<!--', '-->'] };
-  if (/\.(ts|tsx|js|jsx|mjs|cjs|css|json|jsonc)$/.test(name)) return { line: /^\s*\/\//, block: ['/*', '*/'] };
-  if (/\.pkl$/.test(name)) return { line: /^\s*\/\//, block: ['/*', '*/'] };
-  return { line: /^\s*#(?!!)/ };
+  if (/\.(md|mdx|html)$/.test(name)) return { blocks: [['<!--', '-->'], ...jinja] };
+  if (/\.(ts|tsx|js|jsx|mjs|cjs|css|json|jsonc|pkl)$/.test(name))
+    return { line: /^\/\//, blocks: [['/*', '*/'], ...jinja] };
+  return { line: /^#(?!!)/, blocks: jinja };
 }
 
 const JINJA_TAG = /\{%-?[\s\S]*?-?%\}/g;
 
-/** Lines (Jinja tags removed) that open a file without being content: blank, a shebang, a parser directive, a YAML document start. */
+/** Lines (Jinja tags removed) that open a file without being content: a shebang, a parser directive, a YAML document start. */
 const isPreamble = (line: string): boolean =>
-  line === '' || /^#!/.test(line) || /^#\s*(syntax|escape|check)\s*=/.test(line) || line === '---';
+  /^#!/.test(line) || /^#\s*(syntax|escape|check)\s*=/.test(line) || line === '---';
 
 /**
- * The number of comment lines a template file's header holds: its first run of
- * comment lines, when no more than one line of content precedes it (the one
- * line a workflow names itself with, `name: on_pr`). A comment further down is
- * a comment, not a header.
+ * The number of comment lines a template file's header holds: every comment
+ * line, line comment or block comment line by line, from the first one until
+ * the first line of content, blank lines not ending it. A header is one when no
+ * more than one line of content precedes it (the one line a workflow names
+ * itself with, `name: on_pr`); a comment further down is a comment.
  */
 export function headerLines(text: string, file: string): number {
   const syntax = commentSyntax(file);
   const lines = text.split('\n').map((l) => l.replace(JINJA_TAG, '').trim());
-  const [open, close] = syntax.block ?? [];
   let content = 0;
+  let count = 0;
+  let inHeader = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? '';
-    if (isPreamble(line)) continue;
-    if (open && close && line.startsWith(open)) {
+    if (line === '' || (!inHeader && isPreamble(line))) continue;
+    const block = syntax.blocks.find(([open]) => line.startsWith(open));
+    if (block) {
+      const [open, close] = block;
       let j = i;
       while (j < lines.length - 1 && !(lines[j] ?? '').includes(close, j === i ? open.length : 0)) j++;
-      return j - i + 1;
-    }
-    if (syntax.line?.test(line)) {
-      let n = 0;
-      while (syntax.line.test(lines[i + n] ?? '')) n++;
-      return n;
-    }
-    content++;
-    if (content > 1) return 0;
+      count += j - i + 1;
+      i = j;
+      inHeader = true;
+    } else if (syntax.line?.test(line)) {
+      count++;
+      inHeader = true;
+    } else if (inHeader) return count;
+    else if (++content > 1) return 0;
   }
-  return 0;
+  return count;
 }
 
 export function lintTemplateHeader(text: string, file: string): Violation[] {
@@ -229,10 +270,16 @@ export function lintTemplateHeader(text: string, file: string): Violation[] {
 
 // --- issue-id: no reference to the issue tracker -------------------------------
 
-/** The issue tracker's team keys. */
-export const ISSUE_KEYS = ['PLX', 'DMG'] as const;
-
-const ISSUE_ID = new RegExp(`(?<![\\w-])(?:${ISSUE_KEYS.join('|')})-\\d+(?![\\w-])`, 'g');
+/**
+ * An issue identifier as any tracker writes it: exactly three capitals, a
+ * dash, digits; no tracker's key is named here. A module code passes, its dash
+ * being followed by a word. A dash after the digits does not save one (a
+ * branch slug that opens with an identifier names the issue all the same);
+ * lowercase does, as slugs, CSS classes and the like are lowercase. Standard
+ * technical tokens of the same shape, a license, an encoding or a hash
+ * function with its number, match as well: they sit in a repo's baseline.
+ */
+const ISSUE_ID = /(?<![\w])[A-Z]{3}-\d+(?![\w])/g;
 
 export function lintIssueIds(text: string, file: string): Violation[] {
   return [...matches(text, ISSUE_ID)].map(({ match, line }) => ({
@@ -240,21 +287,20 @@ export function lintIssueIds(text: string, file: string): Violation[] {
     file,
     line,
     excerpt: match[0],
-    message: `${match[0]} refers to the issue tracker; say what it means instead`,
+    message: `${match[0]} reads as an issue identifier; say what it means instead`,
   }));
 }
 
 /**
- * A commit message's issue identifiers. Git hands the commit-msg hook the
- * message before it strips comments, so `#` lines (the status git shows in the
- * editor, which names the branch) and everything below a scissors line are left
- * out.
+ * A commit message's issue identifiers. Every line counts, `#` lines too: under
+ * `git commit -m` git keeps them. What git adds itself is left out: its
+ * template, from the "Please enter the commit message" line on (it names the
+ * branch), and everything below a scissors line. Git writes that template in
+ * the user's language; under another locale its lines are linted too.
  */
 export function lintCommitMessage(text: string): Violation[] {
-  const scissors = text.search(/^# -+ >8 -+$/m);
-  const kept = (scissors === -1 ? text : text.slice(0, scissors))
-    .split('\n')
-    .map((l) => (l.startsWith('#') ? '' : l))
-    .join('\n');
-  return lintIssueIds(kept, 'commit message');
+  const ends = [/^# -+ >8 -+$/m, /^# Please enter the commit message/m]
+    .map((p) => text.search(p))
+    .filter((n) => n !== -1);
+  return lintIssueIds(ends.length > 0 ? text.slice(0, Math.min(...ends)) : text, 'commit message');
 }

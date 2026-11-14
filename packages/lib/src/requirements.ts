@@ -24,10 +24,14 @@
 // the full name in a code span and a colon (requirementName),
 //
 //   > - `PLX-App/<Name>`: The app MUST ...
+//   > - `PLX-App/Stateful/<Name>`: ...      (a line of the app's stateful profile)
 //
-// (`<Name>` capitalised like a module code's word), the module part being the
-// page's code, or the code a profile's page has when the module and profile
-// parts are joined (`PLX-App/Stateful/<Name>` on the page of PLX-AppStateful).
+// in the one format `<module>[/<profile>]/<name>`, each segment capitalised
+// like a module code's word, the module being the page's code. A profile is a
+// part of its module's page; `PLX-AppStateful/<Name>`, the profile spelled as
+// a module, is refused. A code span that opens a requirement line and holds
+// something else of that shape (lowercase, four segments, no colon) is a
+// malformed name, never an unnamed line.
 //
 // What a citation can name, the citable index of a version (`§ <n> <code>`
 // for every numbered section, and every requirement name), comes from the
@@ -81,20 +85,28 @@ const KEYWORD = /MUST|SHOULD|MAY/;
 /** A BCP 14 keyword in a line, the informal plurals (MUSTs, SHOULDs, MAYs) not counting. */
 const hasKeyword = (line: string): boolean => KEYWORD.test(line.replace(/MUSTs|SHOULDs|MAYs/g, ''));
 
+/** A requirement line's name, and whether it is written as the format and syntax require. */
+export interface RequirementName {
+  name: string;
+  /** What is wrong with it; absent for a well-formed name. */
+  malformed?: string;
+}
+
 /**
  * The name a requirement line carries, from the text after its `> - `: the
  * full name in a code span, then a colon, at the very start. The one parser of
- * that syntax; undefined for an unnamed line.
+ * that syntax: undefined for an unnamed line, `malformed` set when the opening
+ * code span holds something name-shaped (`PLX-…/…`) that is not a name.
  */
-export function requirementName(bullet: string): string | undefined {
-  return new RegExp(`^\`(${REQUIREMENT_NAME})\`:\\s`).exec(bullet)?.[1];
+export function requirementName(bullet: string): RequirementName | undefined {
+  const span = /^`(PLX-[^`\s]*\/[^`\s]*)`(:\s)?/.exec(bullet);
+  if (!span) return undefined;
+  const name = span[1] ?? '';
+  if (!new RegExp(`^${REQUIREMENT_NAME}$`).test(name))
+    return { name, malformed: 'the format is PLX-<Module>[/<Profile>]/<Name>, each segment capitalised' };
+  if (!span[2]) return { name, malformed: 'a name is followed by a colon and a blank' };
+  return { name };
 }
-
-/** Whether a requirement name belongs on the page of the module with this code (a profile's page joins the two parts). */
-const nameBelongs = (name: string, code: string): boolean => {
-  const [module = '', ...rest] = name.split('/');
-  return module === code || (rest.length === 2 && `${module}${rest[0]}` === code);
-};
 
 /** A bracketed, comma-separated list as the frontmatter writes it: `[A, B]`. */
 const list = (value: string): string[] =>
@@ -158,9 +170,10 @@ export function scanPage(text: string, name: string, mode: PageMode): Scan {
       else {
         scan.requirements.push(`§ ${section} ${line.slice(4)}`);
         const named = requirementName(line.slice(4));
-        if (named && !nameBelongs(named, scan.code ?? ''))
-          defect(i, `requirement name ${named} does not belong to module ${scan.code}`);
-        else if (named) scan.names.push(named);
+        if (named?.malformed) defect(i, `malformed requirement name ${named.name}: ${named.malformed}`);
+        else if (named && named.name.split('/')[0] !== scan.code)
+          defect(i, `requirement name ${named.name} does not start with the page's code, ${scan.code}`);
+        else if (named) scan.names.push(named.name);
       }
       continue;
     }
@@ -225,12 +238,20 @@ export async function checkCompendium(ctx: Context, compendium: string): Promise
   for (const [page, s] of scans) if (s.code) byCode.set(s.code, [...(byCode.get(s.code) ?? []), page]);
   for (const [code, where] of byCode) if (where.length > 1) defects.push(`✗ duplicate module code: ${code}`);
 
-  // Requirement names are unique across pages: a citation names one line.
+  // Requirement names are unique across pages: a citation names one line. A
+  // profile is part of its module's page, so a name whose module is another
+  // module's code and a word (PLX-AppStateful) spells the profile as a module.
   const named = new Set<string>();
   for (const s of scans.values())
     for (const name of s.names) {
       if (named.has(name)) defects.push(`✗ duplicate requirement name: ${name}`);
       named.add(name);
+      const module = name.split('/')[0] ?? '';
+      const base = [...byCode.keys()].find((c) => c !== module && new RegExp(`^${c}[A-Z][a-z]+$`).test(module));
+      if (base)
+        defects.push(
+          `✗ requirement name ${name} spells a profile of ${base} as a module; a profile's lines are named ${base}/<Profile>/<Name> on the page of ${base}`,
+        );
     }
 
   // Every declared dependency names a module that exists.
@@ -279,15 +300,22 @@ export async function checkCompendium(ctx: Context, compendium: string): Promise
  * requirement names. Notes have no code and cannot be cited by one.
  */
 export async function readCitable(ctx: Context, compendium: string): Promise<string[]> {
+  return (await readPages(ctx, compendium)).citable;
+}
+
+/** The citable index of a compendium checkout, and the code each page's bare `§ n` stands for (`PLX` on the map). */
+async function readPages(ctx: Context, compendium: string): Promise<{ citable: string[]; own: Map<string, string> }> {
+  const own = new Map([[MAP_PAGE, 'PLX']]);
   const citable = scanPage(await ctx.readFile(join(compendium, MAP_PAGE)), MAP_PAGE, 'map').sections.map(
     (n) => `§ ${n} PLX`,
   );
   for (const page of await modulePages(ctx, compendium)) {
     const scan = scanPage(await ctx.readFile(join(compendium, page)), page, 'module');
     if (!scan.code) continue;
+    own.set(page, scan.code);
     citable.push(...scan.sections.map((n) => `§ ${n} ${scan.code}`), ...scan.names);
   }
-  return citable;
+  return { citable, own };
 }
 
 /** What a repo is to the lints: the compendium (the map at its root), a copier template (a `_subdirectory`), or any other repo. */
@@ -340,10 +368,14 @@ export async function lintRepo(ctx: Context, dir: string, options: RepoOptions =
   const { kind, templateDir } = await kindOf(ctx, dir);
   const result: RepoLint = { kind, against: '', defects: [], violations: [] };
   let index: StandardIndex;
+  /** The code a bare `§ n` stands for, by page: only in the compendium checked. */
+  let own = new Map<string, string>();
   if (kind === 'compendium') {
     const check = await checkCompendium(ctx, dir);
     Object.assign(result, { defects: check.defects, contracts: check.contracts, approaches: check.approaches });
-    index = { version: 'this checkout', citable: await readCitable(ctx, dir) };
+    const pages = await readPages(ctx, dir);
+    index = { version: 'this checkout', citable: pages.citable };
+    own = pages.own;
     result.against = 'this compendium';
   } else if (options.compendium) {
     index = { version: options.compendium, citable: await readCitable(ctx, options.compendium) };
@@ -359,7 +391,7 @@ export async function lintRepo(ctx: Context, dir: string, options: RepoOptions =
     const text = await ctx.readFile(join(dir, file)).catch(() => undefined);
     if (text === undefined || text.includes('\0')) continue; // deleted in the worktree, a submodule, or binary
     if (kind === 'compendium' && /\.mdx?$/.test(file)) result.violations.push(...lintDateOrVersion(text, file));
-    result.violations.push(...lintCitations(text, file, citable));
+    result.violations.push(...lintCitations(text, file, citable, own.get(file)));
     if (templateDir && file.startsWith(`${templateDir}/`)) result.violations.push(...lintTemplateHeader(text, file));
     result.violations.push(...lintIssueIds(text, file));
   }

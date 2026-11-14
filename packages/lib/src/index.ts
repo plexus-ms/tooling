@@ -58,7 +58,6 @@ export { frontmatterField, setFrontmatterField } from './frontmatter.ts';
 export { type DirEntry, ExecError, type ExecOptions, type Io, orAbsent, realIo, render } from './io.ts';
 export {
   type Citable,
-  ISSUE_KEYS,
   keyOf,
   type LintId,
   lintCitations,
@@ -119,12 +118,19 @@ export {
   type RepoKind,
   type RepoLint,
   type RepoOptions,
+  type RequirementName,
   readCitable,
   requirementName,
   type Scan,
   scanPage,
 } from './requirements.ts';
-export { bundledIndex, renderStandardIndex, STANDARD_INDEX_FILE, type StandardIndex } from './standardIndex.ts';
+export {
+  bundledIndex,
+  parseStandardIndex,
+  renderStandardIndex,
+  STANDARD_INDEX_FILE,
+  type StandardIndex,
+} from './standardIndex.ts';
 export { mergeLine, renderSummary } from './summary.ts';
 export { detail, emptySummary, isClean, type Summary, type Take, takeVersion } from './take.ts';
 export { type UpdateOptions, update } from './update.ts';

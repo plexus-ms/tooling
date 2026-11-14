@@ -27,9 +27,22 @@ export interface StandardIndex {
 
 export const renderStandardIndex = (index: StandardIndex): string => `${JSON.stringify(index, null, 2)}\n`;
 
+/** An index from its text, as `renderStandardIndex` writes it; anything else is refused. */
+export function parseStandardIndex(text: string): StandardIndex {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error('the citable index is not JSON');
+  }
+  return checked(data);
+}
+
 /** The index this package was published with. */
-export function bundledIndex(): StandardIndex {
-  const { version, citable } = data as Partial<StandardIndex>;
+export const bundledIndex = (): StandardIndex => checked(data);
+
+function checked(value: unknown): StandardIndex {
+  const { version, citable } = (value ?? {}) as Partial<StandardIndex>;
   if (typeof version !== 'string' || !Array.isArray(citable) || !citable.every((c) => typeof c === 'string'))
     throw new Error(`${STANDARD_INDEX_FILE} is not a citable index`);
   return { version, citable };

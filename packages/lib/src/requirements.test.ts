@@ -152,19 +152,27 @@ test('checkCompendium is clean on a well-formed compendium', async () => {
   assert.deepEqual(result.defects, []);
 });
 
-test('requirementName reads the name a requirement line opens with', () => {
-  assert.equal(
-    requirementName(`\`${name('App', 'LoopbackPort')}\`: The app MUST listen.`),
-    name('App', 'LoopbackPort'),
-  );
-  assert.equal(
-    requirementName(`\`${name('App', 'Stateful', 'MigrateService')}\`: It MUST migrate.`),
-    name('App', 'Stateful', 'MigrateService'),
-  );
-  assert.equal(requirementName('The app MUST listen.'), undefined);
-  assert.equal(requirementName(`The app MUST, per \`${name('App', 'LoopbackPort')}\`: listen.`), undefined);
-  assert.equal(requirementName(`\`${name('App', 'lowercase')}\`: no.`), undefined);
-  assert.equal(requirementName(`\`${name('App', 'LoopbackPort')}\` without the colon.`), undefined);
+test('requirementName reads the name a requirement line opens with, and names a malformed one', () => {
+  const read = (bullet: string) => requirementName(bullet);
+  assert.deepEqual(read(`\`${name('App', 'LoopbackPort')}\`: The app MUST listen.`), {
+    name: name('App', 'LoopbackPort'),
+  });
+  assert.deepEqual(read(`\`${name('App', 'Stateful', 'MigrateService')}\`: It MUST migrate.`), {
+    name: name('App', 'Stateful', 'MigrateService'),
+  });
+  assert.equal(read('The app MUST listen.'), undefined);
+  assert.equal(read(`The app MUST, per \`${name('App', 'LoopbackPort')}\`: listen.`), undefined);
+  assert.equal(read('`compose.yaml`: MUST exist.'), undefined, 'a code span that is no name');
+  const format = 'the format is PLX-<Module>[/<Profile>]/<Name>, each segment capitalised';
+  assert.deepEqual(read(`\`${name('App', 'lowercase')}\`: no.`), { name: name('App', 'lowercase'), malformed: format });
+  assert.deepEqual(read(`\`${name('App', 'A', 'B', 'C')}\`: no.`), {
+    name: name('App', 'A', 'B', 'C'),
+    malformed: format,
+  });
+  assert.deepEqual(read(`\`${name('App', 'LoopbackPort')}\` without the colon.`), {
+    name: name('App', 'LoopbackPort'),
+    malformed: 'a name is followed by a colon and a blank',
+  });
 });
 
 const named = (code: string, ...names: string[]) =>
@@ -186,7 +194,7 @@ const named = (code: string, ...names: string[]) =>
     '',
   ].join('\n');
 
-test('scanPage collects sections and requirement names, and refuses a name of another module', () => {
+test('scanPage collects sections and requirement names, and refuses a malformed one or one of another module', () => {
   const scan = scanPage(
     named('PLX-App', name('App', 'Port'), name('App', 'Stateful', 'Migrate')),
     'contracts/app.md',
@@ -197,13 +205,31 @@ test('scanPage collects sections and requirement names, and refuses a name of an
   assert.deepEqual(scan.names, [name('App', 'Port'), name('App', 'Stateful', 'Migrate')]);
   assert.equal(scan.requirements.length, 3);
 
-  // A profile's page: the module and profile parts joined are its code.
-  const profile = scanPage(named('PLX-AppStateful', name('App', 'Stateful', 'Migrate')), 'p.md', 'module');
-  assert.deepEqual([profile.defects, profile.names], [[], [name('App', 'Stateful', 'Migrate')]]);
-
-  const wrong = scanPage(named('PLX-App', name('Repo', 'Port')), 'contracts/app.md', 'module');
+  const wrong = scanPage(
+    named('PLX-App', name('Repo', 'Port'), name('App', 'port'), name('App', 'A', 'B', 'C')),
+    'contracts/app.md',
+    'module',
+  );
   assert.deepEqual(wrong.defects, [
-    `✗ contracts/app.md: line 9: requirement name ${name('Repo', 'Port')} does not belong to module PLX-App`,
+    `✗ contracts/app.md: line 9: requirement name ${name('Repo', 'Port')} does not start with the page's code, PLX-App`,
+    `✗ contracts/app.md: line 10: malformed requirement name ${name('App', 'port')}: the format is PLX-<Module>[/<Profile>]/<Name>, each segment capitalised`,
+    `✗ contracts/app.md: line 11: malformed requirement name ${name('App', 'A', 'B', 'C')}: the format is PLX-<Module>[/<Profile>]/<Name>, each segment capitalised`,
+  ]);
+  assert.deepEqual(wrong.names, []);
+
+  // The profile's own page: its lines are named on the page of the module, never under the joined code.
+  const profile = scanPage(named('PLX-AppStateful', name('App', 'Stateful', 'Migrate')), 'p.md', 'module');
+  assert.deepEqual(profile.defects, [
+    `✗ p.md: line 9: requirement name ${name('App', 'Stateful', 'Migrate')} does not start with the page's code, PLX-AppStateful`,
+  ]);
+});
+
+test('checkCompendium refuses a profile spelled as a module', async () => {
+  const tree = compendium();
+  ((tree.c as Tree).contracts as Tree)['app-stateful.md'] = named('PLX-AppStateful', name('AppStateful', 'Migrate'));
+  const result = await checkCompendium(new Context({}, fakeIo(tree)), '/c');
+  assert.deepEqual(result.defects, [
+    `✗ requirement name ${name('AppStateful', 'Migrate')} spells a profile of PLX-App as a module; a profile's lines are named PLX-App/<Profile>/<Name> on the page of PLX-App`,
   ]);
 });
 
@@ -225,8 +251,8 @@ const compendium = (extra: Record<string, string> = {}): Tree => ({
     'README.md': 'The compendium.\n',
     essentials: { 'standard.md': '---\nversion: 0.1.0\n---\n\n## § 1 Map\n\nProse.\n\n### § 1.1 More\n' },
     contracts: {
-      'app.md': named('PLX-App', name('App', 'Port')),
-      'app-stateful.md': named('PLX-AppStateful', name('App', 'Stateful', 'Migrate')),
+      'app.md': named('PLX-App', name('App', 'Port'), name('App', 'Stateful', 'Migrate')),
+      'app-stateful.md': named('PLX-AppStateful'),
     },
     approaches: { 'note.md': '---\nmaturity: note\nbinds: host\n---\n\n## § 1 Unciteable\n' },
     ...extra,
@@ -241,10 +267,10 @@ test('readCitable lists every numbered section by code and every requirement nam
     cite('1.1', 'PLX-App'),
     cite('2', 'PLX-App'),
     name('App', 'Port'),
+    name('App', 'Stateful', 'Migrate'),
     cite('1', 'PLX-AppStateful'),
     cite('1.1', 'PLX-AppStateful'),
     cite('2', 'PLX-AppStateful'),
-    name('App', 'Stateful', 'Migrate'),
   ]);
 });
 
@@ -265,16 +291,20 @@ test('checkRepo passes a clean compendium and fails each planted violation', asy
 
   const planted = compendium({
     'guide.md': [
-      `Since Plexus 0.111.0, see ${cite('3', 'PLX-App')} and ${name('App', 'Gone')}.`,
-      `Fixed in ${id('PLX', 4)}.`,
+      `Since Plexus 0.111.0, see ${cite('3', 'PLX-App')}, ${'PLX-App'} § 4 and ${name('App', 'Gone')}.`,
+      `Fixed in ${id('ABC', 4)}.`,
     ].join('\n'),
   });
+  // A bare sign on a module page names a section of that page.
+  ((planted.c as Tree).contracts as Tree)['app.md'] += 'See § 2 and § 9.\n';
   const bad = await checkRepo(new Context({}, checkout(planted, 'c')), '/c');
   assert.deepEqual(bad.defects, [
+    `✗ contracts/app.md: line 16: ${cite('9', 'PLX-App')} cites a section that does not exist`,
     '✗ guide.md: line 1: a date or version number in prose goes stale; say it once where it is maintained: 0.111.0',
     `✗ guide.md: line 1: ${cite('3', 'PLX-App')} cites a section that does not exist`,
+    `✗ guide.md: line 1: ${cite('4', 'PLX-App')} cites a section that does not exist`,
     `✗ guide.md: line 1: ${name('App', 'Gone')} names no requirement line`,
-    `✗ guide.md: line 2: ${id('PLX', 4)} refers to the issue tracker; say what it means instead`,
+    `✗ guide.md: line 2: ${id('ABC', 4)} reads as an issue identifier; say what it means instead`,
   ]);
 });
 

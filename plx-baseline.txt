@@ -1,0 +1,11 @@
+# Known violations of `plx requirements`: burn them down, never add to them.
+# One per line, as often as each occurs; `plx requirements --write-baseline` rewrites the file.
+issue-id .github/workflows/runner-image.yml: GPL-3
+issue-id ansible/ci/galaxy.yml: GPL-3
+issue-id ansible/host/galaxy.yml: GPL-3
+issue-id ansible/infrastructure/galaxy.yml: GPL-3
+issue-id ansible/platform/galaxy.yml: GPL-3
+issue-id packages/cli-ci/package.json: GPL-3
+issue-id packages/cli/package.json: GPL-3
+issue-id packages/dev/package.json: GPL-3
+issue-id packages/lib/package.json: GPL-3

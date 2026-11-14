@@ -106,25 +106,90 @@ test('template-header counts the comment lines a template file opens with', () =
   ]);
 });
 
-test('issue-id flags tracker identifiers and passes module codes', () => {
+test('issue-id flags three capitals, a dash and digits, and passes module codes', () => {
   const text = [
-    `Fixes ${id('PLX', 12)} and ${id('DMG', 3)}.`,
-    'PLX-App, PLX-AppStateful, the PLX map, PLX-Repo and a DMG-free line pass.',
-    `As do X${id('PLX', 1)}, ${id('PLX', 1)}a and ${id('ABC', 12)}: other keys are not this tracker's.`,
+    `Fixes ${id('ABC', 12)} and ${id('XYZ', 3)}; branch ${id('ABC', 12)}-a-slug.`,
+    'PLX-App, PLX-AppStateful, the PLX map, PLX-Repo and a ABC-free line pass.',
+    `As do X${id('ABC', 1)}, ${id('ABC', 1)}a, ${id('ABCD', 12)}, ${id('AB', 12)} and ${id('abc', 12)}.`,
+    `Standard tokens match too: ${id('UTF', 8)}, ${id('SHA', 256)}.`,
   ].join('\n');
-  assert.deepEqual(excerpts(lintIssueIds(text, 'f.md')), [`1: ${id('PLX', 12)}`, `1: ${id('DMG', 3)}`]);
+  assert.deepEqual(excerpts(lintIssueIds(text, 'f.md')), [
+    `1: ${id('ABC', 12)}`,
+    `1: ${id('XYZ', 3)}`,
+    `1: ${id('ABC', 12)}`,
+    `4: ${id('UTF', 8)}`,
+    `4: ${id('SHA', 256)}`,
+  ]);
 });
 
-test('the commit message check leaves out what git strips', () => {
-  const message = [
-    `feat: a change for ${id('DMG', 7)}`,
+test('the commit message check reads # lines and leaves out what git adds', () => {
+  const editor = [
+    `feat: a change for ${id('ABC', 7)}`,
     '',
-    `# On branch someone/${id('PLX', 99)}-a-branch`,
+    `#${id('ABC', 8)} kept by git under -m, so linted`,
+    '# Please enter the commit message for your changes. Lines starting',
+    `# On branch someone/${id('ABC', 99)}-a-branch`,
     '# ------------------------ >8 ------------------------',
-    `diff mentioning ${id('PLX', 5)}`,
+    `diff mentioning ${id('ABC', 5)}`,
   ].join('\n');
-  assert.deepEqual(excerpts(lintCommitMessage(message)), [`1: ${id('DMG', 7)}`]);
+  assert.deepEqual(excerpts(lintCommitMessage(editor)), [`1: ${id('ABC', 7)}`, `3: ${id('ABC', 8)}`]);
+  // `git commit -m`: no template, every line is the message.
+  assert.deepEqual(excerpts(lintCommitMessage(`fix: x\n\n#${id('ABC', 12)} at line start\n`)), [`3: ${id('ABC', 12)}`]);
   assert.deepEqual(lintCommitMessage('fix(ship): name the PLX-Delivery section\n'), []);
+});
+
+test('citations: the reverse order, ranges and lists, and a bare sign on a page of the compendium', () => {
+  const citable = new Set([
+    cite('1', 'PLX-CLI'),
+    cite('8', 'PLX-Delivery'),
+    cite('2', 'PLX-Delivery'),
+    cite('1', 'PLX-Own'),
+  ]);
+  const text = [
+    `${'PLX-CLI'} § 1 and (${'PLX-Delivery'}, § 8) resolve; ${'PLX-Delivery'} § 99 does not.`,
+    `A range: §§ 2–99 ${'PLX-Delivery'}; a list: §§ 2, 8 or 9 ${'PLX-Delivery'}.`,
+    `${'PLX-Delivery'}, § 2 ${'PLX-CLI'}: the sign belongs to the code after it.`,
+    '## § 7 A heading defines a section, it does not cite one',
+    'Bare: § 1 resolves on its own page, § 7 does not.',
+  ].join('\n');
+  const found = (own?: string) =>
+    lintCitations(text, 'contracts/own.md', citable, own).map((v) => `${v.line}: ${v.excerpt}`);
+  assert.deepEqual(found('PLX-Own'), [
+    `1: ${cite('99', 'PLX-Delivery')}`,
+    `2: ${cite('99', 'PLX-Delivery')}`,
+    `2: ${cite('9', 'PLX-Delivery')}`,
+    `3: ${cite('2', 'PLX-CLI')}`,
+    `5: ${cite('7', 'PLX-Own')}`,
+  ]);
+  // Outside the compendium a bare sign has no page.
+  assert.deepEqual(found(), found('PLX-Own').slice(0, -1));
+});
+
+test('citations: a malformed requirement name is a violation, not ignored', () => {
+  const text = `${name('App', 'loopbackPort')}, ${name('App', 'Stateful', 'Migrate', 'Extra')}, ${name('App', 'Port')}`;
+  assert.deepEqual(
+    lintCitations(text, 'f.md', new Set([name('App', 'Port')])).map((v) => v.message),
+    [
+      `${name('App', 'loopbackPort')} is no requirement name: PLX-<Module>[/<Profile>]/<Name>, each segment capitalised`,
+      `${name('App', 'Stateful', 'Migrate', 'Extra')} is no requirement name: PLX-<Module>[/<Profile>]/<Name>, each segment capitalised`,
+    ],
+  );
+});
+
+test('template-header: blank lines, Jinja comments and consecutive blocks all count', () => {
+  assert.equal(headerLines('# a\n# b\n\n# c\n# d\n# e\n# f\nk: 1\n', 'template/a.yml'), 6);
+  assert.equal(headerLines('{# a #}\n{# b\n   c #}\nk: 1\n', 'template/a.yml.jinja'), 3);
+  assert.equal(headerLines('{# a #}\n# b\nk: 1\n', 'template/a.yml.jinja'), 2);
+  assert.equal(headerLines('/* a\n b */\n/* c\n d */\nexport {};\n', 'template/a.ts'), 4);
+  // Outside a .jinja file `{#` is no comment.
+  assert.equal(headerLines('{# a #}\n{# b #}\n{# c #}\nk: 1\n', 'template/a.yml'), 0);
+});
+
+test('date-or-version catches a timestamp', () => {
+  assert.deepEqual(excerpts(lintDateOrVersion('It ran at 2026-11-04T10:00Z and 2026-11-04T10:00:05+01:00.', 'a.md')), [
+    '1: 2026-11-04T10:00Z',
+    '1: 2026-11-04T10:00:05+01:00',
+  ]);
 });
 
 test('the baseline holds known violations as a multiset and names what no longer occurs', () => {
