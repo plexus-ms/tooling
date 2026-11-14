@@ -4,7 +4,8 @@
 //   preflight (every versioned repo on main, clean, not behind origin, the latest
 //   tags in agreement; gh logged in; no mutable release on any versioned repo)
 //   → phase one: tooling's bookkeeping (galaxy versions, the Plexus-versioned
-//     packages' manifests, its own workflow refs), commit, tag, push, GitHub
+//     packages' manifests, its own workflow refs, the citable index read from
+//     the compendium), commit, tag, push, GitHub
 //     release — which locks the tag and runs tooling's release workflow
 //   → wait until the three packages are on npm at the Plexus version
 //   → phase two: the templates' and the compendium's bookkeeping (collection
@@ -52,8 +53,11 @@ import {
   type Plan,
   preflightForge,
   readCatalog,
+  readCitable,
   renderManifest,
+  renderStandardIndex,
   run,
+  STANDARD_INDEX_FILE,
   type Summary,
   WORKFLOW_REF,
   write,
@@ -344,6 +348,14 @@ async function planBookkeeping(
     await edit(tooling, RUNNER_IMAGE_PIN_FILE, `runner image → ${next}`, (t) => bumpRunnerImagePin(t, next));
     for (const p of VERSIONED_PACKAGES)
       await edit(tooling, `${p.dir}/package.json`, `${p.name} → ${next}`, (t) => bumpManifestVersion(t, next));
+    // The citable index the packages carry (standardIndex.ts), read from the
+    // compendium's main, which phase two tags with only stamps added: what a
+    // tenant's citations resolve against under the plx it pins.
+    const compendium = versioned.repos.find((r) => r.name === COMPENDIUM);
+    if (compendium) {
+      const index = renderStandardIndex({ version: next, citable: await readCitable(ctx, compendium.path) });
+      await edit(tooling, STANDARD_INDEX_FILE, `citable index → the compendium at ${next}`, () => index);
+    }
   }
   // Only the pins of the plexus.* collections: a collection from elsewhere in the same file stays untouched.
   const operationsTemplate = repo('template-repo-operations');

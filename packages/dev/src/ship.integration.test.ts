@@ -209,6 +209,7 @@ function fixture(name: string): void {
     '{\n  "name": "tooling",\n  "devDependencies": { "@plexus-ms/config": "^0.0.1" }\n}\n',
   );
   put(join(prim, '.github/workflows/pipeline.yml'), `jobs:\n  ci:\n    uses: ${TOOLING_REF}ci.yml@0.1.0\n`);
+  put(join(prim, 'packages/lib/src/standard-index.json'), '{\n  "version": "0.1.0",\n  "citable": []\n}\n');
   const web = up('template-repo-turbo');
   put(join(web, 'copier.yml'), '_answers_file: .copier-answers.yml\n');
   put(
@@ -547,6 +548,12 @@ test('happy path: tooling first, the npm wait, the rest, and no pull request in 
     assert.match(read(join(prim, `packages/${p}/package.json`)), /"version": "0\.2\.0"/, `${p} at the Plexus version`);
   assert.match(read(join(prim, 'package.json')), /"@plexus-ms\/config": "\^0\.0\.1"/, 'the config range left alone');
   assert.match(read(join(prim, '.github/workflows/pipeline.yml')), /ci\.yml@0\.2\.0/);
+  assert.deepEqual(
+    JSON.parse(read(join(prim, 'packages/lib/src/standard-index.json'))),
+    // Put together, not written out: this repo's own citation check reads this file.
+    { version: '0.2.0', citable: ['Alpha', 'Beta', 'Delta'].map((m) => ['§', '1', `PLX-${m}`].join(' ')) },
+    'the citable index read from the compendium',
+  );
   assert.equal(git(prim, 'log', '-1', '--format=%s'), 'chore: Plexus 0.2.0 bookkeeping');
   assert.equal(
     git(prim, 'rev-parse', '0.2.0^{commit}'),
