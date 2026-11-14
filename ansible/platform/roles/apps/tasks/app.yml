@@ -89,13 +89,15 @@
 # login above put the credentials, and it's the same user the CI deploy verb
 # uses. There is no separate pull: `up -d` pulls only the images the host does
 # not hold (compose's default pull policy, `missing`), so an app whose image is
-# on the host starts without the registry, and a playbook run no longer
+# on the host starts without the registry (a service that sets its own
+# pull_policy, `always` for instance, still contacts it), and a playbook run no longer
 # refreshes a floating tag, which fits a playbook that is not a deploy.
 #
 # A failure of the start does not stop the other apps: it is recorded (app,
 # task, rc, output) in `apps_failures`, and the last play of the platform
 # playbook fails the host once, listing every failed app, after the handlers
-# and the lock-down roles have run. A failed app's dir is kept from the
+# and the lock-down roles have run. Only that play raises the failure: a
+# playbook that uses this role without it must raise `apps_failures` itself. A failed app's dir is kept from the
 # rotation handlers (this role's and the secrets role's), which would only run
 # the failing `up -d` again; the next run's `up -d` re-creates it with the
 # rotated environment.

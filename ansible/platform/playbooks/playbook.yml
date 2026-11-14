@@ -51,8 +51,9 @@
 
 # The apps role records an app whose start failed and carries on with the
 # others; the failure is raised here, once per host and after the lock-down
-# roles, so that a broken app never leaves a host without its firewall and
-# sshd settings. Tagged `platform` and `apps`, so `--tags apps` reports it too.
+# roles, so that a failed start never leaves a host without its firewall and
+# sshd settings. Any other failure (a rotation handler, the registry login,
+# writing .env, resolving the secrets) still fails the host before them. Tagged `platform` and `apps`, so `--tags apps` reports it too.
 - name: Report the apps that failed to start
   hosts: platform
   gather_facts: false
