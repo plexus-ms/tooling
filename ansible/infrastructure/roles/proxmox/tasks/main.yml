@@ -313,26 +313,64 @@
     # - the token secret is not shown at all. It is sent along whenever a
     #   visible field drifted; a rotation of the secret alone is applied with
     #   proxmox_pbs_token_rotate: true, for one run.
-    - name: Fail when a PBS storage's server, datastore or encryption key differs from the inventory
+    # - Not reconciled: any other storage option (port, nodes, disable,
+    #   master-pubkey, max-protected-backups) set by hand on the host.
+    # - Not reconciled: a storage removed from the inventory stays on the host.
+    #
+    # `pvesm remove` deletes the host's copy of the encryption key
+    # (/etc/pve/priv/storage/<id>.enc, PBSPlugin's on_delete_hook), which may be
+    # the only copy of the key every backup on that storage was made with; the
+    # messages below say so before they suggest it.
+    - name: Fail when a PBS storage's server or datastore differs from the inventory
+      vars:
+        proxmox_pbs_storage_now: >-
+          {{ proxmox_storages.stdout | from_json
+          | selectattr('storage', 'equalto', item.id) | list }}
+      ansible.builtin.assert:
+        that:
+          - proxmox_pbs_storage_now[0].server | default('') == proxmox_pbs_server
+          - proxmox_pbs_storage_now[0].datastore | default('') == proxmox_pbs_datastore
+        fail_msg: >-
+          Storage {{ item.id }} on the host has server
+          {{ proxmox_pbs_storage_now[0].server | default('(none)') }} and datastore
+          {{ proxmox_pbs_storage_now[0].datastore | default('(none)') }}; the inventory says
+          {{ proxmox_pbs_server }} and {{ proxmox_pbs_datastore }}.
+          `pvesm set` cannot change these, and the role does not remove a backup storage.
+          If the inventory is right, remove the storage on the host by hand and run again,
+          which adds it from the inventory; the backups on the server stay.
+          Removing it (`pvesm remove {{ item.id }}`) deletes the host's encryption key file
+          /etc/pve/priv/storage/{{ item.id }}.enc, so first make sure that key is safe elsewhere.
+        quiet: true
+      when: proxmox_pbs_storage_now | length > 0
+      loop: "{{ proxmox_pbs_storages }}"
+      loop_control:
+        label: "{{ item.id }}"
+
+    - name: Fail when a PBS storage's encryption key differs from the inventory
       vars:
         proxmox_pbs_storage_now: >-
           {{ proxmox_storages.stdout | from_json
           | selectattr('storage', 'equalto', item.id) | list }}
         proxmox_pbs_key_fingerprint: "{{ (proxmox_pbs_encryption_key | from_json).fingerprint | default('1') | string }}"
+        proxmox_pbs_key_fingerprint_now: "{{ proxmox_pbs_storage_now[0]['encryption-key'] | default('') | string }}"
       ansible.builtin.assert:
-        that:
-          - proxmox_pbs_storage_now[0].server | default('') == proxmox_pbs_server
-          - proxmox_pbs_storage_now[0].datastore | default('') == proxmox_pbs_datastore
-          - proxmox_pbs_storage_now[0]['encryption-key'] | default('') | string == proxmox_pbs_key_fingerprint
+        that: proxmox_pbs_key_fingerprint_now == proxmox_pbs_key_fingerprint
         fail_msg: >-
-          Storage {{ item.id }} on the host has server
-          {{ proxmox_pbs_storage_now[0].server | default('(none)') }}, datastore
-          {{ proxmox_pbs_storage_now[0].datastore | default('(none)') }} and encryption key
-          {{ proxmox_pbs_storage_now[0]['encryption-key'] | default('(none)') }}; the inventory says
-          {{ proxmox_pbs_server }}, {{ proxmox_pbs_datastore }} and {{ proxmox_pbs_key_fingerprint }}.
-          The role does not change these on an existing storage. If the inventory is right,
-          remove the storage on the host by hand (`pvesm remove {{ item.id }}`; the backups
-          on the server stay) and run again, which adds it from the inventory.
+          {% if proxmox_pbs_key_fingerprint_now | length == 0 %}
+          Storage {{ item.id }} on the host has no encryption key, so its backups so far are unencrypted;
+          the inventory's key has fingerprint {{ proxmox_pbs_key_fingerprint }}.
+          Do NOT remove the storage to fix this.
+          Decide whether this storage should encrypt; if so, set the inventory's key on it by hand
+          (`pvesm set {{ item.id }} --encryption-key <key file>`) and run again.
+          {% else %}
+          Storage {{ item.id }} on the host encrypts with the key of fingerprint {{ proxmox_pbs_key_fingerprint_now }};
+          the inventory's key has fingerprint {{ proxmox_pbs_key_fingerprint }}.
+          Every backup made so far on this storage needs the host's key to be restored.
+          Do NOT remove the storage: `pvesm remove` deletes the host's key file.
+          First copy /etc/pve/priv/storage/{{ item.id }}.enc somewhere safe, then decide which key is right:
+          put the host's key into the vault, or set the inventory's key on the storage by hand
+          (`pvesm set {{ item.id }} --encryption-key <key file>`) and keep the old key for the old backups.
+          {% endif %}
         quiet: true
       when: proxmox_pbs_storage_now | length > 0
       loop: "{{ proxmox_pbs_storages }}"
@@ -341,7 +379,8 @@
 
     # Proxmox copies the key to /etc/pve/priv/storage/<id>.enc when the storage
     # is added; this file is only the hand-over, on tmpfs, written only when a
-    # storage is about to be added and removed again right after.
+    # storage is about to be added and removed again right after. The removal
+    # after the block clears a key an interrupted run left behind.
     - name: Register the missing PBS storages
       vars:
         proxmox_pbs_storages_missing: >-
@@ -395,6 +434,11 @@
           ansible.builtin.file:
             path: /run/pbs-encryption-key.json
             state: absent
+
+    - name: Remove a handed-over key an earlier run left behind
+      ansible.builtin.file:
+        path: /run/pbs-encryption-key.json
+        state: absent
 
     - name: Update the PBS storages when they drifted
       vars:
@@ -460,6 +504,9 @@
     # as written, enabled 1 or 0. The guests are compared as a set, so a
     # reordered list in the inventory is not a change. A job disabled by hand
     # is enabled again.
+    # Not reconciled: options set by hand on a job that the role does not set
+    # (compress, mailto, bwlimit, exclude, prune-backups, ...).
+    # Not reconciled: a job removed from the inventory stays on the host.
     - name: Update the backup jobs when they drifted
       vars:
         proxmox_backup_job_now: >-
@@ -527,7 +574,9 @@
     # The API never returns the password, so it rides along whenever a visible
     # field drifted; a rotation of the password alone is applied with
     # `rotate: true` on the dict, for one run. mailto comes back as a list, and
-    # a missing mode means Proxmox's default, tls.
+    # a missing mode means Proxmox's default, tls. An endpoint disabled by hand
+    # is enabled again.
+    # Not reconciled: author, comment and mailto-user set by hand.
     - name: Update the SMTP endpoint when it drifted
       vars:
         proxmox_smtp_current: >-
@@ -552,6 +601,8 @@
           - "{{ proxmox_alerts_smtp.from_address }}"
           - --mailto
           - "{{ proxmox_alerts_smtp.mailto }}"
+          - --disable
+          - "0"
       when:
         - proxmox_smtp_current | length > 0
         - >-
@@ -562,6 +613,7 @@
           or proxmox_smtp_current[0].username | default('') != proxmox_alerts_smtp.username
           or proxmox_smtp_current[0]['from-address'] | default('') != proxmox_alerts_smtp.from_address
           or proxmox_smtp_current[0].mailto | default([]) | join(',') != proxmox_alerts_smtp.mailto
+          or proxmox_smtp_current[0].disable | default(false) | bool
       changed_when: true
       no_log: true
 
@@ -583,7 +635,10 @@
       changed_when: true
 
     # target and match-severity come back as lists; the severities given as
-    # one comma-separated value are one entry.
+    # one comma-separated value are one entry. A matcher disabled by hand is
+    # enabled again.
+    # Not reconciled: the matcher's other fields (comment, match-field,
+    # match-calendar, mode, invert-match, expression) set by hand.
     - name: Update the matcher when it drifted
       vars:
         proxmox_matcher: >-
