@@ -67,15 +67,28 @@
 
 # Nothing to bring up until the deploy verb has placed the run shape: a fresh
 # host stays provisioned-but-empty until the first CI deploy (or a hand-run of
-# the verb), which is the operator's supervised act (§ 6 PLX-Delivery).
+# the verb), which is the operator's supervised act (§ 6 PLX-Delivery). The
+# verb pulls the image before it places compose.yaml, so a compose.yaml on the
+# host means its image existed: an absent file is the one "new app" case, and
+# a pull or start that fails once the file is there is a failure, not a pending
+# first deploy. (A registry such as GHCR answers `denied` for a missing image
+# as for bad credentials, so the failure cannot be read for "not there yet".)
 - name: "{{ app.name }} | check whether the deploy verb has placed compose.yaml"
   ansible.builtin.stat:
     path: "{{ apps_dir }}/compose.yaml"
   register: apps_compose
 
+- name: "{{ app.name }} | nothing deployed yet (no compose.yaml), so nothing to pull or start"
+  when: plexus_up | bool and not apps_compose.stat.exists
+  ansible.builtin.debug:
+    msg: >-
+      {{ app.name }}: no compose.yaml in {{ apps_dir }}, so nothing has been deployed yet and there is no image to pull.
+      Run the CI deploy (or the deploy verb by hand) to bring it up.
+
 # Runs as the deploy user so a private registry works: that's where the GHCR
 # login above put the credentials, and it's the same user the CI deploy verb
-# uses — playbook runs and CI deploys pull with one identity.
+# uses — playbook runs and CI deploys pull with one identity. A failure of
+# either command fails the host, naming the app.
 - name: "{{ app.name }} | pull + start"
   when: plexus_up | bool and apps_compose.stat.exists
   become: true
@@ -93,11 +106,11 @@
       register: apps_up
       changed_when: "'Started' in apps_up.stderr or 'Recreated' in apps_up.stderr or 'Created' in apps_up.stderr"
   rescue:
-    - name: "{{ app.name }} | image not pullable (registry login or a first deploy pending)"
-      ansible.builtin.debug:
+    - name: "{{ app.name }} | pull or start failed"
+      ansible.builtin.fail:
         msg: >-
-          {{ app.name }}: could not pull or start from the compose file on the host.
-          Run the CI deploy (or the deploy verb by hand) to bring it up.
+          {{ app.name }}: '{{ ansible_failed_task.name }}' failed in {{ apps_dir }}:
+          {{ ansible_failed_result.stderr | default(ansible_failed_result.msg | default('no output')) }}
 
 - name: "{{ app.name }} | remember the app dir for the rotation handler"
   ansible.builtin.set_fact:
