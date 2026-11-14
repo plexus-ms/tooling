@@ -5,7 +5,7 @@
 //   tags in agreement; gh logged in; no mutable release on any versioned repo;
 //   `plx requirements` passing in every versioned repo, as this source checks
 //   it; on a re-run, the compendium still yielding the citable index tooling
-//   was tagged with)
+//   was tagged with, and no bookkeeping left to write in a repo already tagged)
 //   → phase one: tooling's bookkeeping (galaxy versions, the Plexus-versioned
 //     packages' manifests, its own workflow refs, the citable index read from
 //     the compendium), commit, tag, push, GitHub
@@ -83,6 +83,7 @@ import {
 } from './bookkeeping.ts';
 import { previewConsumers } from './preview.ts';
 import {
+  nextMinor,
   phasesOf,
   preflightRelease,
   readVersioned,
@@ -129,7 +130,9 @@ export async function ship(ctx: Context, options: ShipOptions): Promise<ShipResu
   const next = resolveVersion(versioned, options.to);
   await preflightRequirements(ctx, versioned);
   await preflightIndex(ctx, versioned, next);
-  await release(ctx, versioned, next, options.today ?? todayOf(), { ...DEFAULT_WAIT, ...options.wait });
+  const today = options.today ?? todayOf();
+  await preflightAfterTag(ctx, versioned, next, today);
+  await release(ctx, versioned, next, today, { ...DEFAULT_WAIT, ...options.wait });
   if (ctx.dryRun) return { ...(await previewConsumers(ctx, options.workspace, next)), released: true };
   ctx.say(`• Plexus ${next} is cut; every repo takes it itself, when it needs it (plx update)`);
   return { ...emptySummary(next, false), released: true };
@@ -165,16 +168,42 @@ async function preflightImmutable(ctx: Context, versioned: Versioned): Promise<v
 async function preflightRequirements(ctx: Context, versioned: Versioned): Promise<void> {
   const compendium = versioned.repos.find((r) => r.name === COMPENDIUM)?.path;
   const failing: string[] = [];
+  let repos = 0;
   for (const repo of versioned.repos) {
     const { defects } = await checkRepo(ctx, repo.path, { compendium });
     if (defects.length === 0) continue;
+    repos++;
+    // The command checks as this preflight does: against the compendium being
+    // cut, not the index of whichever plx runs it.
+    const against = compendium && repo.path !== compendium ? ` --compendium ${compendium}` : '';
     failing.push(`  ${repo.name}: ${count(defects.length, 'defect')}`, ...defects.slice(0, 5).map((d) => `    ${d}`));
-    if (defects.length > 5) failing.push(`    … and ${defects.length - 5} more (plx requirements ${repo.path})`);
+    if (defects.length > 5) failing.push(`    … and ${defects.length - 5} more`);
+    failing.push(`    to record them as known: plx requirements ${repo.path} --write-baseline${against}`);
   }
-  if (failing.length === 0) return;
-  const repos = failing.filter((l) => !l.startsWith('    ')).length;
+  if (repos === 0) return;
   throw new Error(
-    `plx requirements fails in ${count(repos, 'versioned repo')}:\n${failing.join('\n')}\nfix them, or record today's as known (plx requirements <repo> --write-baseline) and commit the baseline, before cutting a version`,
+    `plx requirements fails in ${count(repos, 'versioned repo')}:\n${failing.join('\n')}\nfix them, or record them as known with the command given and commit the baseline, before cutting a version`,
+  );
+}
+
+/**
+ * A repo whose latest tag already is the version takes no bookkeeping write:
+ * a commit after the tag is never part of the version. On the re-run of a
+ * version ship stopped, a tagged repo has nothing left to write, since its tag
+ * is on its bookkeeping commit; anything still to write means the tag was made
+ * elsewhere, or main moved since. Refused before anything is written, the dry
+ * run included, naming every write it would have made.
+ */
+async function preflightAfterTag(ctx: Context, versioned: Versioned, next: string, today: string): Promise<void> {
+  const { afterTag } = await planBookkeeping(ctx, versioned, versioned.repos, next, today, { quiet: true });
+  if (afterTag.length === 0) return;
+  const names = [...new Set(afterTag.map((w) => w.repo))];
+  throw new Error(
+    [
+      `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} tagged ${next} already, and the bookkeeping would still write:`,
+      ...afterTag.map((w) => `  ${w.repo}: ${w.rel}: ${w.what}`),
+      `a commit after the tag is never part of ${next}: make ${names.join(' and ')} match (commit those changes on main yourself) and re-run with --to ${next}, or cut a new version (--to ${nextMinor(next)})`,
+    ].join('\n'),
   );
 }
 
@@ -248,7 +277,7 @@ const PENDING_SHOWN = 20;
 /** One phase: the bookkeeping of its repos, then each tagged, pushed and released. */
 async function releasePhase(ctx: Context, versioned: Versioned, repos: VersionedRepo[], next: string, today: string) {
   ctx.say(`→ phase: ${repos.map((r) => r.name).join(', ')}`);
-  await ctx.apply(await planBookkeeping(ctx, versioned, repos, next, today));
+  await ctx.apply((await planBookkeeping(ctx, versioned, repos, next, today)).plan);
   for (const repo of repos) await tagAndRelease(ctx, repo, next, today);
 }
 
@@ -369,15 +398,29 @@ async function awaitPublished(ctx: Context, next: string, wait: PublishWait): Pr
   ctx.say(`  ✓ ${list} on npm`);
 }
 
-/** The bookkeeping writes of the given repos, then one commit per repo that has any. */
+/** A bookkeeping write a repo already tagged with the version would have taken. */
+interface AfterTag {
+  repo: string;
+  rel: string;
+  what: string;
+}
+
+/**
+ * The bookkeeping writes of the given repos, then one commit per repo that has
+ * any. A repo already tagged with the version takes none: what it would have
+ * written is returned instead (preflightAfterTag refuses it). `quiet` plans
+ * without narrating, for the preflight.
+ */
 async function planBookkeeping(
   ctx: Context,
   versioned: Versioned,
   repos: VersionedRepo[],
   next: string,
   today: string,
-): Promise<Plan> {
+  { quiet = false } = {},
+): Promise<{ plan: Plan; afterTag: AfterTag[] }> {
   const plan: Plan = [];
+  const afterTag: AfterTag[] = [];
   const touched = new Set<VersionedRepo>();
   const repo = (name: string): VersionedRepo | undefined => repos.find((r) => r.name === name);
   /** Plan a write when the transform changes the file, saying what it does; a missing file is left alone. */
@@ -392,7 +435,11 @@ async function planBookkeeping(
     if (text === undefined) return;
     const edited = transform(text);
     if (edited === text) return;
-    ctx.say(`  ${r.name}: ${rel}: ${what}`);
+    if (r.latest === next) {
+      afterTag.push({ repo: r.name, rel, what });
+      return;
+    }
+    if (!quiet) ctx.say(`  ${r.name}: ${rel}: ${what}`);
     plan.push(write(path, edited));
     touched.add(r);
   };
@@ -438,7 +485,11 @@ async function planBookkeeping(
   // compendium's check runs, so the two never disagree.
   const comp = repo('compendium');
   if (comp) {
-    await edit(comp, MAP_PAGE, `version → ${next}, timestamp → ${today}`, (t) => stampStandard(t, next, today));
+    // The date is the day the version was first stamped: a re-run on a later
+    // day leaves a map that already carries the version alone.
+    await edit(comp, MAP_PAGE, `version → ${next}, timestamp → ${today}`, (t) =>
+      frontmatterField(t, 'version') === next ? t : stampStandard(t, next, today),
+    );
     for (const page of await modulePages(ctx, comp.path)) {
       const text = await ctx.readFile(join(comp.path, page));
       if (frontmatterField(text, 'maturity') !== 'standard') continue;
@@ -457,5 +508,5 @@ async function planBookkeeping(
     plan.push(run('git', ['add', '-A'], { cwd: r.path }));
     plan.push(run('git', ['commit', '--quiet', '-m', `chore: Plexus ${next} bookkeeping`], { cwd: r.path }));
   }
-  return plan;
+  return { plan, afterTag };
 }

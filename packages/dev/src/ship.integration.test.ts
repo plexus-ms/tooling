@@ -915,7 +915,17 @@ test('a versioned repo that fails plx requirements stops the version before anyt
   assert.match(refused.error ?? '', /plx requirements fails in 2 versioned repos/);
   assert.match(refused.error ?? '', /^ {2}template-repo-turbo: 1 defect$/m);
   assert.match(refused.error ?? '', /^ {2}compendium: 1 defect$/m);
-  assert.match(refused.error ?? '', /--write-baseline/);
+  assert.ok(
+    has(
+      refused.error ?? '',
+      `    to record them as known: plx requirements ${up('template-repo-turbo')} --write-baseline --compendium ${up('compendium')}`,
+    ),
+    refused.error,
+  );
+  assert.ok(
+    has(refused.error ?? '', `    to record them as known: plx requirements ${up('compendium')} --write-baseline\n`),
+    'the compendium checks against itself',
+  );
   assert.ok(
     VERSIONED_REPOS.every((r) => !tagged(r, '0.2.0')),
     'nothing tagged',
@@ -940,8 +950,15 @@ test("a run that stops at the manifest leaves the compendium's release a draft, 
   const early = await runUpdate({ yes: true }, { repo: join(WS, 'acme/platform') });
   assert.match(early.error ?? '', /no release of plexus-ms\/compendium found/);
 
-  const second = await run({ yes: true }, { to: '0.2.0' });
+  // The re-run comes a few days later: the map keeps the date it was stamped with.
+  const second = await run({ yes: true }, { to: '0.2.0', today: '2026-01-05' });
   assert.equal(second.error, undefined, second.out);
+  assert.match(read(join(up('compendium'), 'essentials/standard.md')), /^timestamp: 2026-01-02$/m);
+  assert.equal(
+    git(up('compendium'), 'rev-parse', '0.2.0^{commit}'),
+    git(up('compendium'), 'rev-parse', 'main'),
+    'no commit after the tag',
+  );
   assert.ok(has(second.out, '• compendium: release 0.2.0 is still a draft — finishing it'));
   assert.equal(fakeLog().filter((l) => has(l, 'gh[compendium] release create')).length, 1, 'never re-created');
   assert.ok(!existsSync(join(FORGE(), 'compendium', 'draft-0.2.0')), 'published');
@@ -957,7 +974,7 @@ test("a run that stops at the manifest leaves the compendium's release a draft, 
   assert.equal(fakeLog().filter((l) => has(l, 'gh[compendium] release upload')).length, 2, 'one failed, one done');
 });
 
-test('disagreeing latest tags refuse a derived version and accept an explicit one', async () => {
+test('disagreeing latest tags refuse a derived version; a hand-made tag refuses the bookkeeping it lacks', async () => {
   fixture('skew');
   // The half version's tag carries the index the compendium yields, as ship would have written it.
   const citable = ['Alpha', 'Beta', 'Delta'].map((m) => ['§', '1', `PLX-${m}`].join(' '));
@@ -974,10 +991,62 @@ test('disagreeing latest tags refuse a derived version and accept an explicit on
   assert.match(first.error ?? '', /^ {2}template-repo-turbo: 0\.1\.0$/m, "shows each repo's latest tag");
   assert.match(first.error ?? '', /--to 0\.2\.0/, 'names the recovery');
   assert.ok(!tagged('compendium', '0.2.0') && !tagged('compendium', '0.3.0'));
-  const second = await run({ yes: true }, { to: '0.2.0' });
-  assert.equal(second.error, undefined, second.out);
-  assert.ok(allTagged('0.2.0'));
-  assert.ok(has(second.out, '• tooling: already tagged 0.2.0'), 'already-tagged repo reported, not re-tagged');
+
+  // The hand-made tag is not on a bookkeeping commit: what ship would write to tooling is refused.
+  const head = git(up('tooling'), 'rev-parse', 'main');
+  for (const options of [{ yes: true }, { dryRun: true }]) {
+    const second = await run(options, { to: '0.2.0' });
+    assert.match(second.error ?? '', /^tooling is tagged 0\.2\.0 already, and the bookkeeping would still write:$/m);
+    assert.match(second.error ?? '', /^ {2}tooling: ansible\/host\/galaxy\.yml: plexus\.host version → 0\.2\.0$/m);
+    assert.match(second.error ?? '', /^ {2}tooling: packages\/lib\/package\.json: @plexus-ms\/lib → 0\.2\.0$/m);
+    assert.match(second.error ?? '', /^ {2}tooling: \.github\/workflows\/pipeline\.yml: workflow refs → @0\.2\.0$/m);
+    assert.match(second.error ?? '', /re-run with --to 0\.2\.0, or cut a new version \(--to 0\.3\.0\)/);
+    assert.equal(git(up('tooling'), 'rev-parse', 'main'), head, 'nothing written to tooling');
+    assert.ok(
+      VERSIONED_REPOS.every((r) => r === 'tooling' || !tagged(r, '0.2.0')),
+      'no other repo tagged',
+    );
+  }
+
+  // A new version is the way out the message names.
+  const third = await run({ yes: true }, { to: '0.3.0' });
+  assert.equal(third.error, undefined, third.out);
+  assert.ok(allTagged('0.3.0'));
+});
+
+test('a commit with an old ref on main after the tag refuses the re-run; matching it by hand lets the re-run finish', async () => {
+  fixture('after-tag');
+  process.env.FAKE_NPM_NEVER = '1';
+  const first = await run({ yes: true });
+  delete process.env.FAKE_NPM_NEVER;
+  assert.match(first.error ?? '', /re-run with --to 0\.2\.0/);
+  const prim = up('tooling');
+  put(join(prim, '.github/workflows/extra.yml'), `jobs:\n  ci:\n    uses: ${TOOLING_REF}ci.yml@0.1.0\n`);
+  commit(prim, 'a workflow with the old ref');
+  git(prim, 'push', '--quiet', 'origin', 'main');
+  const head = git(prim, 'rev-parse', 'main');
+
+  for (const options of [{ yes: true }, { dryRun: true }]) {
+    const refused = await run(options, { to: '0.2.0' });
+    assert.match(refused.error ?? '', /^tooling is tagged 0\.2\.0 already, and the bookkeeping would still write:$/m);
+    assert.match(refused.error ?? '', /^ {2}tooling: \.github\/workflows\/extra\.yml: workflow refs → @0\.2\.0$/m);
+    assert.equal(refused.error?.split('\n').filter((l) => l.startsWith('  tooling: ')).length, 1, 'only that file');
+    assert.equal(git(prim, 'rev-parse', 'main'), head, 'nothing written');
+    assert.ok(!tagged('compendium', '0.2.0'), 'phase two not started');
+  }
+
+  // Made to match by hand, the re-run has nothing to write to tooling and finishes the version.
+  put(join(prim, '.github/workflows/extra.yml'), `jobs:\n  ci:\n    uses: ${TOOLING_REF}ci.yml@0.2.0\n`);
+  commit(prim, 'the workflow at the version');
+  git(prim, 'push', '--quiet', 'origin', 'main');
+  const finished = await run({ yes: true }, { to: '0.2.0' });
+  assert.equal(finished.error, undefined, finished.out);
+  assert.ok(allTagged('0.2.0') && allReleased('0.2.0'));
+  assert.equal(
+    git(prim, 'log', '--format=%s', '--grep', 'bookkeeping').split('\n').length,
+    1,
+    'one bookkeeping commit',
+  );
 });
 
 test('a push failure mid-release names the recovery, and the re-run finishes the version', async () => {
