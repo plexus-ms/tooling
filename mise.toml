@@ -83,8 +83,8 @@ arg "<paths>" var=#true default="." help="Files or directories to lint (defaults
 run = "biome check ${usage_write:+--write} --no-errors-on-unmatched $usage_paths"
 
 [tasks.check]
-depends = ["check-js", "check-ops"]
-description = "Run static checks on the codebase: the packages, the workflows, the collection"
+depends = ["check-js", "check-ops", "check-requirements"]
+description = "Run static checks on the codebase: the packages, the workflows, the collection, the citations"
 
 [tasks.check-js]
 depends = ["install"]
@@ -92,6 +92,12 @@ description = "Type-check the packages"
 hide = true
 usage = 'arg "[package]" help="Package to check (defaults to all)"'
 run = 'turbo run check ${usage_package:+--filter=$usage_package}'
+
+[tasks.check-requirements]
+depends = ["build"]
+description = "plx requirements over this repo, with the workspace's own build: every cited section and requirement name exists, no issue identifier"
+hide = true
+run = "pnpm plx requirements ."
 
 [tasks.check-ops]
 description = "actionlint over the workflows; ansible-lint over the collections (their Galaxy dependencies installed on first use), a syntax check of their playbooks and of a playbook that lists every role"
