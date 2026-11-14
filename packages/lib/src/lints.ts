@@ -232,11 +232,17 @@ const isPreamble = (line: string): boolean =>
  * lines, counts as well when a blank line (or the end of the file) follows it:
  * a blank line cannot split a long header. A later block directly above a line
  * of content is that content's own comment; it does not count, and the header
- * ends there, as it does at any line of content.
+ * ends there, as it does at any line of content. After the header has begun, a
+ * line that holds only a Jinja tag is content, not a blank line: a comment above
+ * `{% if x %}` is the comment of the block it opens. Before it, such a line is
+ * skipped like a blank one.
  */
 export function headerLines(text: string, file: string): number {
   const syntax = commentSyntax(file);
-  const lines = text.split('\n').map((l) => l.replace(JINJA_TAG, '').trim());
+  const raw = text.split('\n').map((l) => l.trim());
+  const lines = raw.map((l) => l.replace(JINJA_TAG, '').trim());
+  /** A line that held only a Jinja tag (`{% if x %}`): content to the header's end, though nothing is left of it. */
+  const jinjaOnly = (n: number): boolean => (lines[n] ?? '') === '' && (raw[n] ?? '') !== '';
   /** Where the comment block that starts at line `i` ends (exclusive); `i` when that line is no comment. */
   const blockEnd = (i: number): number => {
     let j = i;
@@ -264,12 +270,12 @@ export function headerLines(text: string, file: string): number {
   let end = blockEnd(i);
   let count = end - i;
   for (i = end; i < lines.length; ) {
-    if ((lines[i] ?? '') === '') {
+    if ((lines[i] ?? '') === '' && !jinjaOnly(i)) {
       i++;
       continue;
     }
     end = blockEnd(i);
-    if (end === i || (lines[end] ?? '') !== '') break;
+    if (end === i || (lines[end] ?? '') !== '' || jinjaOnly(end)) break;
     count += end - i;
     i = end;
   }

@@ -204,6 +204,11 @@ test('template-header: blank lines, Jinja comments and consecutive blocks all co
   assert.equal(headerLines('{# a #}\n{# b\n   c #}\n\nk: 1\n', 'template/a.yml.jinja'), 3);
   assert.equal(headerLines('{# a #}\n# b\nk: 1\n', 'template/a.yml.jinja'), 2);
   assert.equal(headerLines('/* a\n b */\n/* c\n d */\nexport {};\n', 'template/a.ts'), 4);
+  // A line holding only a Jinja tag is content: the block above it is that block's comment.
+  assert.equal(headerLines('# a\n# b\n\n# c doc\n{% if x %}\nkey: 1\n{% endif %}\n', 'template/a.yml.jinja'), 2);
+  assert.equal(headerLines('# a\n# b\n\n{% if x %}\n# c\n# d\n\nkey: 1\n', 'template/a.yml.jinja'), 2);
+  // Before the header such a line is skipped, and a block followed by a blank line still counts.
+  assert.equal(headerLines('{% if x %}\n# a\n# b\n\n# c\n\nkey: 1\n{% endif %}\n', 'template/a.yml.jinja'), 3);
   // Outside a .jinja file `{#` is no comment.
   assert.equal(headerLines('{# a #}\n{# b #}\n{# c #}\nk: 1\n', 'template/a.yml'), 0);
 });
