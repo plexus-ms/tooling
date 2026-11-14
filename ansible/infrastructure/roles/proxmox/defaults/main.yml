@@ -71,6 +71,9 @@ proxmox_pbs_fingerprint: "" # of the server's certificate (sha256); it is self-s
 proxmox_pbs_datastore: main
 proxmox_pbs_token_id: ""     # user@realm!token
 proxmox_pbs_token_secret: ""
+# The secret cannot be read back from the host, so a changed secret alone is
+# not noticed; set this to true for one run to push it to every PBS storage.
+proxmox_pbs_token_rotate: false
 proxmox_pbs_encryption_key: ""
 proxmox_pbs_storages: []
 proxmox_backup_jobs: []
@@ -87,4 +90,7 @@ proxmox_backup_jobs: []
 #     password: relay-password
 #     from_address: host@example.org
 #     mailto: alerts@example.org
+#     rotate: true              # for one run, to push a changed password
+# The password cannot be read back from the host, so a changed password alone
+# is not noticed; it is sent whenever another field changed, or with rotate.
 proxmox_alerts_smtp: {}

@@ -292,55 +292,146 @@
         quiet: true
       no_log: true
 
-    # Proxmox copies the key to /etc/pve/priv/storage/<id>.enc when the storage
-    # is added; this file is only the hand-over, on tmpfs.
-    - name: Hand the encryption key over
-      ansible.builtin.copy:
-        dest: /run/pbs-encryption-key.json
-        owner: root
-        group: root
-        mode: "0600"
-        content: "{{ proxmox_pbs_encryption_key }}"
-      changed_when: false
-      no_log: true
+    # Each storage, job and notification resource below is read as JSON first,
+    # created when it is missing, and updated when what the host holds differs
+    # from the inventory, as in the pbs role. A resource created in this run is
+    # not in the read, so it is not updated too. Where a comparison does not
+    # match the host's JSON (a field name or value format), correct it in the
+    # update task's `when`; each line compares one field.
+    #
+    # What `pvesh get /storage` shows of a PBS storage, and what the role
+    # therefore can and cannot reconcile:
+    # - fingerprint, namespace, username, content and prune-backups are shown
+    #   and updated with `pvesm set` when they drift.
+    # - server and datastore are shown but fixed: `pvesm set` cannot change
+    #   them, only removing and re-adding the storage can. The role never
+    #   removes a backup storage, so it fails for that host instead.
+    # - the encryption key is not shown, only its fingerprint (the key file's
+    #   "fingerprint" field, or 1 for a key without one). A different
+    #   fingerprint fails the run too: replacing the host's copy of a backup
+    #   key is a decision for a person, not a side effect of a playbook run.
+    # - the token secret is not shown at all. It is sent along whenever a
+    #   visible field drifted; a rotation of the secret alone is applied with
+    #   proxmox_pbs_token_rotate: true, for one run.
+    - name: Fail when a PBS storage's server, datastore or encryption key differs from the inventory
+      vars:
+        proxmox_pbs_storage_now: >-
+          {{ proxmox_storages.stdout | from_json
+          | selectattr('storage', 'equalto', item.id) | list }}
+        proxmox_pbs_key_fingerprint: "{{ (proxmox_pbs_encryption_key | from_json).fingerprint | default('1') | string }}"
+      ansible.builtin.assert:
+        that:
+          - proxmox_pbs_storage_now[0].server | default('') == proxmox_pbs_server
+          - proxmox_pbs_storage_now[0].datastore | default('') == proxmox_pbs_datastore
+          - proxmox_pbs_storage_now[0]['encryption-key'] | default('') | string == proxmox_pbs_key_fingerprint
+        fail_msg: >-
+          Storage {{ item.id }} on the host has server
+          {{ proxmox_pbs_storage_now[0].server | default('(none)') }}, datastore
+          {{ proxmox_pbs_storage_now[0].datastore | default('(none)') }} and encryption key
+          {{ proxmox_pbs_storage_now[0]['encryption-key'] | default('(none)') }}; the inventory says
+          {{ proxmox_pbs_server }}, {{ proxmox_pbs_datastore }} and {{ proxmox_pbs_key_fingerprint }}.
+          The role does not change these on an existing storage. If the inventory is right,
+          remove the storage on the host by hand (`pvesm remove {{ item.id }}`; the backups
+          on the server stay) and run again, which adds it from the inventory.
+        quiet: true
+      when: proxmox_pbs_storage_now | length > 0
+      loop: "{{ proxmox_pbs_storages }}"
+      loop_control:
+        label: "{{ item.id }}"
 
-    - name: Register the PBS storages
+    # Proxmox copies the key to /etc/pve/priv/storage/<id>.enc when the storage
+    # is added; this file is only the hand-over, on tmpfs, written only when a
+    # storage is about to be added and removed again right after.
+    - name: Register the missing PBS storages
+      vars:
+        proxmox_pbs_storages_missing: >-
+          {{ proxmox_pbs_storages
+          | rejectattr('id', 'in', proxmox_storages.stdout | from_json | map(attribute='storage') | list)
+          | list }}
+      when: proxmox_pbs_storages_missing | length > 0
+      block:
+        - name: Hand the encryption key over
+          ansible.builtin.copy:
+            dest: /run/pbs-encryption-key.json
+            owner: root
+            group: root
+            mode: "0600"
+            content: "{{ proxmox_pbs_encryption_key }}"
+          no_log: true
+
+        - name: Register the PBS storages
+          ansible.builtin.command:
+            argv:
+              - pvesm
+              - add
+              - pbs
+              - "{{ item.id }}"
+              - --server
+              - "{{ proxmox_pbs_server }}"
+              - --fingerprint
+              - "{{ proxmox_pbs_fingerprint }}"
+              - --datastore
+              - "{{ proxmox_pbs_datastore }}"
+              - --namespace
+              - "{{ item.namespace }}"
+              - --username
+              - "{{ proxmox_pbs_token_id }}"
+              - --password
+              - "{{ proxmox_pbs_token_secret }}"
+              - --encryption-key
+              - /run/pbs-encryption-key.json
+              - --content
+              - backup
+              - --prune-backups
+              - keep-all=1
+          changed_when: true
+          no_log: true
+          loop: "{{ proxmox_pbs_storages_missing }}"
+          loop_control:
+            label: "{{ item.id }}"
+
+      always:
+        - name: Remove the handed-over key
+          ansible.builtin.file:
+            path: /run/pbs-encryption-key.json
+            state: absent
+
+    - name: Update the PBS storages when they drifted
+      vars:
+        proxmox_pbs_storage_now: >-
+          {{ proxmox_storages.stdout | from_json
+          | selectattr('storage', 'equalto', item.id) | list }}
       ansible.builtin.command:
         argv:
           - pvesm
-          - add
-          - pbs
+          - set
           - "{{ item.id }}"
-          - --server
-          - "{{ proxmox_pbs_server }}"
           - --fingerprint
           - "{{ proxmox_pbs_fingerprint }}"
-          - --datastore
-          - "{{ proxmox_pbs_datastore }}"
           - --namespace
           - "{{ item.namespace }}"
           - --username
           - "{{ proxmox_pbs_token_id }}"
           - --password
           - "{{ proxmox_pbs_token_secret }}"
-          - --encryption-key
-          - /run/pbs-encryption-key.json
           - --content
           - backup
           - --prune-backups
           - keep-all=1
-      when: item.id not in (proxmox_storages.stdout | from_json | map(attribute='storage'))
+      when:
+        - proxmox_pbs_storage_now | length > 0
+        - >-
+          proxmox_pbs_token_rotate | bool
+          or proxmox_pbs_storage_now[0].fingerprint | default('') | lower != proxmox_pbs_fingerprint | lower
+          or proxmox_pbs_storage_now[0].namespace | default('') != item.namespace
+          or proxmox_pbs_storage_now[0].username | default('') != proxmox_pbs_token_id
+          or proxmox_pbs_storage_now[0].content | default('') | split(',') | sort != ['backup']
+          or proxmox_pbs_storage_now[0]['prune-backups'] | default('') != 'keep-all=1'
       changed_when: true
       no_log: true
       loop: "{{ proxmox_pbs_storages }}"
       loop_control:
         label: "{{ item.id }}"
-
-    - name: Remove the handed-over key
-      ansible.builtin.file:
-        path: /run/pbs-encryption-key.json
-        state: absent
-      changed_when: false
 
     - name: Read the backup jobs
       ansible.builtin.command:
@@ -359,6 +450,38 @@
           --schedule "{{ item.schedule }}" --mode snapshot --enabled 1
           --notes-template "{{ '{{guestname}}' }}"
       when: item.id not in (proxmox_backup_jobs_now.stdout | from_json | map(attribute='id'))
+      changed_when: true
+      loop: "{{ proxmox_backup_jobs }}"
+      loop_control:
+        label: "{{ item.id }}"
+
+    # The API returns a job as /etc/pve/jobs.cfg holds it: vmid is one
+    # comma-separated string ("100,101"), schedule the calendar event exactly
+    # as written, enabled 1 or 0. The guests are compared as a set, so a
+    # reordered list in the inventory is not a change. A job disabled by hand
+    # is enabled again.
+    - name: Update the backup jobs when they drifted
+      vars:
+        proxmox_backup_job_now: >-
+          {{ proxmox_backup_jobs_now.stdout | from_json
+          | selectattr('id', 'equalto', item.id) | list }}
+        proxmox_notes_template: "{{ '{{guestname}}' }}"
+      ansible.builtin.command:
+        cmd: >-
+          pvesh set /cluster/backup/{{ item.id }}
+          --storage {{ item.storage }} --vmid {{ item.vmids | join(',') }}
+          --schedule "{{ item.schedule }}" --mode snapshot --enabled 1
+          --notes-template "{{ '{{guestname}}' }}"
+      when:
+        - proxmox_backup_job_now | length > 0
+        - >-
+          proxmox_backup_job_now[0].storage | default('') != item.storage
+          or proxmox_backup_job_now[0].vmid | default('') | string | split(',') | map('trim') | map('int') | sort
+             != item.vmids | map('int') | sort
+          or proxmox_backup_job_now[0].schedule | default('') != item.schedule
+          or proxmox_backup_job_now[0].mode | default('snapshot') != 'snapshot'
+          or not (proxmox_backup_job_now[0].enabled | default(true) | bool)
+          or proxmox_backup_job_now[0]['notes-template'] | default('') != proxmox_notes_template
       changed_when: true
       loop: "{{ proxmox_backup_jobs }}"
       loop_control:
@@ -401,6 +524,47 @@
       changed_when: true
       no_log: true
 
+    # The API never returns the password, so it rides along whenever a visible
+    # field drifted; a rotation of the password alone is applied with
+    # `rotate: true` on the dict, for one run. mailto comes back as a list, and
+    # a missing mode means Proxmox's default, tls.
+    - name: Update the SMTP endpoint when it drifted
+      vars:
+        proxmox_smtp_current: >-
+          {{ proxmox_smtp_endpoints.stdout | from_json
+          | selectattr('name', 'equalto', 'smtp') | list }}
+      ansible.builtin.command:
+        argv:
+          - pvesh
+          - set
+          - /cluster/notifications/endpoints/smtp/smtp
+          - --server
+          - "{{ proxmox_alerts_smtp.server }}"
+          - --port
+          - "{{ proxmox_alerts_smtp.port }}"
+          - --mode
+          - "{{ proxmox_alerts_smtp.mode }}"
+          - --username
+          - "{{ proxmox_alerts_smtp.username }}"
+          - --password
+          - "{{ proxmox_alerts_smtp.password }}"
+          - --from-address
+          - "{{ proxmox_alerts_smtp.from_address }}"
+          - --mailto
+          - "{{ proxmox_alerts_smtp.mailto }}"
+      when:
+        - proxmox_smtp_current | length > 0
+        - >-
+          proxmox_alerts_smtp.rotate | default(false) | bool
+          or proxmox_smtp_current[0].server | default('') != proxmox_alerts_smtp.server
+          or proxmox_smtp_current[0].port | default(0) | int != proxmox_alerts_smtp.port | int
+          or proxmox_smtp_current[0].mode | default('tls') != proxmox_alerts_smtp.mode
+          or proxmox_smtp_current[0].username | default('') != proxmox_alerts_smtp.username
+          or proxmox_smtp_current[0]['from-address'] | default('') != proxmox_alerts_smtp.from_address
+          or proxmox_smtp_current[0].mailto | default([]) | join(',') != proxmox_alerts_smtp.mailto
+      changed_when: true
+      no_log: true
+
     # Endpoints and matchers share one namespace, hence the two names.
     - name: Read the matchers
       ansible.builtin.command:
@@ -416,6 +580,27 @@
           --match-severity warning,error,unknown
           --comment "Warnings and failures to the alerts mailbox"
       when: "'alerts' not in (proxmox_matchers.stdout | from_json | map(attribute='name'))"
+      changed_when: true
+
+    # target and match-severity come back as lists; the severities given as
+    # one comma-separated value are one entry.
+    - name: Update the matcher when it drifted
+      vars:
+        proxmox_matcher: >-
+          {{ proxmox_matchers.stdout | from_json
+          | selectattr('name', 'equalto', 'alerts') | list }}
+      ansible.builtin.command:
+        cmd: >-
+          pvesh set /cluster/notifications/matchers/alerts --target smtp
+          --match-severity warning,error,unknown
+          --comment "Warnings and failures to the alerts mailbox"
+          --disable 0
+      when:
+        - proxmox_matcher | length > 0
+        - >-
+          proxmox_matcher[0].target | default([]) | join(',') != 'smtp'
+          or proxmox_matcher[0]['match-severity'] | default([]) | join(',') != 'warning,error,unknown'
+          or proxmox_matcher[0].disable | default(false) | bool
       changed_when: true
 
     - name: Disable the built-in matcher
