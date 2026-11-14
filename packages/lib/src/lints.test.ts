@@ -111,14 +111,15 @@ test('issue-id flags three capitals, a dash and digits, and passes module codes'
     `Fixes ${id('ABC', 12)} and ${id('XYZ', 3)}; branch ${id('ABC', 12)}-a-slug.`,
     'PLX-App, PLX-AppStateful, the PLX map, PLX-Repo and a ABC-free line pass.',
     `As do X${id('ABC', 1)}, ${id('ABC', 1)}a, ${id('ABCD', 12)}, ${id('AB', 12)} and ${id('abc', 12)}.`,
-    `Standard tokens match too: ${id('UTF', 8)}, ${id('SHA', 256)}.`,
+    `Five standard prefixes pass: ${['SHA', 'UTF', 'GPL', 'PDF', 'ADR'].map((p) => id(p, 1)).join(', ')}.`,
+    `No other does: ${id('KIT', 1)}, ${id('ISO', 8601)}.`,
   ].join('\n');
   assert.deepEqual(excerpts(lintIssueIds(text, 'f.md')), [
     `1: ${id('ABC', 12)}`,
     `1: ${id('XYZ', 3)}`,
     `1: ${id('ABC', 12)}`,
-    `4: ${id('UTF', 8)}`,
-    `4: ${id('SHA', 256)}`,
+    `5: ${id('KIT', 1)}`,
+    `5: ${id('ISO', 8601)}`,
   ]);
 });
 
@@ -136,6 +137,11 @@ test('the commit message check reads # lines and leaves out what git adds', () =
   // `git commit -m`: no template, every line is the message.
   assert.deepEqual(excerpts(lintCommitMessage(`fix: x\n\n#${id('ABC', 12)} at line start\n`)), [`3: ${id('ABC', 12)}`]);
   assert.deepEqual(lintCommitMessage('fix(ship): name the PLX-Delivery section\n'), []);
+  // Another comment character: git's template and scissors are recognised by it.
+  const semicolon = editor.replaceAll(/^#(?= )/gm, ';');
+  assert.deepEqual(excerpts(lintCommitMessage(semicolon, ';')), [`1: ${id('ABC', 7)}`, `3: ${id('ABC', 8)}`]);
+  assert.equal(lintCommitMessage(semicolon).length, 4, 'read with the default, the template is linted');
+  assert.deepEqual(excerpts(lintCommitMessage(semicolon, 'auto')), [`1: ${id('ABC', 7)}`, `3: ${id('ABC', 8)}`]);
 });
 
 test('citations: the reverse order, ranges and lists, and a bare sign on a page of the compendium', () => {
@@ -165,6 +171,16 @@ test('citations: the reverse order, ranges and lists, and a bare sign on a page 
   assert.deepEqual(found(), found('PLX-Own').slice(0, -1));
 });
 
+test('citations: a code, a comma and a bare sign read as a reverse citation, on a page of the compendium too', () => {
+  const citable = new Set([cite('8', 'PLX-Own')]);
+  const text = `It consumes ${'PLX-Other'}, § 8 says how.`;
+  assert.deepEqual(
+    lintCitations(text, 'approaches/own.md', citable, 'PLX-Own').map((v) => v.excerpt),
+    [cite('8', 'PLX-Other')],
+    'read as section 8 of the code before it, not of the page',
+  );
+});
+
 test('citations: a malformed requirement name is a violation, not ignored', () => {
   const text = `${name('App', 'loopbackPort')}, ${name('App', 'Stateful', 'Migrate', 'Extra')}, ${name('App', 'Port')}`;
   assert.deepEqual(
@@ -177,12 +193,43 @@ test('citations: a malformed requirement name is a violation, not ignored', () =
 });
 
 test('template-header: blank lines, Jinja comments and consecutive blocks all count', () => {
-  assert.equal(headerLines('# a\n# b\n\n# c\n# d\n# e\n# f\nk: 1\n', 'template/a.yml'), 6);
-  assert.equal(headerLines('{# a #}\n{# b\n   c #}\nk: 1\n', 'template/a.yml.jinja'), 3);
+  // A block after a blank line, itself followed by one, pads the header and counts.
+  assert.equal(headerLines('# a\n# b\n\n# c\n# d\n# e\n# f\n\nk: 1\n', 'template/a.yml'), 6);
+  assert.equal(headerLines('# a\n\n# b\n\n# c\n', 'template/a.yml'), 3);
+  // A block directly above a line of content is that content's own comment.
+  assert.equal(headerLines('# a\n# b\n\n# c\n# d\n# e\n# f\nk: 1\n', 'template/a.yml'), 2);
+  assert.equal(headerLines('# a\n# b\n\n# about k\nk: 1\n\n# c\n\n', 'template/a.yml'), 2);
+  // The first block is the header even when content follows it at once.
+  assert.equal(headerLines('# a\n# b\n# c\nk: 1\n', 'template/a.yml'), 3);
+  assert.equal(headerLines('{# a #}\n{# b\n   c #}\n\nk: 1\n', 'template/a.yml.jinja'), 3);
   assert.equal(headerLines('{# a #}\n# b\nk: 1\n', 'template/a.yml.jinja'), 2);
   assert.equal(headerLines('/* a\n b */\n/* c\n d */\nexport {};\n', 'template/a.ts'), 4);
   // Outside a .jinja file `{#` is no comment.
   assert.equal(headerLines('{# a #}\n{# b #}\n{# c #}\nk: 1\n', 'template/a.yml'), 0);
+});
+
+test('template-header on the heads of three real template files', () => {
+  // template-repo-operations as of Plexus 0.120.0: a two-line header and a
+  // one-line header, each followed by the comment of a setting, and a header
+  // that is five lines long whatever the rule.
+  const real: [string, string, number][] = [
+    [
+      'template/inventory/group_vars/platform.yml.jinja',
+      "# The hosts that run this tenant's apps (PLX-Platform). The apps themselves\n# are per host (host_vars/<host>.yml, plexus_apps).\n\n# Unprivileged user that owns app dirs and runs the deploy verb (via CI SSH).\nplexus_deploy_user: plexus\nplexus_deploy_root: /opt/stacks\n\n# Re-create containers during a platform-playbook run (rotation \u2014 PLX-Secrets)\n# and pull + start apps whose compose file the deploy verb has already placed.\n# Safe to leave true: an app never deployed yet is skipped, not fatal.\nplexus_up: true\n",
+      2,
+    ],
+    [
+      'template/inventory/group_vars/all.yml.jinja',
+      '# What every host of this tenant gets, whichever layer\'s playbook reaches it.\n\n# Human admins (iam): a personal account on every host, key-only SSH,\n# passwordless sudo. At least one is required: after a first run as root,\n# connect as an admin, and root logins close (sshd).\n#   - name: alice\n#     ssh_keys: ["ssh-ed25519 AAAA\u2026 alice@example.org"]\niam_admins: []\n\n# Host firewall (firewall): inbound closed except SSH and what the roles open\n# themselves (caddy: 80, 443). List an overlay network\'s interface here to\n# accept its traffic whole, e.g. [wt0] for NetBird.\nfirewall_trusted_interfaces: []\n',
+      1,
+    ],
+    [
+      'template/mise.toml.jinja',
+      "# The tenant's operations repo (\u00a7 3 PLX-Tenancy): the ops side, applied by\n# playbook runs on its own occasions \u2014 it has no release cycle (\u00a7 3 PLX-Delivery).\n# One playbook per layer, each shipped in its plexus.* collection and mounted\n# here (platform.yml{% if infrastructure %}, infrastructure.yml{% endif %}{% if ci_strategy != 'github' %}, ci.yml{% endif %}); third-party apps the tenant\n# merely operates live under apps/<name>/ (\u00a7 2 PLX-App).\n\n# Verbs are asked as `mise :verb` at the repo root like in every tenant repo\n# (\u00a7 2 PLX-Repo); that form needs the root marker even without sub-projects.\nmonorepo_root = true\n# mise no longer walks the tree for project configs; the root is the only one.\n[monorepo]\nconfig_roots = [\".\"]\n",
+      5,
+    ],
+  ];
+  for (const [file, text, n] of real) assert.equal(headerLines(text, file), n, file);
 });
 
 test('date-or-version catches a timestamp', () => {

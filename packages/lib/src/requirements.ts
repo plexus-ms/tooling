@@ -52,6 +52,7 @@ import { type Plan, write } from './effects.ts';
 import {
   type Citable,
   lintCitations,
+  lintCommitMessage,
   lintDateOrVersion,
   lintIssueIds,
   lintTemplateHeader,
@@ -433,4 +434,16 @@ export async function planBaseline(ctx: Context, dir: string, options: RepoOptio
   const lint = await lintRepo(ctx, dir, options);
   ctx.say(`• ${lint.violations.length} known violations → ${BASELINE_FILE}`);
   return [write(join(dir, BASELINE_FILE), renderBaseline(lint.violations))];
+}
+
+/**
+ * A commit message file's issue identifiers (the commit-msg hook), git's own
+ * template recognised by the repo's comment character: `core.commentString`,
+ * else `core.commentChar`, else `#`.
+ */
+export async function checkCommitMessage(ctx: Context, file: string, dir: string): Promise<Violation[]> {
+  const config = async (key: string) =>
+    (await ctx.read('git', ['config', '--get', key], { cwd: dir }).catch(() => '')).trim();
+  const comment = (await config('core.commentString')) || (await config('core.commentChar')) || '#';
+  return lintCommitMessage(await ctx.readFile(file), comment);
 }

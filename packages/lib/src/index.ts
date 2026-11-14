@@ -106,6 +106,7 @@ export { overview, PRUNED, type ScanOptions } from './overview.ts';
 export { type PropagateOptions, propagate } from './propagate.ts';
 export {
   type CompendiumCheck,
+  checkCommitMessage,
   checkCompendium,
   checkRepo,
   extractRequirements,

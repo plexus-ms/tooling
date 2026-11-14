@@ -4,6 +4,7 @@ import { BASELINE_FILE } from './baseline.ts';
 import { Context } from './context.ts';
 import { lintCitations } from './lints.ts';
 import {
+  checkCommitMessage,
   checkCompendium,
   checkRepo,
   extractRequirements,
@@ -376,4 +377,18 @@ test('checkRepo resolves against a compendium checkout when given one', async ()
   assert.deepEqual([check.defects, check.against], [[], 'the compendium at /c']);
   // The same line against the index this plx carries, which names no requirement yet.
   assert.equal(lintCitations(`${name('App', 'Port')}`, 'notes.txt', new Set(bundledIndex().citable)).length, 1);
+});
+
+test('checkCommitMessage reads the comment character from git', async () => {
+  const message = `fix: x\n\n; Please enter the commit message for your changes.\n; On branch ${id('XYZ', 13)}-topic\n`;
+  const io = (char: string | undefined) =>
+    fakeIo({ r: { MSG: message } }, (cwd, args) =>
+      cwd === '/r' && args.join(' ') === 'config --get core.commentChar' ? char : undefined,
+    );
+  assert.deepEqual(await checkCommitMessage(new Context({}, io(';\n')), '/r/MSG', '/r'), []);
+  assert.deepEqual(
+    (await checkCommitMessage(new Context({}, io(undefined)), '/r/MSG', '/r')).map((v) => v.excerpt),
+    [id('XYZ', 13)],
+    'unset, the character is #, and the template is read as message',
+  );
 });

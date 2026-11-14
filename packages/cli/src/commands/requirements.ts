@@ -16,9 +16,9 @@
 import { join, resolve } from 'node:path';
 import {
   BASELINE_FILE,
+  checkCommitMessage,
   checkRepo,
   extractRequirements,
-  lintCommitMessage,
   planBaseline,
   type RepoCheck,
   renderViolation,
@@ -53,7 +53,7 @@ export function register(program: Command): void {
         return;
       }
       if (opts.commitMsg) {
-        const violations = lintCommitMessage(await ctx.readFile(resolve(opts.commitMsg)));
+        const violations = await checkCommitMessage(ctx, resolve(opts.commitMsg), repo);
         ctx.result(violations, (vs) => vs.map(renderViolation).join('\n'));
         if (violations.length > 0) process.exitCode = 1;
         return;

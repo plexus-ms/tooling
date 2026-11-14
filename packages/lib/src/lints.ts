@@ -165,7 +165,10 @@ export function lintCitations(text: string, file: string, citable: Citable, own?
     }
   };
   // A sign belongs to the first reading that takes it: a code after the
-  // numbers, then a code before them, then the page itself.
+  // numbers, then a code before them, then the page itself. So a code, a
+  // comma and a bare sign read as a reverse citation even where the sign
+  // means the page's own section: "it consumes <code>, § <n> says how" is read
+  // as section <n> of <code>, not of the page.
   const taken = new Set<number>();
   const signAt = (m: RegExpExecArray) => m.index + m[0].indexOf('§');
   for (const { match, line } of matches(text, FORWARD)) {
@@ -222,34 +225,53 @@ const isPreamble = (line: string): boolean =>
   /^#!/.test(line) || /^#\s*(syntax|escape|check)\s*=/.test(line) || line === '---';
 
 /**
- * The number of comment lines a template file's header holds: every comment
- * line, line comment or block comment line by line, from the first one until
- * the first line of content, blank lines not ending it. A header is one when no
- * more than one line of content precedes it (the one line a workflow names
- * itself with, `name: on_pr`); a comment further down is a comment.
+ * The number of comment lines a template file's header holds. The header is
+ * the first comment block, line comments and block comments counted line by
+ * line, when no more than one line of content precedes it (the one line a
+ * workflow names itself with, `name: on_pr`). A later block, after blank
+ * lines, counts as well when a blank line (or the end of the file) follows it:
+ * a blank line cannot split a long header. A later block directly above a line
+ * of content is that content's own comment; it does not count, and the header
+ * ends there, as it does at any line of content.
  */
 export function headerLines(text: string, file: string): number {
   const syntax = commentSyntax(file);
   const lines = text.split('\n').map((l) => l.replace(JINJA_TAG, '').trim());
+  /** Where the comment block that starts at line `i` ends (exclusive); `i` when that line is no comment. */
+  const blockEnd = (i: number): number => {
+    let j = i;
+    for (;;) {
+      const line = lines[j] ?? '';
+      const block = line === '' ? undefined : syntax.blocks.find(([open]) => line.startsWith(open));
+      if (block) {
+        const [open, close] = block;
+        let k = j;
+        while (k < lines.length - 1 && !(lines[k] ?? '').includes(close, k === j ? open.length : 0)) k++;
+        j = k + 1;
+      } else if (line !== '' && syntax.line?.test(line)) j++;
+      else return j;
+    }
+  };
+  let i = 0;
   let content = 0;
-  let count = 0;
-  let inHeader = false;
-  for (let i = 0; i < lines.length; i++) {
+  for (; i < lines.length; i++) {
     const line = lines[i] ?? '';
-    if (line === '' || (!inHeader && isPreamble(line))) continue;
-    const block = syntax.blocks.find(([open]) => line.startsWith(open));
-    if (block) {
-      const [open, close] = block;
-      let j = i;
-      while (j < lines.length - 1 && !(lines[j] ?? '').includes(close, j === i ? open.length : 0)) j++;
-      count += j - i + 1;
-      i = j;
-      inHeader = true;
-    } else if (syntax.line?.test(line)) {
-      count++;
-      inHeader = true;
-    } else if (inHeader) return count;
-    else if (++content > 1) return 0;
+    if (line === '' || isPreamble(line)) continue;
+    if (blockEnd(i) > i) break;
+    if (++content > 1) return 0;
+  }
+  if (i >= lines.length) return 0;
+  let end = blockEnd(i);
+  let count = end - i;
+  for (i = end; i < lines.length; ) {
+    if ((lines[i] ?? '') === '') {
+      i++;
+      continue;
+    }
+    end = blockEnd(i);
+    if (end === i || (lines[end] ?? '') !== '') break;
+    count += end - i;
+    i = end;
   }
   return count;
 }
@@ -275,31 +297,54 @@ export function lintTemplateHeader(text: string, file: string): Violation[] {
  * dash, digits; no tracker's key is named here. A module code passes, its dash
  * being followed by a word. A dash after the digits does not save one (a
  * branch slug that opens with an identifier names the issue all the same);
- * lowercase does, as slugs, CSS classes and the like are lowercase. Standard
- * technical tokens of the same shape, a license, an encoding or a hash
- * function with its number, match as well: they sit in a repo's baseline.
+ * lowercase does, as slugs, CSS classes and the like are lowercase.
  */
-const ISSUE_ID = /(?<![\w])[A-Z]{3}-\d+(?![\w])/g;
-
-export function lintIssueIds(text: string, file: string): Violation[] {
-  return [...matches(text, ISSUE_ID)].map(({ match, line }) => ({
-    lint: 'issue-id',
-    file,
-    line,
-    excerpt: match[0],
-    message: `${match[0]} reads as an issue identifier; say what it means instead`,
-  }));
-}
+const ISSUE_ID = /(?<![\w])([A-Z]{3})-\d+(?![\w])/g;
 
 /**
- * A commit message's issue identifiers. Every line counts, `#` lines too: under
- * `git commit -m` git keeps them. What git adds itself is left out: its
- * template, from the "Please enter the commit message" line on (it names the
- * branch), and everything below a scissors line. Git writes that template in
- * the user's language; under another locale its lines are linted too.
+ * The standard tokens of an identifier's shape, by prefix: these five and no
+ * other, fixed here and read from no configuration. Anything else of the shape
+ * that is no issue identifier is renamed, or sits in its repo's baseline.
  */
-export function lintCommitMessage(text: string): Violation[] {
-  const ends = [/^# -+ >8 -+$/m, /^# Please enter the commit message/m]
+const STANDARD_PREFIXES = new Set([
+  'SHA', // hash functions: SHA-256
+  'UTF', // character encodings: UTF-8
+  'GPL', // licence identifiers: GPL-3.0-or-later
+  'PDF', // format versions: PDF-1.4
+  'ADR', // architecture decision records: ADR-0009
+]);
+
+export function lintIssueIds(text: string, file: string): Violation[] {
+  return [...matches(text, ISSUE_ID)]
+    .filter(({ match }) => !STANDARD_PREFIXES.has(match[1] ?? ''))
+    .map(({ match, line }) => ({
+      lint: 'issue-id',
+      file,
+      line,
+      excerpt: match[0],
+      message: `${match[0]} reads as an issue identifier; say what it means instead`,
+    }));
+}
+
+/** The characters git picks from under `core.commentChar=auto`, in its order. */
+const AUTO_COMMENT_CHARS = '#;@!$%^&|:';
+
+/**
+ * A commit message's issue identifiers. Every line counts, comment lines too:
+ * under `git commit -m` git keeps them. What git adds itself is left out: its
+ * template, from the "Please enter the commit message" line on (it names the
+ * branch), and everything below a scissors line, both recognised by the
+ * repo's comment character (`core.commentChar`, read by the caller; under
+ * `auto`, any character git may pick). Git writes that template in the user's
+ * language; under another locale its lines are linted too.
+ */
+export function lintCommitMessage(text: string, comment = '#'): Violation[] {
+  const chars = comment === 'auto' ? [...AUTO_COMMENT_CHARS] : [comment];
+  const ends = chars
+    .flatMap((c) => {
+      const q = c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return [new RegExp(`^${q} -+ >8 -+$`, 'm'), new RegExp(`^${q} Please enter the commit message`, 'm')];
+    })
     .map((p) => text.search(p))
     .filter((n) => n !== -1);
   return lintIssueIds(ends.length > 0 ? text.slice(0, Math.min(...ends)) : text, 'commit message');
