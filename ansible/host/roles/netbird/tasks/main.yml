@@ -57,6 +57,7 @@
       provide NETBIRD_SETUP_KEY environment variable and re-run.
   when:
     - "'Management: Connected' not in netbird_status.stdout"
+    - not netbird_user_login
     - not ansible_check_mode
 
 - name: Join the NetBird network
@@ -66,6 +67,21 @@
       {{ ('--management-url ' ~ (netbird_management_url | quote)) if netbird_management_url | length > 0 else '' }}
   environment:
     NB_SETUP_KEY: "{{ netbird_setup_key }}"
-  when: "'Management: Connected' not in netbird_status.stdout"
+  when:
+    - "'Management: Connected' not in netbird_status.stdout"
+    - netbird_setup_key | length > 0
   changed_when: true
   no_log: true
+
+# Ansible does not run the sign-in itself: it waits on a browser, and would
+# open it as root.
+- name: Leave the NetBird sign-in to the user
+  ansible.builtin.debug:
+    msg: >-
+      This host has not joined a NetBird network. Sign in as a user with
+      `netbird up{{ (' --management-url ' ~ (netbird_management_url | quote)) if netbird_management_url | length > 0 else '' }}`
+      or Connect in the netbird-ui tray.
+  when:
+    - "'Management: Connected' not in netbird_status.stdout"
+    - netbird_setup_key | length == 0
+    - netbird_user_login

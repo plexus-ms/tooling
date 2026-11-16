@@ -3,6 +3,13 @@
 # from the environment so it is never committed.
 netbird_setup_key: "{{ lookup('ansible.builtin.env', 'NETBIRD_SETUP_KEY') }}"
 
+# Let a user join the peer by signing in, through the browser, instead of a
+# setup key: `netbird up` in a terminal, or Connect in the netbird-ui tray. A
+# host that has not joined and has no setup key is then left for that sign-in
+# instead of failing the play; a setup key, where given, still joins. For
+# workstations; servers keep the default.
+netbird_user_login: false
+
 # Management server to join. Empty = NetBird Cloud
 netbird_management_url: ""
 
