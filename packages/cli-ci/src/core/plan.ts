@@ -90,7 +90,7 @@ export interface DeployLeg {
   image: string;
 }
 
-/** The verbs a leg mounts, as its job is named: `build`, `test`, or `build, test`. */
+/** The verbs a leg owes, as the plan prints them: `build`, `test`, or `build, test`. */
 export const verbsOf = (leg: Pick<Leg, 'build' | 'test'>): string =>
   [leg.build ? 'build' : '', leg.test ? 'test' : ''].filter((v) => v !== '').join(', ');
 

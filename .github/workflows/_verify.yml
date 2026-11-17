@@ -278,9 +278,11 @@ jobs:
   # One job per leg of the plan, an app that owes something, and one machine
   # for it: the build where `matrix.build` says so, then the test where
   # `matrix.test` carries its hash. A build that fails ends the job, so its
-  # test never starts; the other apps' legs run on (fail-fast off).
+  # test never starts; the other apps' legs run on (fail-fast off). The name
+  # is fixed: the forge does not evaluate `matrix` for a job it skips, and
+  # most runs owe nothing. What a leg owes is in the plan's log and its steps.
   build-and-test:
-    name: ${{ matrix.build && (matrix.test != '' && 'build, test' || 'build') || 'test' }} (${{ matrix.app }})
+    name: build, test
     needs: plan
     if: ${{ needs.plan.outputs.matrix != '[]' }}
     strategy:
