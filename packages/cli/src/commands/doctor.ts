@@ -1,9 +1,10 @@
-// plx doctor [dir]: the staleness check (§ 13.4 PLX).
+// plx doctor [dir]: the declarations' check (§ 13.4 PLX).
 //
 // lib's `diagnose` does the work; this file finds the compendium, maps the
-// arguments and renders the report: one line per declaration, `✓` when
-// current and complete, `✗` with its findings otherwise, and a summary. Exit
-// code 1 when anything is stale. -q keeps the findings and the summary only.
+// arguments and renders the report: one line per declaration, `✓` with the
+// version the unit is on when complete, `✗` with its findings otherwise, and a
+// summary. Exit code 1 when anything is incomplete. -q keeps the findings and
+// the summary only.
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { diagnose, overview, type Report, readCatalog } from '@plexus-ms/lib';
@@ -17,7 +18,7 @@ const WORKSPACE_COMPENDIUM = 'plexus-ms/compendium';
 export function register(program: Command): void {
   program
     .command('doctor')
-    .description('check every PLEXUS.md under a directory for modules that changed since and dependencies not declared')
+    .description('check every PLEXUS.md under a directory for modules no page carries and dependencies not declared')
     .argument('[dir]', 'directory to check', '.')
     .option(
       '--compendium <path>',
@@ -37,7 +38,7 @@ export function register(program: Command): void {
       const report = diagnose(await overview(ctx, root, { git: false }), catalog);
       const s = style(opts.color ?? colorByDefault());
       ctx.result(report, (r) => renderReport(r, s, !ctx.quiet));
-      if (report.stale > 0 || report.declarations.length === 0) process.exitCode = 1;
+      if (report.incomplete > 0 || report.declarations.length === 0) process.exitCode = 1;
     });
 }
 
@@ -52,7 +53,7 @@ export function renderReport(report: Report, s: Style, showCurrent: boolean): st
   }
   const n = report.declarations.length;
   if (n === 0) lines.push(s.warn('✗ no PLEXUS.md marker found'));
-  else if (report.stale > 0) lines.push(s.warn(`✗ ${report.stale} of ${n} declarations stale or incomplete`));
-  else lines.push(s.ok(`✓ ${n} declarations current and complete`));
+  else if (report.incomplete > 0) lines.push(s.warn(`✗ ${report.incomplete} of ${n} declarations incomplete`));
+  else lines.push(s.ok(`✓ ${n} declarations complete`));
   return lines.join('\n');
 }

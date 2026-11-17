@@ -12,6 +12,8 @@ export interface Directory {
   template?: TemplateFacet;
   copier?: Answers;
   declaration?: Declaration;
+  /** The `plx` pin of the directory's `mise.toml`: the Plexus version a repo is on (§ 1.5 PLX). */
+  pin?: string;
   /** Marker files that could not be read; shown, never fatal. */
   problems?: string[];
   children: Directory[];
@@ -47,6 +49,13 @@ export function kindOf(declaration: Declaration): Kind | undefined {
   if (has('PLX-Repo')) return 'repo';
   return undefined;
 }
+
+/**
+ * The Plexus version a unit is on: its `plx` pin, else what its marker says.
+ * The marker's `plexus` is the fallback for a directory without a pin, an app
+ * among them, until markers no longer carry the field.
+ */
+export const versionOf = (dir: Directory): string | undefined => dir.pin ?? dir.declaration?.plexus;
 
 /** A git remote URL as a short handle: `gh:org/repo` for GitHub, the URL otherwise. */
 export function shortRemote(url: string): string {

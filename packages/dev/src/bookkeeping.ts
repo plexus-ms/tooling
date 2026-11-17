@@ -47,7 +47,6 @@ export const bumpManifestVersion = (text: string, version: string): string =>
   text.replace(/^(\s*"version":\s*")[^"]*(")/m, `$1${version}$2`);
 
 /** The plx and plx-ci pins in a `mise.toml`, exact, in either spelling: `"npm:@plexus-ms/cli" = "N"` or `= { version = "N", ... }`. */
-export const PLX_PIN = 'npm:@plexus-ms/cli';
 export const bumpPlxPin = (text: string, version: string): string =>
   text.replace(/("npm:@plexus-ms\/cli(?:-ci)?"\s*=\s*(?:\{\s*version\s*=\s*)?")[^"]*(")/g, `$1${version}$2`);
 

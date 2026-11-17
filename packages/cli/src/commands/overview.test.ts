@@ -11,6 +11,7 @@ test('renderTree draws the tree with one annotation per facet', () => {
     git: { branch: 'develop', dirty: true, remote: 'gh:t/web' },
     copier: { commit: '0.62.0', src: 'https://github.com/plexus-ms/preset-repo-web.git', answers: {} },
     declaration: { plexus: '0.62.0', modules: ['PLX-Repo', 'PLX-JS'], body: '' },
+    pin: '0.63.0',
     children: [
       {
         name: 'apps',
@@ -28,7 +29,7 @@ test('renderTree draws the tree with one annotation per facet', () => {
     renderTree(root, style(false), true),
     [
       'ws/',
-      '├─ web/ [develop* → gh:t/web] [copier 0.62.0 ← gh:plexus-ms/preset-repo-web] [repo 0.62.0 Repo, JS]',
+      '├─ web/ [develop* → gh:t/web] [copier 0.62.0 ← gh:plexus-ms/preset-repo-web] [repo 0.63.0 Repo, JS]',
       '│  └─ apps/',
       '│     └─ site/ [! PLEXUS.md: no frontmatter]',
       '└─ tpl/ [template untagged]',

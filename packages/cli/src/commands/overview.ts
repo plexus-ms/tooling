@@ -7,10 +7,11 @@
 //                                             --sync fetches first and adds ↓<behind> ↑<ahead>
 //   [template <tag>]                          a copier template
 //   [copier <commit> ← <src>]                 a copier-managed project
-//   [<kind> <plexus version>]                 a declared Plexus unit (PLEXUS.md);
+//   [<kind> <plexus version>]                 a declared Plexus unit (PLEXUS.md), on the
+//                                             version its plx pin names (else its marker's);
 //                                             -v adds the declared modules
 import { resolve } from 'node:path';
-import { type Directory, kindOf, overview, shortRemote } from '@plexus-ms/lib';
+import { type Directory, kindOf, overview, shortRemote, versionOf } from '@plexus-ms/lib';
 import type { Command } from 'commander';
 import { contextOf } from '../program.ts';
 import { colorByDefault, type Style, style } from '../style.ts';
@@ -65,7 +66,7 @@ function annotate(dir: Directory, s: Style, modules: boolean): string {
   if (dir.declaration) {
     const kind = kindOf(dir.declaration) ?? 'declared';
     const mods = modules ? ` ${dir.declaration.modules.map((m) => m.replace(/^PLX-/, '')).join(', ')}` : '';
-    tags.push(s.bold(`[${kind} ${dir.declaration.plexus}${mods}]`));
+    tags.push(s.bold(`[${kind} ${versionOf(dir)}${mods}]`));
   }
   for (const p of dir.problems ?? []) tags.push(s.warn(`[! ${p}]`));
   return tags.length ? ` ${tags.join(' ')}` : '';

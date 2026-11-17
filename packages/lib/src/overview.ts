@@ -13,6 +13,7 @@ import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers, TEMPLATE_FILES } from './copier.ts';
 import { MARKER_FILE, parseMarker } from './marker.ts';
 import { type Directory, type GitFacet, isNotable, shortRemote, type TemplateFacet } from './model.ts';
+import { plxPinOf } from './version.ts';
 
 /** Heavy or generated directories never descended into. `.git` is the repo marker and is handled apart. */
 export const PRUNED = new Set([
@@ -45,6 +46,9 @@ export interface ScanOptions {
   /** Fetch every repo's remotes, then count commits ahead of and behind the upstream; slow, so opt-in. */
   fetch?: boolean;
 }
+
+/** Where a repo pins plx, which names the version it is on. */
+const MISE_FILE = 'mise.toml';
 
 /** Fetches in flight at once: enough to hide network latency, few enough not to trip a host's rate limit. */
 const FETCHES = 8;
@@ -103,6 +107,12 @@ async function walk(ctx: Context, path: string, name: string, options: Required<
   if (files.has(MARKER_FILE)) {
     await facet(ctx, dir, MARKER_FILE, (text) => {
       dir.declaration = parseMarker(text);
+    });
+  }
+  if (files.has(MISE_FILE)) {
+    await facet(ctx, dir, MISE_FILE, (text) => {
+      const pin = plxPinOf(text);
+      if (pin) dir.pin = pin;
     });
   }
 

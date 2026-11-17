@@ -9,29 +9,30 @@ import { fakeIo, type Tree } from './testing/fakeIo.ts';
 // The toolbox's offline harness, as a tree: a four-module compendium and one
 // tenant whose markers exercise every finding and every way a dependency is
 // satisfied (self, enclosing, contained, consumed).
-const page = (code: string, binds: string, changed?: string, depends = '', consumes = '') =>
-  `---\ncode: ${code}\nmaturity: standard\nbinds: ${binds}\n${changed ? `changed: ${changed}\n` : ''}${consumes ? `consumes: [${consumes}]\n` : ''}depends: [${depends}]\n---\n\nProse.\n`;
+const page = (code: string, binds: string, depends = '', consumes = '') =>
+  `---\ncode: ${code}\nmaturity: standard\nbinds: ${binds}\n${consumes ? `consumes: [${consumes}]\n` : ''}depends: [${depends}]\n---\n\nProse.\n`;
 const marker = (plexus: string, modules: string) => `---\nplexus: ${plexus}\nmodules: [${modules}]\n---\n`;
 
 const compendium: Tree = {
   contracts: {
     'index.md': '---\ntitle: x\n---\n',
-    'repo.md': page('PLX-Repo', 'repo', '0.2.0'),
-    'app.md': page('PLX-App', 'app', '0.1.0', 'PLX-Repo'),
+    'repo.md': page('PLX-Repo', 'repo'),
+    'app.md': page('PLX-App', 'app', 'PLX-Repo'),
     'tenancy.md': page('PLX-Tenancy', 'organisation'),
     'host.md': page('PLX-Host', 'host'),
   },
   approaches: {
-    'platform.md': page('PLX-Platform', 'host', '0.1.0', 'PLX-Tenancy', 'PLX-Host, PLX-App'),
-    'ci.md': page('PLX-CI', 'repo', undefined, 'PLX-Repo, PLX-Deploy'),
-    'deploy.md': page('PLX-Deploy', 'app', undefined, '', 'PLX-App, PLX-Host'),
+    'platform.md': page('PLX-Platform', 'host', 'PLX-Tenancy', 'PLX-Host, PLX-App'),
+    'ci.md': page('PLX-CI', 'repo', 'PLX-Repo, PLX-Deploy'),
+    'deploy.md': page('PLX-Deploy', 'app', '', 'PLX-App, PLX-Host'),
     'note.md': '---\ntitle: a note\nmaturity: note\nbinds: host\ndepends: []\n---\n',
   },
 };
 
 const tenant: Tree = {
   platform: {
-    'PLEXUS.md': marker('0.1.0', 'PLX-Repo, PLX-Tenancy, PLX-Platform'), // Repo changed in 0.2.0 → stale; Platform's deps: Tenancy (self), consumes ignored
+    'PLEXUS.md': marker('0.1.0', 'PLX-Repo, PLX-Tenancy, PLX-Platform'), // Platform's deps: Tenancy (self), consumes ignored
+    'mise.toml': '[tools]\n"npm:@plexus-ms/cli" = { version = "0.3.0", allow_low_downloads = true }\n', // the version it is on
     apps: { third: { 'PLEXUS.md': marker('0.2.0', 'PLX-App, PLX-Deploy') } }, // App depends on Repo → the platform repo encloses it
   },
   web: {
@@ -61,22 +62,23 @@ test('doctor reports every finding of the harness and nothing else', async () =>
     't/web/apps/x',
     't/web/apps/y',
   ]);
-  assert.deepEqual(by['t/platform']?.findings, ['PLX-Repo changed in 0.2.0, declared at 0.1.0']);
+  assert.deepEqual(by['t/platform']?.findings, [], 'a marker behind the version is no finding');
+  assert.equal(by['t/platform']?.plexus, '0.3.0', "the version is the repo's plx pin");
+  assert.equal(by['t/web/apps/x']?.plexus, '0.2.0', "else the marker's");
   assert.deepEqual(by['t/web/apps/y']?.findings, ['declares PLX-Nope, which no module carries']);
   assert.deepEqual(by['t/legacy']?.findings, ['no frontmatter: expected a `---` block at the top']);
   assert.deepEqual(by['t/platform/apps/third']?.findings, [], 'an enclosing declaration satisfies an app');
   assert.deepEqual(by['t/web']?.findings, [], 'a contained declaration satisfies a repo');
   assert.deepEqual(by['t/web/apps/x']?.findings, []);
-  assert.equal(report.stale, 3);
+  assert.equal(report.incomplete, 2);
 });
 
-test('doctor is clean once every declaration is current and complete', async () => {
+test('doctor is clean once every declaration is complete', async () => {
   const fixed: Tree = structuredClone(tenant);
-  (fixed.platform as Tree)['PLEXUS.md'] = marker('0.2.0', 'PLX-Repo, PLX-Tenancy, PLX-Platform');
   ((fixed.web as Tree).apps as Tree).y = { 'PLEXUS.md': marker('0.2.0', 'PLX-App, PLX-Deploy') };
   delete fixed.legacy;
   const report = await run({ 'plexus-ms': { compendium }, t: fixed });
-  assert.equal(report.stale, 0);
+  assert.equal(report.incomplete, 0);
   assert.equal(report.declarations.length, 5);
 });
 
@@ -99,12 +101,11 @@ test('the tenant declaration satisfies its repos, and its repos satisfy it', asy
 
 test('parseModule skips notes and reads every field', () => {
   assert.equal(parseModule('---\ntitle: n\nmaturity: note\n---\n', 'approach'), undefined);
-  assert.deepEqual(parseModule(page('PLX-Platform', 'host', '0.1.0', 'PLX-Tenancy', 'PLX-Host, PLX-App'), 'approach'), {
+  assert.deepEqual(parseModule(page('PLX-Platform', 'host', 'PLX-Tenancy', 'PLX-Host, PLX-App'), 'approach'), {
     code: 'PLX-Platform',
     kind: 'approach',
     maturity: 'standard',
     binds: 'host',
-    changed: '0.1.0',
     depends: ['PLX-Tenancy'],
     consumes: ['PLX-Host', 'PLX-App'],
   });

@@ -22,6 +22,13 @@ export const VERSIONED_REPOS = [
 /** A Plexus version is plain semver, no `v` prefix (§ 1.5 PLX). */
 export const isPlexusVersion = (v: string): boolean => /^\d+\.\d+\.\d+$/.test(v);
 
+/** The tool whose pin in a repo's `mise.toml` names the version the repo is on (§ 1.5 PLX). */
+export const PLX_PIN = 'npm:@plexus-ms/cli';
+
+/** The plx pin of a `mise.toml`, in either spelling of a mise tool: `"npm:@plexus-ms/cli" = "N"` or `= { version = "N", ... }`. */
+export const plxPinOf = (text: string): string | undefined =>
+  /^\s*"npm:@plexus-ms\/cli"\s*=\s*(?:\{[^}\n]*?\bversion\s*=\s*)?"([^"]*)"/m.exec(text)?.[1];
+
 /**
  * The forge CLI is what opens a pull request and creates a release; an expired
  * login is found here, before anything is written.

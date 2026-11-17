@@ -1,9 +1,8 @@
-// doctor: the staleness check (§ 13.4 PLX), a verb, not a system.
+// doctor: the declarations' check (§ 13.4 PLX), a verb, not a system.
 //
-// Every PLEXUS.md marker under a directory is read, and for each module it
-// declares the module's `changed` version is compared with the marker's
-// `plexus`; every `depends` entry of a declared module has to be declared
-// where § 1.4 says it is satisfied: by the unit itself, by an enclosing
+// Every PLEXUS.md marker under a directory is read; every module it declares
+// has to be one the catalogue carries, and every `depends` entry of a declared
+// module has to be declared where § 1.4 says it is satisfied: by the unit itself, by an enclosing
 // declaration (an app's repo, a repo's tenant) or by a contained one (a
 // repo's apps, a tenant's repos). What a module `consumes` is the other side
 // of a seam and never this unit's to declare. Findings are reported, never
@@ -14,11 +13,12 @@
 //   plx doctor ~/dev --compendium ~/dev/plexus-ms/compendium
 import { relative } from 'node:path';
 import type { Catalog } from './catalog.ts';
-import type { Directory } from './model.ts';
+import { type Directory, versionOf } from './model.ts';
 
 export interface Diagnosis {
   /** The marker's directory, relative to the scanned root. */
   path: string;
+  /** The Plexus version the unit is on (versionOf). */
   plexus?: string;
   modules: string[];
   findings: string[];
@@ -27,14 +27,14 @@ export interface Diagnosis {
 export interface Report {
   declarations: Diagnosis[];
   /** Declarations with at least one finding. */
-  stale: number;
+  incomplete: number;
 }
 
 /** A scanned tree against a catalogue: pure, so a test compares reports. */
 export function diagnose(root: Directory, catalog: Catalog): Report {
   const units = collect(root, []);
   const declarations = units.map((u) => diagnoseUnit(u, units, catalog, root.path));
-  return { declarations, stale: declarations.filter((d) => d.findings.length > 0).length };
+  return { declarations, incomplete: declarations.filter((d) => d.findings.length > 0).length };
 }
 
 interface Unit {
@@ -59,7 +59,7 @@ function diagnoseUnit(unit: Unit, units: Unit[], catalog: Catalog, root: string)
   if (!dir.declaration)
     return { path, modules: [], findings: [problem?.replace(/^PLEXUS\.md: /, '') ?? 'unreadable marker'] };
 
-  const { plexus, modules } = dir.declaration;
+  const { modules } = dir.declaration;
   const context = new Set(contextOf(unit, units).flatMap((d) => d.declaration?.modules ?? []));
   const findings: string[] = [];
   for (const code of modules) {
@@ -68,13 +68,11 @@ function diagnoseUnit(unit: Unit, units: Unit[], catalog: Catalog, root: string)
       findings.push(`declares ${code}, which no module carries`);
       continue;
     }
-    if (module.changed && compareVersions(module.changed, plexus) > 0)
-      findings.push(`${code} changed in ${module.changed}, declared at ${plexus}`);
     for (const dep of module.depends)
       if (!modules.includes(dep) && !context.has(dep))
         findings.push(`${code} depends on ${dep}, declared neither here nor by an enclosing or contained declaration`);
   }
-  return { path, plexus, modules, findings };
+  return { path, plexus: versionOf(dir), modules, findings };
 }
 
 /** The declarations that may satisfy a unit's dependencies: enclosing and contained ones (§ 1.4 PLX). */

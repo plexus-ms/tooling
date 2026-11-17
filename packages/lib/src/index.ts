@@ -78,6 +78,7 @@ export {
   kindOf,
   shortRemote,
   type TemplateFacet,
+  versionOf,
 } from './model.ts';
 export {
   DEFAULT_MAX_AGE,
@@ -122,4 +123,12 @@ export {
 export { mergeLine, renderSummary } from './summary.ts';
 export { detail, emptySummary, isClean, type Summary, type Take, takeVersion } from './take.ts';
 export { type UpdateOptions, update } from './update.ts';
-export { COMPENDIUM, isPlexusVersion, preflightForge, UsageError, VERSIONED_REPOS } from './version.ts';
+export {
+  COMPENDIUM,
+  isPlexusVersion,
+  PLX_PIN,
+  plxPinOf,
+  preflightForge,
+  UsageError,
+  VERSIONED_REPOS,
+} from './version.ts';

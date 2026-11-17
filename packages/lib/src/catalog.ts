@@ -10,8 +10,6 @@ export interface Module {
   kind: 'contract' | 'approach';
   maturity: string;
   binds: string;
-  /** The version in which the module's requirements last changed; standard modules only. */
-  changed?: string;
   /** Codes on the same side of every seam that a declaration of this module has to accompany. */
   depends: string[];
   /** Contracts on the other side of a seam; never the declaring unit's to satisfy. */
@@ -31,7 +29,6 @@ export function parseModule(text: string, kind: Module['kind']): Module | undefi
     kind,
     maturity: String(data.maturity ?? ''),
     binds: String(data.binds ?? ''),
-    changed: data.changed === undefined ? undefined : String(data.changed),
     depends: codes(data.depends),
     consumes: codes(data.consumes),
   };

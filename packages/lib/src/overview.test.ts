@@ -13,6 +13,7 @@ const workspace: Tree = {
       '.git': {},
       'PLEXUS.md': marker('PLX-Repo, PLX-JS'),
       '.copier-answers.yml': answers('gh:plexus-ms/preset-repo-web'),
+      'mise.toml': '[tools]\n"npm:@plexus-ms/cli" = { version = "0.63.0", allow_low_downloads = true }\n',
       node_modules: { junk: { '.git': {} } },
       apps: {
         website: {
@@ -76,7 +77,9 @@ test('overview maps the facets of a workspace and prunes what carries none', asy
     web?.children.map((c) => c.name),
     ['apps'],
   );
+  assert.equal(web?.pin, '0.63.0', 'the plx pin of its mise.toml');
   assert.equal(web?.children[0]?.children[0]?.declaration?.plexus, '0.62.0');
+  assert.equal(web?.children[0]?.children[0]?.pin, undefined, 'an app pins nothing');
 });
 
 test('overview --sync fetches every repo and counts the drift from its upstream', async () => {
