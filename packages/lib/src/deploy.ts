@@ -4,7 +4,7 @@
 //   render compose.yaml from the invoking checkout, pinning the image ref (§§ 2 and 3 PLX-App)
 //   → stage it on the host → docker compose pull → compose run --rm migrate (if declared),
 //     both against the staged file → swap the file into place → docker compose up -d --remove-orphans
-//     → poll the readiness path → on failure: restore the previous file, up -d --remove-orphans (no pull), fail
+//     → wait for web's healthcheck → on failure: restore the previous file, up -d --remove-orphans (no pull), fail
 //
 // Run from a checkout of the app's SOURCE repo (§ 2 PLX-App): an app repo's
 // CI, or the operations repo for third-party software the tenant merely
@@ -20,7 +20,7 @@
 //
 // Every command sent to the host is one line of shell over ssh, carried in
 // the plan and printed verbatim by the dry run, so a stranded operator copies
-// the lines; the host needs bash, docker and curl and nothing else. The ssh
+// the lines; the host needs bash and docker and nothing else. The ssh
 // calls share one connection (ControlMaster), opened by the first and closed
 // at the end. Reality is the source of truth: the previous image is read from
 // the running container, never from a file this verb owns.
@@ -29,11 +29,12 @@
 // has them declares a one-shot `migrate` service (same image, migrate command,
 // `profiles: ["migrate"]` so plain `up` never starts it). The `web` service is
 // the app service by convention; it is the one the live image and the
-// readiness path are read from, every other service rides along with pull
-// and up. A third-party app pins its image inside compose.yaml and passes no
-// image ref; the file is then placed as is. Where the host already serves
-// the same file with `web` running and healthy, with or without a ref, the
-// verb ends there: nothing is pulled, migrated or restarted.
+// health status are read from, and the one that must declare a healthcheck
+// (PLX-App/Healthcheck); every other service rides along with pull and up.
+// A third-party app pins its image inside compose.yaml and passes no image
+// ref; the file is then placed as is. Where the host already serves the same
+// file with `web` running and healthy, with or without a ref, the verb ends
+// there: nothing is pulled, migrated or restarted.
 //
 //   plx deploy deploy@1.2.3.4 website --image ghcr.io/org/website:<sha>
 //   plx deploy deploy@1.2.3.4 website --environment staging --image …   # into /opt/stacks/website-staging
@@ -41,6 +42,7 @@
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parse } from 'yaml';
 import type { Context } from './context.ts';
 import { DEFAULT_ENVIRONMENT, deploymentSlug } from './deployTargets.ts';
 import { run } from './effects.ts';
@@ -53,9 +55,7 @@ export interface DeployOptions {
   app: string;
   /** The image ref to pin; empty or absent for a third-party app whose file pins its own. */
   image?: string;
-  /** The readiness URL polled on the host; resolved there from .env and the `plexus.healthz` label when empty. */
-  healthUrl?: string;
-  /** Poll attempts, two seconds apart. */
+  /** Looks at the app container's health status, two seconds apart. */
   retries?: number;
   /** The environment deployed into; default production. Decides the app dir's slug (§ 3 PLX-Platform). */
   environment?: string;
@@ -173,6 +173,17 @@ class Remote {
   }
 }
 
+/**
+ * Whether the app service declares a healthcheck that is not disabled
+ * (`PLX-App/Healthcheck`): the deploy waits on it, so a file without one
+ * cannot be deployed. Read from the rendered file, as compose would read it;
+ * anchors and merge keys resolve, `extends` and `include` do not.
+ */
+export function declaresHealthcheck(text: string): boolean {
+  const check = parse(text, { merge: true })?.services?.web?.healthcheck;
+  return check != null && check.disable !== true && check.test?.[0] !== 'NONE';
+}
+
 /** What every host-side step works with: one connection, the app dir's commands, and the result filled in as they go. */
 interface Session {
   ctx: Context;
@@ -186,8 +197,6 @@ interface Session {
   /** The running `web` container's image, or nothing. */
   liveImage: string;
   image?: string;
-  /** The readiness URL, given or resolved on the host when first polled. */
-  url?: string;
   result: Deploy;
 }
 
@@ -214,12 +223,16 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
   if (compose === undefined)
     throw new UsageError(`no compose.yaml under ${source}; run from the app's source repo (§ 2 PLX-App)`);
   const rendered = renderCompose(text, image, compose);
+  if (!declaresHealthcheck(rendered))
+    throw new UsageError(
+      `${compose}: the web service declares no healthcheck, and the deploy waits for it to turn healthy (PLX-App/Healthcheck)`,
+    );
 
   ctx.say(`→ deploying ${image ?? '<image pinned in compose.yaml>'}`);
   ctx.say(`  host:    ${host}`);
   ctx.say(`  dir:     ${appDir}`);
   ctx.say(`  compose: ${compose}`);
-  ctx.say(`  health:  ${options.healthUrl || '<resolved on host>'}`);
+  ctx.say('  health:  the healthcheck of service web, as Docker reports it');
 
   const D = q(appDir);
   // The staged compose file, read in place: --project-directory keeps .env and
@@ -234,7 +247,6 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
     dci: `${dc} --project-directory . -f ${INCOMING}/compose.yaml`,
     liveImage: `${dc} ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{.Config.Image}}' 2>/dev/null || true`,
     image,
-    url: options.healthUrl || undefined,
     result: { host, appDir, compose, image, healthy: false, rolledBack: false },
   };
   const { result } = s;
@@ -252,7 +264,7 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
     if ((await awaitHealthy(s, retries, true)) !== false) {
       result.live = (await s.remote.read(s.liveImage)) || image;
       result.healthy = true;
-      if (ctx.dryRun) ctx.say('  (on failure: restore the previous compose.yaml, up -d --remove-orphans, poll again)');
+      if (ctx.dryRun) ctx.say('  (on failure: restore the previous compose.yaml, up -d --remove-orphans, wait again)');
       else ctx.done(`${result.live ?? 'the app'} is live and healthy`);
       return result;
     }
@@ -343,17 +355,15 @@ async function swapAndUp(s: Session): Promise<boolean | undefined> {
 }
 
 /**
- * Poll the readiness path: /healthz by contract (§ 5 PLX-App); a third-party
- * image that cannot serve it declares its own via the `plexus.healthz` label,
- * read from the running container, reality, not a parse of the compose file.
- * Each attempt is bounded, so a container that accepts connections but never
- * answers cannot hang the deploy. Whether it answered (undefined under
- * --dry-run, where `show` prints the line).
+ * Wait for the `web` container to turn healthy, as Docker reports it from the
+ * healthcheck the compose file declares (PLX-App/Healthcheck): reality, read
+ * from the running container, two seconds between looks. Whether it did
+ * (undefined under --dry-run, where `show` prints the line).
  */
-async function awaitHealthy(s: Session, attempts: number, show = false): Promise<boolean | undefined> {
-  s.url ??= await resolveHealthUrl(s);
+function awaitHealthy(s: Session, attempts: number, show = false): Promise<boolean | undefined> {
+  const status = `docker compose ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' 2>/dev/null`;
   return s.remote.test(
-    `cd ${s.D} && for _ in $(seq 1 ${attempts}); do curl -fsS --max-time 5 -o /dev/null ${q(s.url)} && exit 0; sleep 2; done; exit 1`,
+    `cd ${s.D} && for _ in $(seq 1 ${attempts}); do [ "$(${status})" = healthy ] && exit 0; sleep 2; done; exit 1`,
     show,
   );
 }
@@ -384,16 +394,4 @@ async function rollback(s: Session, hadPrev: boolean | undefined, retries: numbe
   } else {
     ctx.done('rollback also unhealthy; manual intervention needed', false);
   }
-}
-
-async function resolveHealthUrl({ remote, D, dc, ctx }: Session): Promise<string> {
-  const port = await remote.read(`sed -n 's/^PLEXUS_LOOPBACK_PORT=//p' ${D}/.env 2>/dev/null | tail -1`);
-  const path = await remote.read(
-    `${dc} ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{ index .Config.Labels "plexus.healthz" }}' 2>/dev/null || true`,
-  );
-  const url = ctx.dryRun
-    ? 'http://127.0.0.1:${PLEXUS_LOOPBACK_PORT:-3000}${plexus.healthz:-/healthz}'
-    : `http://127.0.0.1:${port || '3000'}${path || '/healthz'}`;
-  ctx.say(`  health:   ${url}`);
-  return url;
 }

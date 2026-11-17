@@ -1,13 +1,13 @@
 // The offline harness of the deploy verb, reborn from ci-cd's bash days: a
 // fake `ssh` on PATH that runs each remote one-liner locally with bash, in a
 // scratch app dir standing in for /opt/stacks/<app>, with a fake
-// `docker` and a fake `curl` next to it. Every docker call is appended to
-// FAKE_LOG; the fake docker keeps "what runs" in <app dir>/.running, read by
-// `compose ps`/`inspect`, written by `compose up`, so reality on the fake host
-// is a file the verb never reads itself.
+// `docker` next to it. Every docker call is appended to FAKE_LOG; the fake
+// docker keeps "what runs" in <app dir>/.running, read by `compose ps`/`inspect`,
+// written by `compose up`, so reality on the fake host is a file the verb
+// never reads itself.
 //
 //   FAKE_PULL_FAIL=1   `docker compose pull` exits 1
-//   an image containing "bad" never answers the fake curl
+//   an image containing "bad" never turns healthy
 import assert from 'node:assert/strict';
 import {
   chmodSync,
@@ -58,7 +58,7 @@ if [ "$1" = inspect ]; then
   # inspect --format <fmt> <cid>
   case "$3" in
     *Config.Image*) cat .running ;;
-    *plexus.healthz*) echo "" ;;
+    *State.Health*) grep -q bad .running && echo starting || echo healthy ;;
   esac
   exit 0
 fi
@@ -77,29 +77,23 @@ esac
 `,
 );
 
-fake(
-  'curl',
-  `
-[ -f .running ] || exit 7
-grep -q bad .running && exit 22 || exit 0
-`,
-);
-
 const COMPOSE = `services:
   web:
     image: \${PLEXUS_DEPLOYMENT_IMAGE:?set}
     ports: ["127.0.0.1:3011:3000"]
+    healthcheck:
+      test: ["CMD", "true"]
   migrate:
     image: \${PLEXUS_DEPLOYMENT_IMAGE:?set}
     command: pnpm migrate
     profiles: ["migrate"]
 `;
 
-function fixture(previous?: string) {
+function fixture(previous?: string, compose = COMPOSE) {
   const root = mkdtempSync(join(TMP, 'case-'));
   const checkout = join(root, 'checkout');
   mkdirSync(join(checkout, 'apps/web/docker'), { recursive: true });
-  writeFileSync(join(checkout, 'apps/web/docker/compose.yaml'), COMPOSE);
+  writeFileSync(join(checkout, 'apps/web/docker/compose.yaml'), compose);
   const appDir = join(root, 'host', 'web');
   mkdirSync(appDir, { recursive: true });
   writeFileSync(join(appDir, '.env'), 'PLEXUS_LOOPBACK_PORT=3011\n');
@@ -156,7 +150,7 @@ test('happy path on the fake host: pull and migrate against the staged file, swa
     'docker compose [staged] run --rm migrate',
     'docker compose up -d --remove-orphans',
   ]);
-  assert.match(err, /health: {3}http:\/\/127.0.0.1:3011\/healthz/);
+  assert.match(err, /health: {2}the healthcheck of service web/);
   assert.match(err, /✓ ghcr.io\/x\/web:new is live and healthy/);
 });
 
@@ -197,4 +191,16 @@ test('a first deploy on an empty app dir works, and an unhealthy one fails witho
   assert.equal(r.rolledBack, false);
   assert.match(err, /nothing to roll back to/);
   assert.ok(!existsSync(join(bad.appDir, 'compose.yaml.prev')));
+});
+
+test('an app service without a healthcheck fails before the host is touched, naming the requirement', async () => {
+  const { checkout, appDir, log } = fixture('ghcr.io/x/web:old', COMPOSE.replace(/ {4}healthcheck:\n.*\n/, ''));
+  await assert.rejects(
+    run({}, checkout, appDir, 'ghcr.io/x/web:new', { FAKE_LOG: log }),
+    /declares no healthcheck.*PLX-App\/Healthcheck/,
+  );
+  assert.equal(readFileSync(join(appDir, '.running'), 'utf8').trim(), 'ghcr.io/x/web:old');
+  assert.match(readFileSync(join(appDir, 'compose.yaml'), 'utf8'), /image: ghcr.io\/x\/web:old/);
+  assert.ok(!existsSync(join(appDir, '.incoming')));
+  assert.deepEqual(dockerLog(log), []);
 });

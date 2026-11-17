@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { Context, type Options } from './context.ts';
-import { defaultAppDir, deploy, q, renderCompose } from './deploy.ts';
+import { declaresHealthcheck, defaultAppDir, deploy, q, renderCompose } from './deploy.ts';
 import { fakeIo, type Tree } from './testing/fakeIo.ts';
 import { UsageError } from './version.ts';
 
 const COMPOSE = 'services:\n  web:\n    image: ${PLEXUS_DEPLOYMENT_IMAGE:?set}\n';
 const PINNED = 'services:\n  web:\n    image: ghcr.io/x/beszel:1.0\n';
+/** The app service's healthcheck (PLX-App/Healthcheck), which every deployed file declares. */
+const HEALTHCHECK = '    healthcheck:\n      test: [CMD, "true"]\n';
 
 test('renderCompose pins the placeholder once, with or without a message, and refuses a mismatch', () => {
   assert.equal(renderCompose(COMPOSE, 'ghcr.io/x/web:abc', 'c'), 'services:\n  web:\n    image: ghcr.io/x/web:abc\n');
@@ -52,7 +54,7 @@ function harness(tree: Tree, host: Host, options: Options = {}) {
   return { ctx: new Context(options, io), commands, err: () => err };
 }
 
-const checkout: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': COMPOSE } } } } };
+const checkout: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': COMPOSE + HEALTHCHECK } } } } };
 const D = "'/opt/stacks/web'";
 
 /** A host serving `previous`, declaring migrate, healthy unless the live image contains "bad". */
@@ -75,10 +77,8 @@ function host(previous: string | undefined, { migrate = true } = {}): Host & { l
         h.live = previous;
         return '';
       }
-      if (command.includes('curl')) return h.live?.includes('bad') ? undefined : '';
+      if (command.includes('.State.Health.Status')) return h.live?.includes('bad') ? undefined : '';
       if (command.includes('cmp -s')) return '';
-      if (command.includes('PLEXUS_LOOPBACK_PORT')) return '3011\n';
-      if (command.includes('plexus.healthz')) return '/api/health\n';
       if (command.includes('logs')) return 'boom\n';
       return '';
     },
@@ -86,7 +86,7 @@ function host(previous: string | undefined, { migrate = true } = {}): Host & { l
   return h;
 }
 
-test('happy path: stage, pull, migrate, keep the previous file, swap, up, poll the resolved URL', async () => {
+test('happy path: stage, pull, migrate, keep the previous file, swap, up, wait for the healthcheck', async () => {
   const h = host('ghcr.io/x/web:old');
   const { ctx, commands, err } = harness(checkout, h);
   const result = await deploy(ctx, {
@@ -96,9 +96,9 @@ test('happy path: stage, pull, migrate, keep the previous file, swap, up, poll t
     image: 'ghcr.io/x/web:new',
     dir: '/repo',
   });
-  assert.equal(h.staged, 'services:\n  web:\n    image: ghcr.io/x/web:new\n');
+  assert.equal(h.staged, `services:\n  web:\n    image: ghcr.io/x/web:new\n${HEALTHCHECK}`);
   assert.deepEqual(
-    commands.filter((c) => !c.includes('inspect') && !c.includes('PLEXUS_LOOPBACK_PORT')),
+    commands.filter((c) => !c.includes('inspect') || c.includes('.State.Health.Status')),
     [
       `rm -rf ${D}/.incoming && mkdir -p ${D}/.incoming && cat > ${D}/.incoming/compose.yaml`,
       `cd ${D} && docker compose --project-directory . -f .incoming/compose.yaml pull`,
@@ -108,7 +108,7 @@ test('happy path: stage, pull, migrate, keep the previous file, swap, up, poll t
       `cd ${D} && cp -p compose.yaml .incoming/compose.yaml.prev`,
       `cd ${D} && mv .incoming/compose.yaml compose.yaml`,
       `cd ${D} && docker compose up -d --remove-orphans`,
-      `cd ${D} && for _ in $(seq 1 30); do curl -fsS --max-time 5 -o /dev/null 'http://127.0.0.1:3011/api/health' && exit 0; sleep 2; done; exit 1`,
+      `cd ${D} && for _ in $(seq 1 30); do [ "$(docker compose ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' 2>/dev/null)" = healthy ] && exit 0; sleep 2; done; exit 1`,
       `rm -rf ${D}/.incoming`,
     ],
   );
@@ -125,24 +125,22 @@ test('happy path: stage, pull, migrate, keep the previous file, swap, up, poll t
   assert.match(err(), /✓ ghcr.io\/x\/web:new is live and healthy/);
 });
 
-test('no migrate service, a given health URL and a third-party file: fewer steps, nothing rendered', async () => {
+test('no migrate service and a third-party file: fewer steps, nothing rendered', async () => {
   const h = host(undefined, { migrate: false });
-  const tree: Tree = { repo: { apps: { beszel: { 'compose.yaml': PINNED } } } };
+  const tree: Tree = { repo: { apps: { beszel: { 'compose.yaml': PINNED + HEALTHCHECK } } } };
   const { ctx, commands } = harness(tree, h);
   const result = await deploy(ctx, {
     host: 'deploy@h',
 
     app: 'beszel',
     image: '',
-    healthUrl: 'http://127.0.0.1:8090/',
     retries: 3,
     dir: '/repo',
   });
-  assert.equal(h.staged, PINNED);
+  assert.equal(h.staged, PINNED + HEALTHCHECK);
   assert.ok(!commands.some((c) => c.includes('run --rm migrate')));
   assert.ok(!commands.some((c) => c.includes('cp -p compose.yaml')));
-  assert.ok(!commands.some((c) => c.includes('PLEXUS_LOOPBACK_PORT')));
-  assert.ok(commands.some((c) => c.includes('for _ in $(seq 1 3); do curl') && c.includes("'http://127.0.0.1:8090/'")));
+  assert.ok(commands.some((c) => c.includes('seq 1 3') && c.includes('.State.Health.Status')));
   assert.equal(result.compose, 'apps/beszel/compose.yaml');
   assert.equal(result.previous, undefined);
   assert.equal(result.live, 'ghcr.io/x/beszel:1.0');
@@ -201,6 +199,34 @@ test('a failing pull leaves the host as it was, cleans the staging dir and rethr
   assert.equal(h.live, 'ghcr.io/x/web:old');
 });
 
+test('an app service without a healthcheck is a usage error naming the requirement, before anything reaches the host', async () => {
+  for (const file of [COMPOSE, `${COMPOSE}    healthcheck:\n      disable: true\n`]) {
+    const tree: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': file } } } } };
+    const { ctx, commands } = harness(tree, host('ghcr.io/x/web:old'));
+    await assert.rejects(
+      deploy(ctx, { host: 'deploy@h', app: 'web', image: 'ghcr.io/x/web:new', dir: '/repo' }),
+      (e: Error) => e instanceof UsageError && /declares no healthcheck.*PLX-App\/Healthcheck/.test(e.message),
+    );
+    assert.deepEqual(commands, []);
+  }
+});
+
+test('declaresHealthcheck reads the app service, anchors and merge keys resolved, a disabled check not counted', () => {
+  assert.equal(declaresHealthcheck(COMPOSE + HEALTHCHECK), true);
+  assert.equal(declaresHealthcheck(COMPOSE), false);
+  assert.equal(
+    declaresHealthcheck('services:\n  db:\n    healthcheck:\n      test: [CMD, "true"]\n  web:\n    image: x\n'),
+    false,
+  );
+  assert.equal(declaresHealthcheck(`${COMPOSE}    healthcheck:\n      test: [NONE]\n`), false);
+  assert.equal(
+    declaresHealthcheck(
+      'x-web: &web\n  healthcheck:\n    test: [CMD, "true"]\nservices:\n  web:\n    <<: *web\n    image: x\n',
+    ),
+    true,
+  );
+});
+
 test('no compose file under the source is a usage error before anything reaches the host', async () => {
   const { ctx, commands } = harness({ repo: { apps: {} } }, host(undefined));
   await assert.rejects(deploy(ctx, { host: 'deploy@h', app: 'web', image: 'i', dir: '/repo' }), UsageError);
@@ -224,10 +250,10 @@ test('a dry run reaches no host and prints every ssh line of the happy path, pla
     /\[dry-run\] \$ ssh -o ControlMaster=auto -o ControlPath=\S+ -o ControlPersist=60 -o StrictHostKeyChecking=accept-new deploy@h -- 'cd '\\''\/opt\/stacks\/web'\\'' && docker compose up -d --remove-orphans'/,
   );
   assert.match(lines, /\(if compose.yaml declares a migrate service:\)/);
-  assert.match(lines, /\$\{PLEXUS_LOOPBACK_PORT:-3000\}\$\{plexus.healthz:-\/healthz\}/);
+  assert.match(lines, /health: {2}the healthcheck of service web, as Docker reports it/);
   assert.match(
     lines,
-    /\[dry-run\] \$ ssh deploy@h -- 'cd .* && for _ in \$\(seq 1 30\); do curl -fsS --max-time 5 -o \/dev\/null/,
+    /\[dry-run\] \$ ssh deploy@h -- 'cd .* && for _ in \$\(seq 1 30\); do .*\.State\.Health\.Status.* = healthy \]/,
   );
   assert.match(lines, /on failure: restore the previous compose.yaml/);
   assert.match(lines, /\[dry-run\] \$ ssh -o ControlPath=\S+ -O exit deploy@h/);
@@ -246,7 +272,7 @@ test('the same image from the same file, healthy: nothing pulled, nothing restar
     dir: '/repo',
   });
   assert.ok(commands.some((c) => c.includes(`cmp -s compose.yaml .incoming/compose.yaml`)));
-  assert.ok(commands.some((c) => c.includes('seq 1 1') && c.includes('curl')));
+  assert.ok(commands.some((c) => c.includes('seq 1 1') && c.includes('.State.Health.Status')));
   assert.ok(!commands.some((c) => c.endsWith(' pull')));
   assert.ok(!commands.some((c) => c.endsWith('up -d --remove-orphans')));
   assert.ok(!commands.some((c) => c.includes('mv .incoming')));
@@ -284,7 +310,7 @@ test('the same image from a changed file, or unhealthy, deploys in full', async 
 });
 
 test('a third-party file the host already serves, running and healthy: nothing pulled, nothing restarted', async () => {
-  const tree: Tree = { repo: { apps: { beszel: { 'compose.yaml': PINNED } } } };
+  const tree: Tree = { repo: { apps: { beszel: { 'compose.yaml': PINNED + HEALTHCHECK } } } };
   const same = harness(tree, host('ghcr.io/x/beszel:1.0'));
   const result = await deploy(same.ctx, { host: 'deploy@h', app: 'beszel', dir: '/repo' });
   assert.equal(result.unchanged, true);

@@ -5,7 +5,7 @@
 // test-<hash> on the very manifest that was tested. The specs run on the
 // runner, outside the containers: the override's `x-plexus-ci.env` says how
 // they reach the stack (the database's published port), beside what every
-// app gets: CI, PLEXUS_LOOPBACK_PORT and E2E_BASE_URL, the app's /healthz host.
+// app gets: CI, PLEXUS_LOOPBACK_PORT and E2E_BASE_URL, the app's loopback origin.
 import { join } from 'node:path';
 import type { Context } from '@plexus-ms/lib';
 import { run, UsageError } from '@plexus-ms/lib';

@@ -6,12 +6,6 @@
 # the inventory record); an app without one serves the host's root. The
 # prefix is stripped before the request reaches the app, so the app serves
 # from its own root and learns its public URL from its environment.
-#
-# /healthz is readiness for the deploy verb, probed on the host; publicly it
-# would be a dependency-status oracle, so the proxy refuses it (PLX-Ingress).
-# A third-party app declares another path via its plexus.healthz label
-# (§ 5 PLX-App) and mirrors it as `healthz:` in its inventory record, so the
-# proxy — which has no compose file to read — fences that one too.
 {% for host, apps in plexus_apps | groupby('host') %}
 {{ host }} {
 	encode zstd gzip
@@ -24,10 +18,6 @@
 	# {{ app.name }}{% if app.environment is defined %} ({{ app.environment }}){% endif %}
 
 	handle {
-{% endif %}
-		respond /healthz 403
-{% if app.healthz is defined and app.healthz != '/healthz' %}
-		respond {{ app.healthz }} 403
 {% endif %}
 		reverse_proxy 127.0.0.1:{{ app.loopback_port }}
 	}

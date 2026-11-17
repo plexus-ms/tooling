@@ -49,14 +49,6 @@ on:
         required: false
         type: string
         default: production
-      health-url:
-        description: >-
-          Healthcheck URL polled on the host. Defaults to the app's readiness
-          path (/healthz, or its plexus.healthz label) on its loopback port
-          (PLEXUS_LOOPBACK_PORT in the app dir's .env).
-        required: false
-        type: string
-        default: ''
       overlay:
         description: "`netbird`: the host is on the tenant's overlay, which a job on the forge's runners joins for its length; `none` reaches the host as named."
         required: false
@@ -183,7 +175,7 @@ jobs:
       # An empty option value is the same as an absent one to the verb, so
       # both flags are always passed.
       - name: Deploy
-        run: plx ${{ inputs.dry-run && '-n' || '' }} deploy '${{ inputs.host }}' '${{ inputs.app }}' --environment '${{ inputs.environment }}' --image '${{ inputs.image-ref }}' --health-url '${{ inputs.health-url }}'
+        run: plx ${{ inputs.dry-run && '-n' || '' }} deploy '${{ inputs.host }}' '${{ inputs.app }}' --environment '${{ inputs.environment }}' --image '${{ inputs.image-ref }}'
       # A GitHub-hosted runner dies with the agent; a persistent one would keep
       # it running, deploy key loaded, for every later job on the machine. The
       # same for the overlay: the peer leaves, and the management server drops
