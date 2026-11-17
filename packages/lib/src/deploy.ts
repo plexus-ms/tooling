@@ -173,6 +173,24 @@ class Remote {
   }
 }
 
+/** What every host-side step works with: one connection, the app dir's commands, and the result filled in as they go. */
+interface Session {
+  ctx: Context;
+  remote: Remote;
+  /** The app dir, quoted for the remote shell. */
+  D: string;
+  /** compose in the app dir, against the file it serves. */
+  dc: string;
+  /** compose in the app dir, against the staged file. */
+  dci: string;
+  /** The running `web` container's image, or nothing. */
+  liveImage: string;
+  image?: string;
+  /** The readiness URL, given or resolved on the host when first polled. */
+  url?: string;
+  result: Deploy;
+}
+
 /** Deploy from the checkout at `dir`: read, render, then the host-side steps in order. */
 export async function deploy(ctx: Context, options: DeployOptions): Promise<Deploy> {
   const { host, app } = options;
@@ -203,136 +221,172 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
   ctx.say(`  compose: ${compose}`);
   ctx.say(`  health:  ${options.healthUrl || '<resolved on host>'}`);
 
-  const remote = new Remote(ctx, host);
   const D = q(appDir);
   // The staged compose file, read in place: --project-directory keeps .env and
   // relative paths resolving against the app dir, so pull and migrate run
   // against the new run shape while the host keeps serving from the old one.
   const dc = `cd ${D} && docker compose`;
-  const dci = `${dc} --project-directory . -f ${INCOMING}/compose.yaml`;
-  const liveImage = `${dc} ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{.Config.Image}}' 2>/dev/null || true`;
-
-  const result: Deploy = { host, appDir, compose, image, healthy: false, rolledBack: false };
+  const s: Session = {
+    ctx,
+    remote: new Remote(ctx, host),
+    D,
+    dc,
+    dci: `${dc} --project-directory . -f ${INCOMING}/compose.yaml`,
+    liveImage: `${dc} ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{.Config.Image}}' 2>/dev/null || true`,
+    image,
+    url: options.healthUrl || undefined,
+    result: { host, appDir, compose, image, healthy: false, rolledBack: false },
+  };
+  const { result } = s;
   let staged = false;
   try {
-    // Stage into a verb-owned dir inside the app dir; only the file is written,
-    // never the dir's own mode, which the playbook set. Nothing the host runs
-    // from is touched until the checks below have passed.
-    await remote.exec(
-      `rm -rf ${D}/${INCOMING} && mkdir -p ${D}/${INCOMING} && cat > ${D}/${INCOMING}/compose.yaml`,
-      rendered,
-    );
+    await stage(s, rendered);
     staged = true;
-
-    result.previous = (await remote.read(liveImage)) || undefined;
+    result.previous = (await s.remote.read(s.liveImage)) || undefined;
     ctx.say(`  previous: ${result.previous ?? (ctx.dryRun ? '<read on host>' : '<none>')}`);
+    if (await alreadyServing(s)) return result;
+    await pullAndMigrate(s);
+    const hadPrev = await swapAndUp(s);
 
-    // The same image from the same run shape, healthy: nothing to do, and a
-    // promotion that changed another app leaves this one running. Decided from
-    // the host (the live container, the file it serves), never from a record.
-    const poll = (attempts: number) =>
-      `cd ${D} && for _ in $(seq 1 ${attempts}); do curl -fsS --max-time 5 -o /dev/null ${q(url())} && exit 0; sleep 2; done; exit 1`;
-    let resolvedUrl: string | undefined;
-    const url = () => {
-      if (resolvedUrl === undefined) throw new Error('health URL read before it was resolved');
-      return resolvedUrl;
-    };
-    if (ctx.dryRun) ctx.say('  (nothing more runs when the host already serves this image from this file, healthy)');
-    else if (image ? result.previous === image : result.previous !== undefined) {
-      // A third-party app passes no ref: its file pins the image, so the same
-      // file with `web` running is the same deployment, and a platform repo
-      // can deploy every app on every push without restarting any.
-      const sameFile = await remote.test(`cd ${D} && cmp -s compose.yaml ${INCOMING}/compose.yaml`);
-      if (sameFile) {
-        resolvedUrl = options.healthUrl || (await resolveHealthUrl(remote, D, dc, ctx));
-        if (await remote.test(poll(1))) {
-          result.live = result.previous;
-          result.healthy = true;
-          result.unchanged = true;
-          ctx.done(`${result.previous} is already live and healthy; nothing to do`);
-          return result;
-        }
-      }
-    }
-
-    // Pull → migrate (idempotent; runs only if compose.yaml declares it), both
-    // against the STAGED run shape: a failure here leaves the host exactly as
-    // it was. Every non-profiled service is pulled, not just `web`.
-    await remote.exec(`${dci} pull`);
-    // `compose run` targets the service regardless of its profile; the --profile
-    // flag is only needed for the existence check, since `config --services`
-    // hides profiled services by default. stdin from /dev/null: `compose run`
-    // is interactive by default and would wait on a terminal that is not there.
-    const migrate = await remote.test(`${dci} --profile migrate config --services 2>/dev/null | grep -qx migrate`);
-    if (migrate === undefined) ctx.say('  (if compose.yaml declares a migrate service:)');
-    if (migrate !== false) await remote.exec(`${dci} run --rm migrate </dev/null`);
-
-    // Swap the run shape into place; the previous one is kept for rollback
-    // until this run ends.
-    const hadPrev = await remote.test(`test -f ${D}/compose.yaml`);
-    if (hadPrev !== false) await remote.exec(`cd ${D} && cp -p compose.yaml ${INCOMING}/compose.yaml.prev`);
-    await remote.exec(`cd ${D} && mv ${INCOMING}/compose.yaml compose.yaml`);
-    // No pull here: the new image was pulled above, the previous one is in the
-    // host's cache; a rollback must never depend on the registry answering.
-    // --remove-orphans: a service the new shape dropped goes with it, and a
-    // rollback drops the containers a failed shape started (a dependency the
-    // migrate step brought up), which would otherwise keep a stale network
-    // and break the next attempt.
-    await remote.exec(`${dc} up -d --remove-orphans`);
-
-    // Readiness path: /healthz by contract (§ 5 PLX-App); a third-party image
-    // that cannot serve it declares its own via the `plexus.healthz` label,
-    // read from the running container, reality, not a parse of the compose
-    // file. Each attempt is bounded, so a container that accepts connections
-    // but never answers cannot hang the deploy.
-    resolvedUrl ??= options.healthUrl || (await resolveHealthUrl(remote, D, dc, ctx));
     const started = Date.now();
-    const healthy = await remote.test(poll(retries), true);
-    if (healthy !== false) {
-      result.live = (await remote.read(liveImage)) || image;
+    if ((await awaitHealthy(s, retries, true)) !== false) {
+      result.live = (await s.remote.read(s.liveImage)) || image;
       result.healthy = true;
       if (ctx.dryRun) ctx.say('  (on failure: restore the previous compose.yaml, up -d --remove-orphans, poll again)');
       else ctx.done(`${result.live ?? 'the app'} is live and healthy`);
       return result;
     }
-
     ctx.say(`✗ healthcheck failed after ${Math.round((Date.now() - started) / 1000)}s; last lines from the app:`);
-    const logs = await remote.read(`${dc} logs --no-color --tail 50 web 2>&1 || true`);
+    const logs = await s.remote.read(`${dc} logs --no-color --tail 50 web 2>&1 || true`);
     if (logs) ctx.say(logs.replace(/^/gm, '    '));
-
-    // Rollback: the previous compose file, image pinned, so it is the
-    // combination that was actually serving. There is something to go back to
-    // when the file changed with a container running; a first deploy, or a
-    // re-deploy of the very same run shape, has no previous state and fails
-    // loudly instead.
-    const differs = hadPrev && (await remote.test(`cd ${D} && ! cmp -s compose.yaml ${INCOMING}/compose.yaml.prev`));
-    if (!differs) {
-      ctx.done(
-        'nothing to roll back to (first deploy, or the same run shape re-deployed); manual intervention needed',
-        false,
-      );
-      return result;
-    }
-    await remote.exec(`cd ${D} && cp -p ${INCOMING}/compose.yaml.prev compose.yaml`);
-    ctx.say(`↩ rolling back to ${result.previous ?? 'the previous compose.yaml'}`);
-    await remote.exec(`${dc} up -d --remove-orphans`);
-    result.rolledBack = true;
-    if (await remote.test(poll(retries))) {
-      result.live = result.previous;
-      ctx.done(`rolled back to ${result.previous ?? 'the previous compose.yaml'}`);
-    } else {
-      ctx.done('rollback also unhealthy; manual intervention needed', false);
-    }
+    await rollback(s, hadPrev, retries);
     return result;
   } finally {
     // The staged run shape and the rollback copy are gone on exit, whatever
     // happened; the shared connection with them.
-    if (staged) await remote.exec(`rm -rf ${D}/${INCOMING}`).catch(() => undefined);
-    await remote.close().catch(() => undefined);
+    if (staged) await s.remote.exec(`rm -rf ${D}/${INCOMING}`).catch(() => undefined);
+    await s.remote.close().catch(() => undefined);
   }
 }
 
-async function resolveHealthUrl(remote: Remote, D: string, dc: string, ctx: Context): Promise<string> {
+/**
+ * Stage the rendered file into a verb-owned dir inside the app dir; only the
+ * file is written, never the dir's own mode, which the playbook set. Nothing
+ * the host runs from is touched until pull and migrate have passed.
+ */
+async function stage(s: Session, rendered: string): Promise<void> {
+  const { D } = s;
+  await s.remote.exec(
+    `rm -rf ${D}/${INCOMING} && mkdir -p ${D}/${INCOMING} && cat > ${D}/${INCOMING}/compose.yaml`,
+    rendered,
+  );
+}
+
+/**
+ * The same image from the same run shape, healthy: nothing to do, and a
+ * promotion that changed another app leaves this one running. Decided from
+ * the host (the live container, the file it serves), never from a record.
+ */
+async function alreadyServing(s: Session): Promise<boolean> {
+  const { ctx, result } = s;
+  if (ctx.dryRun) {
+    ctx.say('  (nothing more runs when the host already serves this image from this file, healthy)');
+    return false;
+  }
+  // A third-party app passes no ref: its file pins the image, so the same
+  // file with `web` running is the same deployment, and a platform repo can
+  // deploy every app on every push without restarting any.
+  if (!(s.image ? result.previous === s.image : result.previous !== undefined)) return false;
+  if (!(await s.remote.test(`cd ${s.D} && cmp -s compose.yaml ${INCOMING}/compose.yaml`))) return false;
+  if (!(await awaitHealthy(s, 1))) return false;
+  result.live = result.previous;
+  result.healthy = true;
+  result.unchanged = true;
+  ctx.done(`${result.previous} is already live and healthy; nothing to do`);
+  return true;
+}
+
+/**
+ * Pull → migrate (idempotent; runs only if compose.yaml declares it), both
+ * against the STAGED run shape: a failure here leaves the host exactly as it
+ * was. Every non-profiled service is pulled, not just `web`.
+ */
+async function pullAndMigrate(s: Session): Promise<void> {
+  await s.remote.exec(`${s.dci} pull`);
+  // `compose run` targets the service regardless of its profile; the --profile
+  // flag is only needed for the existence check, since `config --services`
+  // hides profiled services by default. stdin from /dev/null: `compose run`
+  // is interactive by default and would wait on a terminal that is not there.
+  const migrate = await s.remote.test(`${s.dci} --profile migrate config --services 2>/dev/null | grep -qx migrate`);
+  if (migrate === undefined) s.ctx.say('  (if compose.yaml declares a migrate service:)');
+  if (migrate !== false) await s.remote.exec(`${s.dci} run --rm migrate </dev/null`);
+}
+
+/**
+ * Swap the run shape into place, keeping the previous one for rollback until
+ * this run ends, and bring it up. Whether there was a previous file (undefined
+ * under --dry-run).
+ */
+async function swapAndUp(s: Session): Promise<boolean | undefined> {
+  const { D } = s;
+  const hadPrev = await s.remote.test(`test -f ${D}/compose.yaml`);
+  if (hadPrev !== false) await s.remote.exec(`cd ${D} && cp -p compose.yaml ${INCOMING}/compose.yaml.prev`);
+  await s.remote.exec(`cd ${D} && mv ${INCOMING}/compose.yaml compose.yaml`);
+  // No pull here: the new image was pulled above, the previous one is in the
+  // host's cache; a rollback must never depend on the registry answering.
+  // --remove-orphans: a service the new shape dropped goes with it, and a
+  // rollback drops the containers a failed shape started (a dependency the
+  // migrate step brought up), which would otherwise keep a stale network
+  // and break the next attempt.
+  await s.remote.exec(`${s.dc} up -d --remove-orphans`);
+  return hadPrev;
+}
+
+/**
+ * Poll the readiness path: /healthz by contract (§ 5 PLX-App); a third-party
+ * image that cannot serve it declares its own via the `plexus.healthz` label,
+ * read from the running container, reality, not a parse of the compose file.
+ * Each attempt is bounded, so a container that accepts connections but never
+ * answers cannot hang the deploy. Whether it answered (undefined under
+ * --dry-run, where `show` prints the line).
+ */
+async function awaitHealthy(s: Session, attempts: number, show = false): Promise<boolean | undefined> {
+  s.url ??= await resolveHealthUrl(s);
+  return s.remote.test(
+    `cd ${s.D} && for _ in $(seq 1 ${attempts}); do curl -fsS --max-time 5 -o /dev/null ${q(s.url)} && exit 0; sleep 2; done; exit 1`,
+    show,
+  );
+}
+
+/**
+ * Rollback: the previous compose file, image pinned, so it is the combination
+ * that was actually serving. There is something to go back to when the file
+ * changed with a container running; a first deploy, or a re-deploy of the
+ * very same run shape, has no previous state and fails loudly instead.
+ */
+async function rollback(s: Session, hadPrev: boolean | undefined, retries: number): Promise<void> {
+  const { ctx, D, result } = s;
+  const differs = hadPrev && (await s.remote.test(`cd ${D} && ! cmp -s compose.yaml ${INCOMING}/compose.yaml.prev`));
+  if (!differs) {
+    ctx.done(
+      'nothing to roll back to (first deploy, or the same run shape re-deployed); manual intervention needed',
+      false,
+    );
+    return;
+  }
+  await s.remote.exec(`cd ${D} && cp -p ${INCOMING}/compose.yaml.prev compose.yaml`);
+  ctx.say(`↩ rolling back to ${result.previous ?? 'the previous compose.yaml'}`);
+  await s.remote.exec(`${s.dc} up -d --remove-orphans`);
+  result.rolledBack = true;
+  if (await awaitHealthy(s, retries)) {
+    result.live = result.previous;
+    ctx.done(`rolled back to ${result.previous ?? 'the previous compose.yaml'}`);
+  } else {
+    ctx.done('rollback also unhealthy; manual intervention needed', false);
+  }
+}
+
+async function resolveHealthUrl({ remote, D, dc, ctx }: Session): Promise<string> {
   const port = await remote.read(`sed -n 's/^PLEXUS_LOOPBACK_PORT=//p' ${D}/.env 2>/dev/null | tail -1`);
   const path = await remote.read(
     `${dc} ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{ index .Config.Labels "plexus.healthz" }}' 2>/dev/null || true`,
