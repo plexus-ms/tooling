@@ -1,13 +1,14 @@
-// plx update [dir]: this repo takes the version when it needs one (§ 3
+// plx update [dir]: this repo takes a version by its step and a schedule (§ 3
 // PLX-Updates), as a pull request on `plexus/<version>`: copier update at every
-// site, the marker, the lockfile, the workflow refs. It needs one when it is
-// asked (--now, or --to) or when the oldest version it has not taken is older
-// than the backstop age; otherwise it rests and says why. Mounted by the
-// templates' update.yml on a schedule in the tenant's own CI, and run by hand
-// from a checkout otherwise; the checkout itself is never touched.
+// site, the marker, the lockfile, the workflow refs. A patch (a hotfix) is
+// taken at once, a minor (routine) once the oldest version not taken is as old
+// as the repo's interval, a major (a changed contract) only when asked (--now,
+// or --to); otherwise the repo rests and says why. Mounted by the templates'
+// update.yml on a schedule in the tenant's own CI, and run by hand from a
+// checkout otherwise; the checkout itself is never touched.
 //
-//   plx update                      # the newest version, if the repo needs it
-//   plx update --now                # the newest version, whatever its triggers say
+//   plx update                      # the version the schedule takes, if any
+//   plx update --now                # the newest version, whatever its step
 //   plx -n update --now             # preview in a worktree, push nothing
 //   plx -y update --to 0.102.0   # unattended (CI): copier takes defaults
 import { resolve } from 'node:path';
@@ -19,14 +20,14 @@ export function register(program: Command): void {
   program
     .command('update')
     .description(
-      'bring this repo up to the newest version when it needs it (asked, or past the backstop age), as a pull request on plexus/<version>: copier update at every site, the marker, the lockfile, the workflow refs',
+      'take a version as a pull request on plexus/<version> (copier update at every site, the marker, the lockfile, the workflow refs): a patch at once, a minor at the next scheduled pull (--max-age), a major only when asked',
     )
     .argument('[dir]', 'a repo generated from the templates', '.')
-    .option('--to <version>', "the version to take, whatever the triggers say (default: the template's newest release)")
-    .option('--now', 'take the newest version whatever the triggers say')
+    .option('--to <version>', 'take this version, whatever its step: asking')
+    .option('--now', 'take the newest version, whatever its step: asking')
     .option(
       '--max-age <days>',
-      "the backstop: take the newest version once the oldest one not taken is this old (default: the repo's answer update_max_age, else 30; 0 takes every version)",
+      "the interval: a minor version is taken once the oldest one not taken is this many days old (default: the repo's answer update_max_age, else 7; 0 takes every version)",
       (v: string) => parseMaxAge(v, '--max-age'),
     )
     .action(async (dir: string, opts: { to?: string; now?: boolean; maxAge?: number }, command: Command) => {

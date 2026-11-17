@@ -2,17 +2,18 @@
 // directory (§ 3 PLX-Updates). The operator's convenience over the verb, for
 // whoever has many repos checked out side by side, the maintainers or a
 // tenant's own operator: it needs no checkout of the upstream, reads the
-// published versions like `update` does, and obeys the same triggers. A repo
-// that needs no version rests; `now` or a named version asks for every repo at
-// once, which is how a hotfix reaches the repos that need it.
+// published versions like `update` does, and decides each repo by the same
+// rule: a patch at once, a minor at the repo's next scheduled pull, a major
+// only when asked. A repo that takes nothing rests; `now` or a named version
+// asks for every repo at once.
 //
 // Each repo is handled by `update` (update.ts) in a worktree of the branch the
 // version lands on, so the checkouts stay as they are. Nothing aborts the run: a
 // repo that fails is recorded and the rest continues; the summary says what
 // rests, what is clean, conflicted or failed, and the pull requests.
 //
-//   plx propagate ~/dev                  # every repo that needs the newest version
-//   plx propagate ~/dev --now            # every repo, whatever its triggers say
+//   plx propagate ~/dev                  # every repo, the version its schedule takes
+//   plx propagate ~/dev --now            # every repo, the newest version whatever its step
 //   plx -n propagate ~/dev --now         # preview in worktrees, push nothing
 //   plx -y propagate ~/dev --to 0.66.0
 import { findConsumers, TEMPLATES, templateSource } from './consumers.ts';
@@ -27,11 +28,11 @@ export interface PropagateOptions {
   dir: string;
   /** The version every repo takes, which is asking for it; default: each template's newest release. */
   to?: string;
-  /** Take the newest version whatever the triggers say. */
+  /** Take the newest version whatever its step. */
   now?: boolean;
-  /** The backstop age in days for every repo; default: each repo's own answer, else 30. */
+  /** The interval in days for every repo; default: each repo's own answer, else 7. */
   maxAge?: number;
-  /** The clock the backstop is measured against, as a date; default: now. */
+  /** The clock the interval is measured against, as a date; default: now. */
   today?: string;
 }
 

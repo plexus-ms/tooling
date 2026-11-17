@@ -69,15 +69,6 @@ export {
   renderViolation,
   type Violation,
 } from './lints.ts';
-export {
-  buildManifest,
-  catalogOf,
-  MANIFEST_FILE,
-  MANIFEST_SCHEMA,
-  type ModuleManifest,
-  parseManifest,
-  renderManifest,
-} from './manifest.ts';
 export { type Declaration, MARKER_FILE, parseMarker, splitFrontmatter } from './marker.ts';
 export {
   type Directory,
@@ -91,16 +82,12 @@ export {
 export {
   DEFAULT_MAX_AGE,
   MAX_AGE_ANSWER,
-  type Marked,
   maxAgeOf,
   type Need,
   type NeedInput,
   needOf,
   parseMaxAge,
   type Release,
-  type Stale,
-  staleModules,
-  type Trigger,
 } from './need.ts';
 export { overview, PRUNED, type ScanOptions } from './overview.ts';
 export { type PropagateOptions, propagate } from './propagate.ts';

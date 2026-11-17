@@ -6,7 +6,6 @@ import {
   bumpManifestVersion,
   bumpPlxPin,
   bumpRunnerImagePin,
-  stampChanged,
   stampStandard,
   today,
 } from './bookkeeping.ts';
@@ -45,19 +44,11 @@ test('bumpPlxPin pins plx exactly in either spelling of a mise tool', () => {
   assert.equal(bumpPlxPin(both, '0.100.0'), both.replaceAll('0.6.0', '0.100.0'));
 });
 
-test('stampStandard and stampChanged edit the frontmatter only', () => {
+test('stampStandard edits the frontmatter only', () => {
   const map = '---\ntitle: PLX\nversion: v0\ntimestamp: 2025-12-31\norder: 1\n---\n\nversion: in prose stays\n';
   assert.equal(
     stampStandard(map, '0.2.0', '2026-01-01'),
     '---\ntitle: PLX\nversion: 0.2.0\ntimestamp: 2026-01-01\norder: 1\n---\n\nversion: in prose stays\n',
-  );
-  assert.equal(
-    stampChanged('---\ncode: PLX-A\nmaturity: standard\nbinds: repo\n---\n', '0.2.0'),
-    '---\ncode: PLX-A\nmaturity: standard\nbinds: repo\nchanged: 0.2.0\n---\n',
-  );
-  assert.equal(
-    stampChanged('---\ncode: PLX-A\nmaturity: standard\nbinds: repo\nchanged: 0.1.0\n---\n', '0.2.0'),
-    '---\ncode: PLX-A\nmaturity: standard\nbinds: repo\nchanged: 0.2.0\n---\n',
   );
 });
 

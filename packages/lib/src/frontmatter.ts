@@ -1,5 +1,5 @@
 // Line-based edits of a page's YAML frontmatter: the marker's `plexus`, the
-// map's `version` and `timestamp`, a module's `changed`. Pages are authored by
+// map's `version` and `timestamp`. Pages are authored by
 // hand, so an edit replaces or inserts one line and leaves everything else,
 // comments and order included, exactly as written; re-serialising the YAML
 // would not. Reading frontmatter is marker.ts's `splitFrontmatter`.

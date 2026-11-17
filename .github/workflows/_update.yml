@@ -1,13 +1,14 @@
 name: _update
 
-# Mounts the update verb (§ 3 PLX-Updates): the repo takes the version itself,
-# when it needs one and not whenever one is cut. `plx update` asks the forge
-# for the versions (the compendium's releases) and decides: it takes the newest
-# version when it is asked (`now`, or a `version` named), when a module the repo
-# declares has changed since its marker (the manifest on the version's release),
-# or when the oldest version the repo has not taken is older than the backstop
-# age (the repo's answer `update_max_age`, 30 days unless it says otherwise);
-# otherwise the repo rests, and the run says why in one line and ends green. Taking a version is copier update at every
+# Mounts the update verb (§ 3 PLX-Updates): the repo takes a version itself, by
+# its step and a schedule, not whenever one is cut. `plx update` asks the forge
+# for the versions (the compendium's releases) and decides: a patch (a hotfix)
+# is taken at once; a minor (routine) once the oldest version the repo has not
+# taken is as old as its interval (the repo's answer `update_max_age`, 7 days
+# unless it says otherwise); a major (a changed contract) only when asked
+# (`now`, or a `version` named), which takes the newest version, or the one
+# named, whatever its step. Otherwise the repo rests, and the run says why in
+# one line and ends green. Taking a version is copier update at every
 # site in a worktree of the branch the version lands on, the marker, the
 # lockfile, the workflow refs, and the pull request on `plexus/<version>`. A
 # branch already on origin is never moved, so a scheduled run cannot overwrite
@@ -32,7 +33,7 @@ on:
         default: ''
       now:
         description: >-
-          Take the newest version whatever the triggers say: somebody asks. The
+          Take the newest version whatever its step: somebody asks. The
           callers pass true on their manual trigger and false on the schedule.
         required: false
         type: boolean

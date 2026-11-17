@@ -6,8 +6,7 @@ import type { Context } from './context.ts';
 
 /**
  * The repo whose releases are the versions as a repo outside the workspace sees
- * them: it is released last, so a version shows there once it is cut everywhere,
- * and its release carries the module manifest (manifest.ts).
+ * them: it is released last, so a version shows there once it is cut everywhere.
  */
 export const COMPENDIUM = 'compendium';
 

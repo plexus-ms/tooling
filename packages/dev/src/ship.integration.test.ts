@@ -15,16 +15,14 @@
 //   FAKE_COPIER_FAIL=<substring>      exit 1 at a site whose path matches
 //   FAKE_COPIER_CONFLICT=<substring>  leave <<<<<<< markers at a matching site
 // Fake gh: releases and pull requests are files under the forge, keyed by the
-// repo (the basename of origin); `release create` checks the tag is on origin
-// and, on tooling, "publishes" the version to the fake registry. Knobs:
+// repo (the basename of origin); `release create` checks the tag is on origin,
+// keeps the release's notes (notes-<tag>) and, on tooling, "publishes" the
+// version to the fake registry. Knobs:
 //   FAKE_GH_LOGGED_OUT=1              `gh auth status` fails
 //   FAKE_GH_MUTABLE=1                 releases are created mutable
-// `api repos/<o>/<r>/releases` lists that repo's published releases as
-// "<tag> <date>", the date from `versionCut` (default: 2026-01-01, the fixture's
-// epoch). A release created with --draft is a draft until `release edit
-// --draft=false`: it takes uploads (kept as asset-<tag>-<name>) and is left
-// out of the listing; a published one refuses them.
-//   FAKE_GH_UPLOAD_FAIL=1             `gh release upload` fails
+//   FAKE_GH_CREATE_FAIL=<repo>        `gh release create` fails in that repo
+// `api repos/<o>/<r>/releases` lists that repo's releases as "<tag> <date>",
+// the date from `versionCut` (default: 2026-01-01, the fixture's epoch).
 // Fake npm: `npm view <pkg>@<v> version` answers once tooling's release of
 // v exists and FAKE_NPM_POLLS polls have gone by; FAKE_NPM_NEVER=1 never answers.
 // Every invocation is appended to FAKE_LOG.
@@ -49,7 +47,6 @@ import {
   Context,
   type Options,
   type PropagateOptions,
-  parseManifest,
   propagate,
   realIo,
   type Summary,
@@ -117,24 +114,17 @@ arg() { local k="$1"; shift; while [ $# -gt 0 ]; do [ "$1" = "$k" ] && { echo "$
 named="$(arg -R "$@")"; [ -z "$named" ] || { repo="\${named##*/}"; dir="$FAKE_FORGE/$repo"; mkdir -p "$dir"; }
 case "$1 $2" in
   "auth status") [ -z "\${FAKE_GH_LOGGED_OUT:-}" ] || { echo "not logged in" >&2; exit 1; }; echo "logged in" ;;
-  "release view") [ -f "$dir/release-$3" ] || { echo "release not found" >&2; exit 1; }
-    case "$*" in *"--json isDraft"*) [ -f "$dir/draft-$3" ] && echo true || echo false ;; *) cat "$dir/release-$3" ;; esac ;;
-  "release upload")
-    [ -f "$dir/draft-$3" ] || { echo "release $3 is published: its assets are locked" >&2; exit 1; }
-    [ -z "\${FAKE_GH_UPLOAD_FAIL:-}" ] || { echo "upload failed on purpose" >&2; exit 1; }
-    cp "$4" "$dir/asset-$3-$(basename "$4")" ;;
-  "release download")
-    f="$dir/asset-$3-$(arg -p "$@")"; [ -f "$f" ] || { echo "no assets match the file pattern" >&2; exit 1; }; cat "$f" ;;
-  "release edit") [ "$4" = "--draft=false" ] || { echo "fake gh: unexpected $*" >&2; exit 1; }; rm -f "$dir/draft-$3" ;;
+  "release view") [ -f "$dir/release-$3" ] || { echo "release not found" >&2; exit 1; }; cat "$dir/release-$3" ;;
   "release create")
+    [ "\${FAKE_GH_CREATE_FAIL:-}" != "$repo" ] || { echo "release create failed on purpose" >&2; exit 1; }
     git ls-remote --exit-code --tags origin "refs/tags/$3" >/dev/null || { echo "tag $3 not on origin" >&2; exit 1; }
     [ -z "\${FAKE_GH_MUTABLE:-}" ] && echo true > "$dir/release-$3" || echo false > "$dir/release-$3"
-    case "$*" in *" --draft"*) touch "$dir/draft-$3" ;; esac
+    arg --notes "$@" > "$dir/notes-$3"
     [ "$repo" != tooling ] || echo "$3" >> "$FAKE_FORGE/npm-published" ;;
   "api "*)
     case "$2" in
       *"/releases/tags/"*) cat "$dir/release-\${2##*/}" ;;
-      *"/releases") for f in "$dir"/release-*; do [ -f "$f" ] || continue; v="\${f##*/release-}"; [ ! -f "$dir/draft-$v" ] || continue; echo "$v $(cat "$dir/date-$v" 2>/dev/null || echo 2026-01-01T00:00:00Z)"; done ;;
+      *"/releases") for f in "$dir"/release-*; do [ -f "$f" ] || continue; v="\${f##*/release-}"; echo "$v $(cat "$dir/date-$v" 2>/dev/null || echo 2026-01-01T00:00:00Z)"; done ;;
       *) ls "$dir"/release-* 2>/dev/null | tail -1 | xargs -r cat ;;
     esac ;;
   "pr view") for f in "$dir"/pr-plexus-*; do case "$f" in *.body|*.base) continue ;; esac; [ -f "$f" ] && [ "$(cat "$f")" = "$3" ] && cat "$f.body"; done ;;
@@ -245,7 +235,7 @@ function fixture(name: string): void {
     '[tools]\n"npm:@plexus-ms/cli" = { version = "0.0.1", allow_low_downloads = true }\n',
   );
   // The compendium: the map with a draft version, two standard modules (a
-  // contract, and an approach already stamped) and one candidate module.
+  // contract and an approach) and one candidate module.
   const comp = up('compendium');
   put(join(comp, 'mise.toml'), '[tools]\n"npm:@plexus-ms/cli" = { version = "0.0.1", allow_low_downloads = true }\n');
   put(
@@ -258,7 +248,7 @@ function fixture(name: string): void {
   );
   put(
     join(comp, 'approaches/beta.md'),
-    '---\ncode: PLX-Beta\nmaturity: standard\nbinds: host\nchanged: 0.1.0\n---\n\n## § 1 One\n\n> - A host MUST beta.\n',
+    '---\ncode: PLX-Beta\nmaturity: standard\nbinds: host\n---\n\n## § 1 One\n\n> - A host MUST beta.\n',
   );
   put(
     join(comp, 'approaches/gamma.md'),
@@ -362,7 +352,7 @@ async function runUpdate(options: Options, args: UpdateOptions): Promise<UpdateR
   const ctx = new Context(options, io);
   try {
     // The clock: two months past the fixture's epoch, so a release without a
-    // date of its own is older than the backstop and the version is taken.
+    // date of its own is older than the interval and the version is taken.
     return { result: await update(ctx, { today: '2026-03-01', ...args }), out };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error), out };
@@ -387,25 +377,6 @@ async function runPropagate(options: Options, args: Partial<PropagateOptions> = 
 
 /** A version as a repo sees it: a published release of the compendium, cut on `date`. */
 const versionCut = (v: string, date?: string) => releaseOf('compendium', v, date);
-
-/** The manifest on a version's release, as ship would have uploaded it: the given modules changed in that version. */
-const manifestOf = (v: string, changed: string[], unchanged: string[] = []) => {
-  const module = (code: string, at?: string) => ({
-    code,
-    kind: 'approach',
-    maturity: at ? 'standard' : 'candidate',
-    binds: 'repo',
-    ...(at ? { changed: at } : {}),
-    depends: [],
-    consumes: [],
-  });
-  const modules = [...changed.map((c) => module(c, v)), ...unchanged.map((c) => module(c))];
-  mkdirSync(join(FORGE(), 'compendium'), { recursive: true });
-  writeFileSync(
-    join(FORGE(), 'compendium', `asset-${v}-modules.json`),
-    JSON.stringify({ schema: 1, version: v, date: '2026-01-02', modules }),
-  );
-};
 
 /** A release of a versioned repo on the fake forge, as ship would have created it. */
 const releaseOf = (r: string, v: string, date?: string) => {
@@ -436,6 +407,8 @@ const allReleased = (v: string) => VERSIONED_REPOS.every((r) => released(r, v));
 const noneTagged = (v: string) => VERSIONED_REPOS.every((r) => !tagged(r, v));
 const has = (text: string, needle: string | RegExp) =>
   typeof needle === 'string' ? text.includes(needle) : needle.test(text);
+/** The notes ship gave a repo's release of a version. */
+const notesOf = (r: string, v: string) => read(join(FORGE(), r, `notes-${v}`));
 /** A file as the consumer's origin has it on the version branch. */
 const onVersion = (r: string, v: string, file: string) => git(remote(r), 'show', `plexus/${v}:${file}`);
 const pull = (r: string, v: string, suffix = '') => read(join(FORGE(), r, `pr-plexus-${v}${suffix}`)).trim();
@@ -455,7 +428,6 @@ test('dry run previews both phases and the propagation in scratch clones, and ch
   assert.ok(!allReleased('0.2.0') && !released('tooling', '0.2.0'), 'no release created');
   assert.match(read(join(up('tooling'), 'ansible/host/galaxy.yml')), /^version: 0\.1\.0/, 'galaxy.yml untouched');
   assert.match(read(join(up('compendium'), 'essentials/standard.md')), /^version: v0$/m, 'standard.md untouched');
-  assert.doesNotMatch(read(join(up('compendium'), 'contracts/alpha.md')), /^changed:/m, 'modules untouched');
   assert.ok(has(out, '→ phase: tooling'), 'phase one announced');
   assert.ok(
     has(out, '→ phase: template-repo-turbo, template-app-nextjs, template-repo-operations, compendium'),
@@ -470,17 +442,13 @@ test('dry run previews both phases and the propagation in scratch clones, and ch
   assert.ok(has(out, 'template-repo-turbo: template/mise.toml: plx pin → 0.2.0'));
   assert.ok(!has(out, '@plexus-ms/config'), 'the config is a library on its own version line: no pin of it is written');
   assert.ok(has(out, 'compendium: mise.toml: plx pin → 0.2.0'));
-  assert.ok(
-    has(out, 'compendium: contracts/alpha.md: requirements changed since 0.1.0 → changed: 0.2.0'),
-    'preview announces the stamps',
-  );
-  assert.ok(has(out, `[dry-run] > ${join(up('compendium'), 'contracts/alpha.md')}`), 'preview lists the write');
+  assert.ok(!has(out, 'contracts/alpha.md'), 'no module page is written');
   assert.ok(has(out, `[dry-run] $ (cd ${up('tooling')} && gh release create 0.2.0 --verify-tag`), 'release step');
   assert.ok(
-    has(out, /\[dry-run\] \$ \(cd \S+\/compendium && gh release upload 0\.2\.0 \S+\/modules\.json --clobber\)/),
-    'the manifest upload is a step of the preview',
+    has(out, `gh release create 0.2.0 --verify-tag --title 0.2.0 --notes 'Plexus 0.2.0: the commits since 0.1.0.`),
+    'the preview shows the notes',
   );
-  assert.ok(has(out, `[dry-run] $ (cd ${up('compendium')} && gh release edit 0.2.0 --draft=false)`));
+  assert.ok(has(out, '- alpha moves, delta arrives'), 'from the commits since the last version');
   consumersUntouched();
   assert.match(read(join(WS, 'acme/web/.github/workflows/ci.yml')), /@0\.1\.0/, 'consumer workflow refs untouched');
   assert.throws(() => onVersion('acme-web', '0.2.0', 'template-owned.txt'), 'no version branch pushed');
@@ -580,21 +548,8 @@ test('happy path: tooling first, the npm wait, the rest, and no pull request in 
   const map = read(join(up('compendium'), 'essentials/standard.md'));
   assert.match(map, /^version: 0\.2\.0$/m);
   assert.match(map, /^timestamp: 2026-01-02$/m);
-  assert.equal(
-    read(join(up('compendium'), 'contracts/alpha.md'))
-      .split('\n')
-      .slice(3, 5)
-      .join(' '),
-    'binds: repo changed: 0.2.0',
-    'moved module stamped after binds',
-  );
-  assert.match(read(join(up('compendium'), 'approaches/delta.md')), /^changed: 0\.2\.0$/m, 'new module stamped');
-  assert.match(
-    read(join(up('compendium'), 'approaches/beta.md')),
-    /^changed: 0\.1\.0$/m,
-    'unmoved module keeps its stamp',
-  );
-  assert.doesNotMatch(read(join(up('compendium'), 'approaches/gamma.md')), /^changed:/m, 'candidate never stamped');
+  for (const page of ['contracts/alpha.md', 'approaches/beta.md', 'approaches/delta.md', 'approaches/gamma.md'])
+    assert.doesNotMatch(read(join(up('compendium'), page)), /^changed:/m, `${page}: no stamp`);
   assert.match(read(join(up('compendium'), 'mise.toml')), /version = "0\.2\.0"/, "the compendium's plx pin");
   const reqs = read(join(up('template-repo-operations'), 'template/requirements.yml'));
   assert.match(reqs, /^ {4}version: 0\.2\.0$/m, 'collection pin bumped');
@@ -616,25 +571,19 @@ test('happy path: tooling first, the npm wait, the rest, and no pull request in 
     /changes\.yml@0\.2\.0/,
   );
 
-  // The compendium's release: a draft, the manifest uploaded, then published; the others in one step.
-  const drafted = at('gh[compendium] release create 0.2.0 --verify-tag --generate-notes --title 0.2.0 --draft');
-  const uploaded = at('gh[compendium] release upload 0.2.0');
-  const published = at('gh[compendium] release edit 0.2.0 --draft=false');
-  assert.ok(templateRelease < drafted && drafted < uploaded && uploaded < published, `order in:\n${log.join('\n')}`);
-  assert.ok(!existsSync(join(FORGE(), 'compendium', 'draft-0.2.0')), 'published');
-  assert.ok(
-    log.filter((l) => has(l, 'release create')).every((l) => has(l, 'gh[compendium]') === has(l, '--draft')),
-    'only the compendium goes through a draft',
+  // The compendium is released last, like the others: one step, no draft, nothing uploaded.
+  assert.ok(templateRelease < at('gh[compendium] release create 0.2.0'), `order in:\n${log.join('\n')}`);
+  assert.ok(!log.some((l) => has(l, '--draft') || has(l, 'release upload')), 'no draft, no asset');
+  // Every release lists the subjects of the commits since the previous version, the bookkeeping last.
+  assert.equal(
+    notesOf('compendium', '0.2.0'),
+    'Plexus 0.2.0: the commits since 0.1.0.\n\n- alpha moves, delta arrives\n- chore: Plexus 0.2.0 bookkeeping\n',
   );
-  const manifest = parseManifest(read(join(FORGE(), 'compendium', 'asset-0.2.0-modules.json')));
-  assert.equal(manifest.version, '0.2.0');
-  assert.equal(manifest.date, '2026-01-02');
-  assert.deepEqual(
-    manifest.modules.map((m) => `${m.code} ${m.maturity} ${m.changed ?? '-'}`),
-    ['PLX-Alpha standard 0.2.0', 'PLX-Beta standard 0.1.0', 'PLX-Delta standard 0.2.0', 'PLX-Gamma candidate -'],
-    'the catalogue as the version stamped it',
+  assert.equal(
+    notesOf('template-app-nextjs', '0.2.0'),
+    'Plexus 0.2.0: the commits since 0.1.0.\n\n',
+    'a repo with no commit of its own has no subject but its tag',
   );
-  assert.ok(has(out, 'compendium: modules.json: Plexus 0.2.0, 4 modules'));
 
   // And there it ends: ship looks for no consumer and opens no pull request.
   consumersUntouched();
@@ -642,7 +591,7 @@ test('happy path: tooling first, the npm wait, the rest, and no pull request in 
   assert.ok(!fakeLog().some((l) => has(l, 'gh[acme-')), 'the forge was never asked about a consumer');
   assert.throws(() => onVersion('acme-web', '0.2.0', 'template-owned.txt'), 'no version branch on a consumer');
   assert.throws(() => onVersion('acme-platform', '0.2.0', 'template-owned.txt'));
-  assert.ok(has(out, '• Plexus 0.2.0 is cut; every repo takes it itself, when it needs it (plx update)'));
+  assert.ok(has(out, '• Plexus 0.2.0 is cut; every repo takes it itself, by its step and a schedule (plx update)'));
   assert.deepEqual(result, {
     version: '0.2.0',
     preview: false,
@@ -731,11 +680,11 @@ test('propagate: every repo under the directory takes the version in a worktree 
   });
 });
 
-test('propagate: a directory of tenant repos and no upstream checkout; a repo that needs no version rests until asked', async () => {
+test('propagate: a directory of tenant repos and no upstream checkout; a repo inside its interval rests until asked', async () => {
   fixture('propagate-tenant');
   versionCut('0.2.0', '2026-02-25');
   const acme = join(WS, 'acme');
-  // The platform repo's answers set three days; the web repo's say nothing.
+  // The platform repo's answers set three days; the web repo's say nothing, which is a week.
   put(
     join(acme, 'platform/.copier-answers.yml'),
     '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\nupdate_max_age: 3\n',
@@ -745,16 +694,13 @@ test('propagate: a directory of tenant repos and no upstream checkout; a repo th
   const { result, error, out } = await runPropagate({ yes: true }, { dir: acme });
   assert.equal(error, undefined, out);
   assert.ok(!fakeLog().some((l) => has(l, `${WS}/plexus-ms`)), 'nothing read from an upstream checkout');
+  assert.ok(has(out, '• web: rests — 1 newer version, the oldest (0.2.0) cut 4 days ago; the interval is 7 days'), out);
   assert.ok(
-    has(out, '• web: rests — 1 newer version, the oldest (0.2.0) cut 4 days ago; the backstop is 30 days'),
-    out,
-  );
-  assert.ok(
-    has(out, '• platform: takes 0.2.0 — 0.2.0, the oldest version not taken, was cut 4 days ago (backstop: 3 days'),
+    has(out, '• platform: takes 0.2.0 — 0.2.0, the oldest version not taken, was cut 4 days ago (interval: 3 days'),
     out,
   );
   assert.deepEqual(result?.resting, [
-    { path: 'web', reason: '1 newer version, the oldest (0.2.0) cut 4 days ago; the backstop is 30 days' },
+    { path: 'web', reason: '1 newer version, the oldest (0.2.0) cut 4 days ago; the interval is 7 days' },
   ]);
   assert.deepEqual(result?.clean, ['platform']);
   assert.deepEqual(result?.pulls, ['https://forge/acme-platform/pull/1']);
@@ -937,76 +883,46 @@ test('a versioned repo that fails plx requirements stops the version before anyt
   assert.match(dry.error ?? '', /plx requirements fails in 2 versioned repos/);
 });
 
-test("a run that stops at the manifest leaves the compendium's release a draft, which no repo sees; the re-run publishes it", async () => {
-  fixture('draft');
-  process.env.FAKE_GH_UPLOAD_FAIL = '1';
+test("a run that stops at the compendium's release leaves the version unseen by any repo; the re-run releases it", async () => {
+  fixture('last-release');
+  process.env.FAKE_GH_CREATE_FAIL = 'compendium';
   const first = await run({ yes: true });
-  delete process.env.FAKE_GH_UPLOAD_FAIL;
-  assert.match(first.error ?? '', /upload failed on purpose/);
+  delete process.env.FAKE_GH_CREATE_FAIL;
+  assert.match(first.error ?? '', /release create failed on purpose/);
   assert.match(first.error ?? '', /re-run with --to 0\.2\.0/);
-  assert.ok(remoteTagged('compendium', '0.2.0') && existsSync(join(FORGE(), 'compendium', 'draft-0.2.0')));
+  assert.ok(remoteTagged('compendium', '0.2.0') && !released('compendium', '0.2.0'));
   assert.ok(released('template-repo-operations', '0.2.0'), 'every other repo is released');
   // To a repo the version is not cut yet.
   const early = await runUpdate({ yes: true }, { repo: join(WS, 'acme/platform') });
   assert.match(early.error ?? '', /no release of plexus-ms\/compendium found/);
 
-  // The re-run comes a few days later: the map keeps the date it was stamped with.
-  const second = await run({ yes: true }, { to: '0.2.0', today: '2026-01-05' });
-  assert.equal(second.error, undefined, second.out);
-  assert.match(read(join(up('compendium'), 'essentials/standard.md')), /^timestamp: 2026-01-02$/m);
-  assert.equal(
-    git(up('compendium'), 'rev-parse', '0.2.0^{commit}'),
-    git(up('compendium'), 'rev-parse', 'main'),
-    'no commit after the tag',
-  );
-  assert.ok(has(second.out, '• compendium: release 0.2.0 is still a draft — finishing it'));
-  assert.equal(fakeLog().filter((l) => has(l, 'gh[compendium] release create')).length, 1, 'never re-created');
-  assert.ok(!existsSync(join(FORGE(), 'compendium', 'draft-0.2.0')), 'published');
-  assert.equal(parseManifest(read(join(FORGE(), 'compendium', 'asset-0.2.0-modules.json'))).version, '0.2.0');
-  const late = await runUpdate({ yes: true }, { repo: join(WS, 'acme/platform') });
-  assert.equal(late.error, undefined, late.out);
-  assert.ok(has(late.out, '• platform: takes 0.2.0'), late.out);
-
-  // A third run finds it published and uploads nothing.
-  const third = await run({ yes: true }, { to: '0.2.0' });
-  assert.equal(third.error, undefined, third.out);
-  assert.ok(has(third.out, '• compendium: release 0.2.0 exists'));
-  assert.equal(fakeLog().filter((l) => has(l, 'gh[compendium] release upload')).length, 2, 'one failed, one done');
-});
-
-test('a requirement edit on the compendium past its tag belongs to the next version: the re-run finishes this one from its tag', async () => {
-  fixture('edit-after-tag');
-  process.env.FAKE_GH_UPLOAD_FAIL = '1';
-  const first = await run({ yes: true });
-  delete process.env.FAKE_GH_UPLOAD_FAIL;
-  assert.match(first.error ?? '', /upload failed on purpose/);
-  assert.ok(remoteTagged('compendium', '0.2.0'), 'the compendium is tagged');
-  // An ordinary edit to a requirement line reaches main after the tag.
+  // An edit reaches the compendium's main after its tag: it belongs to the next version.
   const comp = up('compendium');
   const beta = join(comp, 'approaches/beta.md');
   put(beta, read(beta).replace('A host MUST beta.', 'A host MUST beta, twice.'));
   commit(comp, 'beta sharpens its requirement');
   git(comp, 'push', '--quiet', 'origin', 'main');
 
-  for (const options of [{ dryRun: true }, { yes: true }]) {
-    const rerun = await run(options, { to: '0.2.0' });
-    assert.equal(rerun.error, undefined, rerun.out);
-    assert.ok(!has(rerun.out, 'approaches/beta.md'), 'no stamp planned from main');
-  }
+  // The re-run comes a few days later: the map keeps the date it was stamped with.
+  const second = await run({ yes: true }, { to: '0.2.0', today: '2026-01-05' });
+  assert.equal(second.error, undefined, second.out);
+  assert.match(read(join(comp, 'essentials/standard.md')), /^timestamp: 2026-01-02$/m);
+  assert.equal(git(comp, 'log', '--format=%s', '0.2.0..main'), 'beta sharpens its requirement', 'no commit of its own');
+  assert.ok(has(second.out, '• compendium: already tagged 0.2.0'));
   assert.ok(allTagged('0.2.0') && allReleased('0.2.0'));
-  assert.match(read(beta), /^changed: 0\.1\.0$/m, 'main not stamped with the version it is not part of');
-  assert.match(git(comp, 'show', '0.2.0:approaches/beta.md'), /A host MUST beta\.$/m, 'the version is its tag');
-  assert.equal(
-    git(comp, 'log', '--format=%s', '0.2.0..main'),
-    'beta sharpens its requirement',
-    'nothing else after the tag',
-  );
+  assert.doesNotMatch(notesOf('compendium', '0.2.0'), /beta sharpens/, 'the notes end at the tag');
+  const late = await runUpdate({ yes: true }, { repo: join(WS, 'acme/platform') });
+  assert.equal(late.error, undefined, late.out);
+  assert.ok(has(late.out, '• platform: takes 0.2.0'), late.out);
 
-  // The next version compares against the tag, and stamps the edit.
+  // A third run finds it released and creates nothing; the next version's notes carry the edit.
+  const third = await run({ yes: true }, { to: '0.2.0' });
+  assert.equal(third.error, undefined, third.out);
+  assert.ok(has(third.out, '• compendium: release 0.2.0 exists'));
+  assert.equal(fakeLog().filter((l) => has(l, 'gh[compendium] release create')).length, 2, 'one failed, one done');
   const next = await run({ yes: true });
   assert.equal(next.error, undefined, next.out);
-  assert.ok(allTagged('0.3.0'));
-  assert.match(git(comp, 'show', '0.3.0:approaches/beta.md'), /^changed: 0\.3\.0$/m, 'stamped by the next version');
+  assert.match(notesOf('compendium', '0.3.0'), /^- beta sharpens its requirement$/m);
 });
 
 test('disagreeing latest tags refuse a derived version; a hand-made tag refuses the bookkeeping it lacks', async () => {
@@ -1229,7 +1145,7 @@ test('update: a repo takes the newest version itself, in a worktree, and leaves 
   assert.equal(pull('acme-web', '0.2.0', '.base'), 'develop');
   assert.match(
     pull('acme-web', '0.2.0', '.body'),
-    /Opened by `plx update`: 0\.2\.0, the oldest version not taken, was cut 59 days ago \(backstop: 30 days; 1 newer version\)\./,
+    /Opened by `plx update`: 0\.2\.0, the oldest version not taken, was cut 59 days ago \(interval: 7 days; 1 newer version\)\./,
   );
   assert.equal(git(web, 'rev-parse', '--abbrev-ref', 'HEAD'), 'feature/x', 'checkout still on its branch');
   assert.match(read(join(web, 'template-owned.txt')), /^generated$/m, 'checkout not updated');
@@ -1325,18 +1241,18 @@ test('update: a conflict is committed with its markers, the pull request opened,
   assert.match(pull('acme-web', '0.2.0', '.body'), /Conflicts to resolve.*web\/apps\/site/);
 });
 
-test('update: a repo rests while no trigger holds, and takes the newest version once the backstop age is exceeded', async () => {
+test('update: a pending minor rests inside the interval; past it the newest is taken, the versions skipped in one pull', async () => {
   fixture('update-rest');
   versionCut('0.1.0', '2026-01-01');
-  versionCut('0.2.0', '2026-02-10');
-  versionCut('0.3.0', '2026-02-25');
+  versionCut('0.2.0', '2026-02-25');
+  versionCut('0.3.0', '2026-02-27');
   const web = join(WS, 'acme/web');
   const rest = await runUpdate({ yes: true }, { repo: web });
   assert.equal(rest.error, undefined, rest.out);
   assert.ok(
     has(
       rest.out,
-      '• web: rests — 2 newer versions, the oldest (0.2.0) cut 19 days ago; the backstop is 30 days (plx update --now takes 0.3.0)',
+      '• web: rests — 2 newer versions, the oldest (0.2.0) cut 4 days ago; the interval is 7 days (plx update --now takes 0.3.0)',
     ),
     rest.out,
   );
@@ -1344,17 +1260,18 @@ test('update: a repo rests while no trigger holds, and takes the newest version 
   assert.equal(git(web, 'worktree', 'list').split('\n').length, 1, 'no worktree made');
   assert.ok(!fakeLog().some((l) => has(l, 'pr create')), 'no pull request');
   assert.deepEqual(rest.result?.resting, [
-    { path: 'web', reason: '2 newer versions, the oldest (0.2.0) cut 19 days ago; the backstop is 30 days' },
+    { path: 'web', reason: '2 newer versions, the oldest (0.2.0) cut 4 days ago; the interval is 7 days' },
   ]);
   assert.deepEqual(rest.result?.pulls, []);
 
-  // Eleven days on, the oldest version not taken is 30 days old: the newest is taken, over the one between.
-  const due = await runUpdate({ yes: true }, { repo: web, today: '2026-03-12' });
+  // Three days on, the oldest version not taken is a week old: the newest is taken, over the one between.
+  const due = await runUpdate({ yes: true }, { repo: web, today: '2026-03-04' });
   assert.equal(due.error, undefined, due.out);
-  assert.ok(has(due.out, '• web: takes 0.3.0 — 0.2.0, the oldest version not taken, was cut 30 days ago'), due.out);
+  assert.ok(has(due.out, '• web: takes 0.3.0 — 0.2.0, the oldest version not taken, was cut 7 days ago'), due.out);
   assert.match(onVersion('acme-web', '0.3.0', 'template-owned.txt'), /updated from 0\.3\.0/);
   assert.throws(() => onVersion('acme-web', '0.2.0', 'template-owned.txt'), 'the version between is jumped');
-  assert.match(pull('acme-web', '0.3.0', '.body'), /backstop: 30 days; 2 newer versions/);
+  assert.equal(git(remote('acme-web'), 'rev-list', '--count', 'develop..plexus/0.3.0'), '1', 'one commit');
+  assert.match(pull('acme-web', '0.3.0', '.body'), /interval: 7 days; 2 newer versions/);
   assert.deepEqual(due.result?.resting, []);
 });
 
@@ -1381,34 +1298,34 @@ test('update: asking takes the version whatever its age, by --now or by naming i
   assert.match(pull('acme-platform', '0.2.0', '.body'), /asked for \(--to 0\.2\.0\)/);
 });
 
-test('update: the backstop age is the answer of the repo template, zero takes every version, and the option overrides both', async () => {
+test('update: the interval is the answer of the repo template, a week by default, zero takes every version, and the option overrides both', async () => {
   fixture('update-age');
-  versionCut('0.2.0', '2026-02-20');
-  // The platform repo's answers set a week: nine days is past it.
+  versionCut('0.2.0', '2026-02-25');
+  // The platform repo's answers set three days: four days is past it.
   const plat = join(WS, 'acme/platform');
   put(
     join(plat, '.copier-answers.yml'),
-    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\nupdate_max_age: 7\n',
+    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\nupdate_max_age: 3\n',
   );
-  commit(plat, 'a week at most');
+  commit(plat, 'three days at most');
   git(plat, 'push', '--quiet', 'origin', 'main');
-  const week = await runUpdate({ yes: true }, { repo: plat });
-  assert.equal(week.error, undefined, week.out);
-  assert.ok(has(week.out, 'was cut 9 days ago (backstop: 7 days; 1 newer version)'), week.out);
+  const short = await runUpdate({ yes: true }, { repo: plat });
+  assert.equal(short.error, undefined, short.out);
+  assert.ok(has(short.out, 'was cut 4 days ago (interval: 3 days; 1 newer version)'), short.out);
 
-  // The web repo's say nothing: 30 days, so it rests; zero is the eager repo.
+  // The web repo's say nothing: a week, so it rests; zero is the eager repo.
   const web = join(WS, 'acme/web');
   const rest = await runUpdate({ yes: true }, { repo: web });
-  assert.ok(has(rest.out, 'the backstop is 30 days'), rest.out);
+  assert.ok(has(rest.out, 'the interval is 7 days'), rest.out);
   const long = await runUpdate({ yes: true }, { repo: web, maxAge: 90, today: '2026-04-15' });
-  assert.ok(has(long.out, 'cut 54 days ago; the backstop is 90 days'), long.out);
+  assert.ok(has(long.out, 'cut 49 days ago; the interval is 90 days'), long.out);
   // The repo is judged by what origin has on the branch the version lands on.
   put(
     join(web, '.copier-answers.yml'),
     '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-turbo\nupdate_max_age: soon\n',
   );
   const local = await runUpdate({ yes: true }, { repo: web });
-  assert.ok(has(local.out, 'the backstop is 30 days'), 'an edit in the checkout is not what origin says');
+  assert.ok(has(local.out, 'the interval is 7 days'), 'an edit in the checkout is not what origin says');
   commit(web, 'soon');
   git(web, 'push', '--quiet', 'origin', 'develop');
   const bad = await runUpdate({ yes: true }, { repo: web });
@@ -1417,74 +1334,65 @@ test('update: the backstop age is the answer of the repo template, zero takes ev
   const eager = await runUpdate({ yes: true }, { repo: web, maxAge: 0 });
   assert.equal(eager.error, undefined, eager.out);
   assert.ok(
-    has(eager.out, '• web: takes 0.2.0 — a backstop age of zero takes every version (1 newer version)'),
+    has(eager.out, '• web: takes 0.2.0 — an interval of zero takes every version (1 newer version)'),
     eager.out,
   );
 });
 
-test('update: a module a site declares that changed in a newer version takes it at once; other repos rest', async () => {
-  fixture('update-module');
-  versionCut('0.2.0', '2026-02-28');
-  // PLX-Platform changed in 0.2.0; PLX-Updates is in the catalogue without a change.
-  manifestOf('0.2.0', ['PLX-Platform'], ['PLX-Updates']);
+test('update: a pending patch is taken at once; a pending major is named, and taken only when asked', async () => {
+  fixture('update-step');
+  versionCut('0.1.1', '2026-02-28');
   const plat = join(WS, 'acme/platform');
+  const fix = await runUpdate({ yes: true }, { repo: plat });
+  assert.equal(fix.error, undefined, fix.out);
+  assert.ok(has(fix.out, '• platform: takes 0.1.1 — 0.1.1 is a hotfix, taken at once (1 newer version)'), fix.out);
+  assert.match(pull('acme-platform', '0.1.1', '.body'), /Opened by `plx update`: 0\.1\.1 is a hotfix, taken at once/);
+
+  // A major arrives. The web repo takes the hotfix of its own major and names the major beside it.
+  versionCut('1.0.0', '2026-02-01');
   const web = join(WS, 'acme/web');
-  // A marker outside any site is kept by hand: a pull would not cure it, so it is not a reason for one.
-  put(join(web, 'docs/PLEXUS.md'), '---\nplexus: 0.0.1\nmodules: [PLX-Platform]\n---\n');
-  commit(web, 'a marker of its own');
-  git(web, 'push', '--quiet', 'origin', 'develop');
+  const both = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(both.error, undefined, both.out);
+  assert.ok(has(both.out, '• web: 1.0.0 is a new major, taken only when asked (plx update --now takes it)'), both.out);
+  assert.ok(has(both.out, '• web: takes 0.1.1 — 0.1.1 is a hotfix'), both.out);
+  assert.throws(() => onVersion('acme-web', '1.0.0', 'template-owned.txt'), 'the major is not taken');
 
-  const rest = await runUpdate({ yes: true }, { repo: web });
-  assert.equal(rest.error, undefined, rest.out);
-  assert.ok(has(rest.out, '• web: rests — 1 newer version, the oldest (0.2.0) cut 1 day ago'), rest.out);
-  assert.ok(!has(rest.out, 'modules are not checked'), 'the manifest was read');
-
-  const { result, error, out } = await runUpdate({ yes: true }, { repo: plat });
-  assert.equal(error, undefined, out);
-  assert.ok(
-    has(out, '• platform: takes 0.2.0 — PLX-Platform changed in 0.2.0, declared at 0.1.0 in platform/PLEXUS.md'),
-    out,
-  );
-  assert.match(
-    pull('acme-platform', '0.2.0', '.body'),
-    /Opened by `plx update`: PLX-Platform changed in 0\.2\.0, declared at 0\.1\.0 in platform\/PLEXUS\.md\./,
-  );
-  assert.deepEqual(result?.pulls, ['https://forge/acme-platform/pull/1']);
-});
-
-test('update: a version without a manifest says so and leaves the repo to its backstop', async () => {
-  fixture('update-no-manifest');
-  versionCut('0.2.0', '2026-02-28');
-  const { result, error, out } = await runUpdate({ yes: true }, { repo: join(WS, 'acme/platform') });
-  assert.equal(error, undefined, out);
-  assert.ok(
-    has(out, 'platform: Plexus 0.2.0 carries no modules.json that can be read; its modules are not checked'),
-    out,
-  );
-  assert.ok(has(out, '• platform: rests — 1 newer version'), out);
-  assert.deepEqual(result?.pulls, []);
-
-  // One that is not a manifest is an error, not a silent rest.
-  writeFileSync(join(FORGE(), 'compendium', 'asset-0.2.0-modules.json'), '{"schema": 2}');
-  const bad = await runUpdate({ yes: true }, { repo: join(WS, 'acme/platform') });
-  assert.match(bad.error ?? '', /the module manifest has schema 2; this plx reads 1/);
-});
-
-test('ship to update, end to end: the manifest ship uploads is what makes a repo take the version', async () => {
-  fixture('e2e-module');
-  // The platform repo declares a module of the fixture's compendium that this version changes.
-  const plat = join(WS, 'acme/platform');
-  put(join(plat, 'PLEXUS.md'), '---\nplexus: 0.1.0\nmodules: [PLX-Repo, PLX-Alpha]\n---\n');
-  commit(plat, 'declares alpha');
+  // The platform repo, once on the hotfix, has only the major ahead: it rests, a month on as well.
+  put(join(plat, '.copier-answers.yml'), '_commit: 0.1.1\n_src_path: gh:plexus-ms/template-repo-operations\n');
+  commit(plat, 'Plexus 0.1.1');
   git(plat, 'push', '--quiet', 'origin', 'main');
-  const shipped = await run({ yes: true });
-  assert.equal(shipped.error, undefined, shipped.out);
-  // The day after the version: far inside the backstop.
-  const { error, out } = await runPropagate({ yes: true }, { today: '2026-01-02' });
-  assert.equal(error, undefined, out);
+  const rest = await runUpdate({ yes: true }, { repo: plat, today: '2026-04-01' });
+  assert.equal(rest.error, undefined, rest.out);
   assert.ok(
-    has(out, '• acme/platform: takes 0.2.0 — PLX-Alpha changed in 0.2.0, declared at 0.1.0 in acme/platform/PLEXUS.md'),
-    out,
+    has(rest.out, '• platform: rests — 1.0.0 is a new major, taken only when asked (plx update --now takes 1.0.0)'),
+    rest.out,
   );
-  assert.ok(has(out, '• acme/web: rests — 1 newer version, the oldest (0.2.0) cut 1 day ago'), out);
+  assert.throws(() => onVersion('acme-platform', '1.0.0', 'template-owned.txt'));
+  const asked = await runUpdate({ yes: true }, { repo: plat, now: true });
+  assert.equal(asked.error, undefined, asked.out);
+  assert.ok(has(asked.out, '• platform: takes 1.0.0 — asked for (--now)'), asked.out);
+  assert.match(onVersion('acme-platform', '1.0.0', 'template-owned.txt'), /updated from 1\.0\.0/);
+});
+
+test('ship to update, end to end: a minor rests inside the interval, a patch cut after it arrives at once with it', async () => {
+  fixture('e2e-step');
+  const minor = await run({ yes: true });
+  assert.equal(minor.error, undefined, minor.out);
+  // The day after the version: well inside the week.
+  const quiet = await runPropagate({ yes: true }, { today: '2026-01-02' });
+  assert.equal(quiet.error, undefined, quiet.out);
+  assert.deepEqual(
+    quiet.result?.resting.map((r) => r.path),
+    ['acme/platform', 'acme/web'],
+  );
+  // A hotfix is cut as a patch, on every repo.
+  const patch = await run({ yes: true }, { to: '0.2.1' });
+  assert.equal(patch.error, undefined, patch.out);
+  assert.ok(allTagged('0.2.1') && allReleased('0.2.1'));
+  const { result, error, out } = await runPropagate({ yes: true }, { today: '2026-01-02' });
+  assert.equal(error, undefined, out);
+  assert.ok(has(out, '• acme/web: takes 0.2.1 — 0.2.1 is a hotfix, taken at once (2 newer versions)'), out);
+  assert.match(onVersion('acme-web', '0.2.1', 'template-owned.txt'), /updated from 0\.2\.1/);
+  assert.throws(() => onVersion('acme-web', '0.2.0', 'template-owned.txt'), 'the minor arrives in the same pull');
+  assert.deepEqual(result?.pulls, ['https://forge/acme-platform/pull/1', 'https://forge/acme-web/pull/1']);
 });

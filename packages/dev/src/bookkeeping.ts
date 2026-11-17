@@ -55,10 +55,6 @@ export const bumpPlxPin = (text: string, version: string): string =>
 export const stampStandard = (text: string, version: string, today: string): string =>
   setFrontmatterField(setFrontmatterField(text, 'version', version), 'timestamp', today);
 
-/** `changed: <version>` on a module page: replaced in place, or inserted after `binds:` (the field order of § 1.3 PLX). */
-export const stampChanged = (text: string, version: string): string =>
-  setFrontmatterField(text, 'changed', version, { after: 'binds' });
-
 /** Today as `YYYY-MM-DD` in local time, like `date +%F`. */
 export function today(now = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, '0');

@@ -12,17 +12,21 @@
 //     release — which locks the tag and runs tooling's release workflow
 //   → wait until the three packages are on npm at the Plexus version
 //   → phase two: the templates' and the compendium's bookkeeping (collection
-//     pin, workflow refs, plx pins, the map's version and
-//     timestamp, `changed` on every standard module whose requirements moved),
-//     commit, tag, push, release, repo by repo; the compendium last, its
-//     release created as a draft, given the module manifest (manifest.ts) and
-//     only then published, because an immutable release locks its assets
+//     pin, workflow refs, plx pins, the map's version and timestamp), commit,
+//     tag, push, release, repo by repo; the compendium last
 //
 // and there it ends. Cutting a version and a repo taking it are separate events
 // (§ 3 PLX-Updates): ship looks for no consumer and opens no pull request; a
-// repo takes the version itself, when it needs it (update.ts). The dry run is
-// the one place consumers still appear: it previews the unreleased templates
-// against the workspace's consumers (preview.ts), a maintainer's test.
+// repo takes the version itself, by its step and a schedule (update.ts). The
+// dry run is the one place consumers still appear: it previews the unreleased
+// templates against the workspace's consumers (preview.ts), a maintainer's test.
+//
+// Every release lists the subjects of the commits since the previous version,
+// so a tenant can read what a version concerns. The step of the number is the
+// maintainers' to choose and says how urgently a repo takes the version (§ 3
+// PLX-Updates): a hotfix is cut as a patch (`--to`), routine work as the next
+// minor (the default), a changed contract as a major. ship checks nothing
+// about the step.
 //
 // The wait is what lets phase two pin the Plexus version: the compendium's
 // commit hook installs plx at that pin, and the templates hand it to every
@@ -43,23 +47,18 @@
 //   plx-dev -y ship ~/dev                 # unattended: no prompt
 import { join } from 'node:path';
 import {
-  buildManifest,
   bumpWorkflowRefs,
   COMPENDIUM,
   type Context,
   checkRepo,
+  compareVersions,
   emptySummary,
-  extractRequirements,
   frontmatterField,
-  MANIFEST_FILE,
   MAP_PAGE,
-  modulePages,
   type Plan,
   parseStandardIndex,
   preflightForge,
-  readCatalog,
   readCitable,
-  renderManifest,
   renderStandardIndex,
   run,
   STANDARD_INDEX_FILE,
@@ -77,12 +76,12 @@ import {
   galaxyFile,
   PLX_PIN,
   RUNNER_IMAGE_PIN_FILE,
-  stampChanged,
   stampStandard,
   today as todayOf,
 } from './bookkeeping.ts';
 import { previewConsumers } from './preview.ts';
 import {
+  latestTag,
   nextMinor,
   phasesOf,
   preflightRelease,
@@ -134,7 +133,7 @@ export async function ship(ctx: Context, options: ShipOptions): Promise<ShipResu
   await preflightAfterTag(ctx, versioned, next, today);
   await release(ctx, versioned, next, today, { ...DEFAULT_WAIT, ...options.wait });
   if (ctx.dryRun) return { ...(await previewConsumers(ctx, options.workspace, next)), released: true };
-  ctx.say(`• Plexus ${next} is cut; every repo takes it itself, when it needs it (plx update)`);
+  ctx.say(`• Plexus ${next} is cut; every repo takes it itself, by its step and a schedule (plx update)`);
   return { ...emptySummary(next, false), released: true };
 }
 
@@ -192,9 +191,7 @@ async function preflightRequirements(ctx: Context, versioned: Versioned): Promis
  * version ship stopped, a tagged repo has nothing left to write, since its tag
  * is on its bookkeeping commit; anything still to write means the tag was made
  * elsewhere, or main moved since. Refused before anything is written, the dry
- * run included, naming every write it would have made. A requirement edit on a
- * tagged compendium's main is no such write: it belongs to the next version,
- * and no `changed` stamp is planned for it (planBookkeeping).
+ * run included, naming every write it would have made.
  */
 async function preflightAfterTag(ctx: Context, versioned: Versioned, next: string, today: string): Promise<void> {
   const { afterTag } = await planBookkeeping(ctx, versioned, versioned.repos, next, today, { quiet: true });
@@ -280,10 +277,10 @@ const PENDING_SHOWN = 20;
 async function releasePhase(ctx: Context, versioned: Versioned, repos: VersionedRepo[], next: string, today: string) {
   ctx.say(`→ phase: ${repos.map((r) => r.name).join(', ')}`);
   await ctx.apply((await planBookkeeping(ctx, versioned, repos, next, today)).plan);
-  for (const repo of repos) await tagAndRelease(ctx, repo, next, today);
+  for (const repo of repos) await tagAndRelease(ctx, repo, next);
 }
 
-async function tagAndRelease(ctx: Context, repo: VersionedRepo, next: string, today: string): Promise<void> {
+async function tagAndRelease(ctx: Context, repo: VersionedRepo, next: string): Promise<void> {
   const tagged = await ctx
     .read('git', ['rev-parse', '-q', '--verify', `refs/tags/${next}`], { cwd: repo.path })
     .then(() => true)
@@ -295,20 +292,18 @@ async function tagAndRelease(ctx: Context, repo: VersionedRepo, next: string, to
   // The GitHub release is what makes the tag immutable, and on tooling it
   // is what triggers the publish: nothing is ever published from a tag that
   // can still move. --verify-tag refuses to create a tag of its own.
-  const create = ['release', 'create', next, '--verify-tag', '--generate-notes', '--title', next];
-  if (repo.name === COMPENDIUM) {
-    if (!(await releaseWithManifest(ctx, repo, next, today, create))) return;
-  } else {
-    const released = await ctx
-      .read('gh', ['release', 'view', next], { cwd: repo.path })
-      .then(() => true)
-      .catch(() => false);
-    if (released) {
-      ctx.say(`• ${repo.name}: release ${next} exists`);
-      return;
-    }
-    await ctx.apply([run('gh', create, { cwd: repo.path })]);
+  const released = await ctx
+    .read('gh', ['release', 'view', next], { cwd: repo.path })
+    .then(() => true)
+    .catch(() => false);
+  if (released) {
+    ctx.say(`• ${repo.name}: release ${next} exists`);
+    return;
   }
+  const notes = await releaseNotes(ctx, repo, next, tagged || !ctx.dryRun ? next : 'HEAD');
+  await ctx.apply([
+    run('gh', ['release', 'create', next, '--verify-tag', '--title', next, '--notes', notes], { cwd: repo.path }),
+  ]);
   if (ctx.dryRun) return;
   const immutable = (
     await ctx.read('gh', ['api', `repos/{owner}/{repo}/releases/tags/${next}`, '--jq', '.immutable'], {
@@ -320,48 +315,20 @@ async function tagAndRelease(ctx: Context, repo: VersionedRepo, next: string, to
 }
 
 /**
- * The compendium's release carries the module manifest, and an immutable
- * release locks its assets: so the release is created as a draft, the manifest
- * uploaded to it, and only then published. Until then the version does not show
- * to a repo asking for the versions (update.ts). A draft left by a run that
- * stopped is taken up where it stands: the manifest uploaded again, then
- * published. Resolves false when the release was published already.
+ * What the version concerns in a repo: the subjects of its commits since the
+ * previous version tag, oldest first, up to `ref` (the tag, or HEAD in a
+ * preview, where the tag is not made). GitHub's generated notes list merged
+ * pull requests only, and the versioned repos are committed to on main.
  */
-async function releaseWithManifest(
-  ctx: Context,
-  repo: VersionedRepo,
-  next: string,
-  today: string,
-  create: string[],
-): Promise<boolean> {
-  const state = (
-    await ctx
-      .read('gh', ['release', 'view', next, '--json', 'isDraft', '--jq', '.isDraft'], { cwd: repo.path })
-      .catch(() => '')
-  ).trim();
-  if (state === 'false') {
-    ctx.say(`• ${repo.name}: release ${next} exists`);
-    return false;
-  }
-  if (state === 'true') ctx.say(`• ${repo.name}: release ${next} is still a draft — finishing it`);
-  else await ctx.apply([run('gh', [...create, '--draft'], { cwd: repo.path })]);
-
-  // Written from the checkout the tag was cut from, stamps included; under a
-  // dry run the stamps are only announced, so the upload is too.
-  const scratch = (await ctx.stage(run('mktemp', ['-d'])))?.trim() ?? '';
-  const file = join(scratch, MANIFEST_FILE);
-  try {
-    const manifest = buildManifest(await readCatalog(ctx, repo.path), next, today);
-    ctx.say(`  ${repo.name}: ${MANIFEST_FILE}: Plexus ${next}, ${manifest.modules.length} modules`);
-    await ctx.stage(write(file, renderManifest(manifest)));
-    await ctx.apply([
-      run('gh', ['release', 'upload', next, file, '--clobber'], { cwd: repo.path }),
-      run('gh', ['release', 'edit', next, '--draft=false'], { cwd: repo.path }),
-    ]);
-  } finally {
-    if (scratch) await ctx.stage(run('rm', ['-rf', scratch]));
-  }
-  return true;
+async function releaseNotes(ctx: Context, repo: VersionedRepo, next: string, ref: string): Promise<string> {
+  const tags = (await ctx.read('git', ['tag', '--list', 'v*', '[0-9]*'], { cwd: repo.path })).split('\n');
+  const previous = latestTag(tags.filter((t) => t && compareVersions(t.replace(/^v/, ''), next) < 0));
+  const range = previous ? `${previous}..${ref}` : ref;
+  const subjects = (await ctx.read('git', ['log', '--reverse', '--format=%s', range], { cwd: repo.path }))
+    .split('\n')
+    .filter(Boolean);
+  const since = previous ? `since ${previous.replace(/^v/, '')}` : 'in the first version';
+  return [`Plexus ${next}: the commits ${since}.`, '', ...subjects.map((s) => `- ${s}`)].join('\n');
 }
 
 /**
@@ -481,34 +448,14 @@ async function planBookkeeping(
       await edit(r, f, `plx pin → ${next}`, (t) => bumpPlxPin(t, next));
   }
 
-  // The map carries the Plexus version and the date it was cut (§ 1.5 PLX); a
-  // standard module is stamped `changed` when its extracted requirement lines
-  // differ from the previous version's, read with the same extractor the
-  // compendium's check runs, so the two never disagree.
-  const comp = repo('compendium');
-  if (comp) {
-    // The date is the day the version was first stamped: a re-run on a later
-    // day leaves a map that already carries the version alone.
+  // The map carries the Plexus version and the date it was cut (§ 1.5 PLX).
+  // The date is the day the version was first stamped: a re-run on a later
+  // day leaves a map that already carries the version alone.
+  const comp = repo(COMPENDIUM);
+  if (comp)
     await edit(comp, MAP_PAGE, `version → ${next}, timestamp → ${today}`, (t) =>
       frontmatterField(t, 'version') === next ? t : stampStandard(t, next, today),
     );
-    // A compendium already tagged with the version is that version: a
-    // requirement edit on main past the tag belongs to the next version, whose
-    // bookkeeping compares against this tag and stamps it there. So no stamp
-    // is planned from main, and the re-run finishes the version from its tag.
-    const stamped = comp.latest === next ? [] : await modulePages(ctx, comp.path);
-    for (const page of stamped) {
-      const text = await ctx.readFile(join(comp.path, page));
-      if (frontmatterField(text, 'maturity') !== 'standard') continue;
-      const previous = comp.tag
-        ? await ctx.read('git', ['show', `${comp.tag}:${page}`], { cwd: comp.path }).catch(() => '')
-        : '';
-      if (extractRequirements(text).join('\n') === extractRequirements(previous).join('\n')) continue;
-      await edit(comp, page, `requirements changed since ${comp.latest ?? 'the beginning'} → changed: ${next}`, (t) =>
-        stampChanged(t, next),
-      );
-    }
-  }
 
   for (const r of versioned.repos) {
     if (!touched.has(r)) continue;

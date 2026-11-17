@@ -17,8 +17,8 @@
 // such a bullet, or any keyword or blockquote in a module below standard
 // maturity is a defect. The trailing "## Maintaining" section is prose
 // throughout. Extraction is structural: no classification, no heuristics.
-// `plx-dev ship` compares a module's extracted lines across versions to stamp `changed`,
-// so the extractor and the linter are one function and cannot disagree.
+// `plx requirements --extract` prints a page's extracted lines with the same
+// function the linter runs, so the extractor and the linter cannot disagree.
 //
 // A requirement line carries its name, when it has one, as its first words:
 // the full name in a code span and a colon (requirementName),
@@ -200,7 +200,7 @@ export function scanPage(text: string, name: string, mode: PageMode): Scan {
   return scan;
 }
 
-/** The requirement lines of a page, defects ignored: what `changed` compares across versions. */
+/** The requirement lines of a page, defects ignored. */
 export const extractRequirements = (text: string): string[] => scanPage(text, '', 'module').requirements;
 
 export const MAP_PAGE = 'essentials/standard.md';

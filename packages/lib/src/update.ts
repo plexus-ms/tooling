@@ -2,23 +2,20 @@
 // PLX-Updates), from inside the repo, in the tenant's own CI or by hand; it is
 // the only thing that opens a version's pull request.
 //
-// It takes a version when the repo needs one, not whenever one was cut
-// (need.ts): when it is asked (`--now`, or a version named), when a module one
-// of its markers declares has changed since that marker (read from the
-// manifest on the version's release, manifest.ts), or when the oldest version the
-// repo has not taken is older than the backstop age, which the repo's answers
-// set (`update_max_age`, in days; 30 when they do not say, zero for every
-// version). Otherwise the repo rests: one line saying why, exit 0.
-//
-// The markers that count are those of the repo's sites, root and apps: the
-// ones a pull brings up to the version. A marker anywhere else is kept by hand,
-// a pull would not cure it, and `doctor` is what reports it.
+// Which version it takes, if any, is need.ts's decision, by the step of the
+// version number: a patch (a hotfix) at once, a minor (routine) at the repo's
+// next scheduled pull, once the oldest version it has not taken is as old as
+// its interval (`update_max_age` in its answers, in days; 7 when they do not
+// say, zero for every version), a major (a changed contract) only when asked.
+// Asked (`--now`, or a version named), it takes the newest version, or the one
+// named, whatever its step. Otherwise the repo rests: one line saying why,
+// exit 0.
 //
 // The versions are the compendium's GitHub releases (every version tag is locked
 // by one, § 1.6 PLX, and the compendium is released last, so a version shows
 // there once it is cut everywhere), asked of the forge as an operator would
-// (`gh api repos/plexus-ms/compendium/releases`): the newest is the version to
-// take, and their dates are what the backstop is measured against. The work happens in a
+// (`gh api repos/plexus-ms/compendium/releases`): their numbers are the steps,
+// and their dates are what the interval is measured against. The work happens in a
 // worktree of origin's branch, never in the checkout: a developer's branch and
 // edits stay as they are, and in CI the worktree shares the checkout's
 // credentials, so the push and the pull request need no second token. Then
@@ -29,21 +26,19 @@
 // origin, from an earlier run or from a human resolving its conflicts, is
 // left alone, so a daily run never moves a branch somebody is
 // working on; deleting the branch is how a pull is redone. A repo whose every
-// site already records the version does nothing at all.
+// site already records the newest version does nothing at all.
 //
-//   plx update                      # the newest version, if the repo needs it
-//   plx update --now                # the newest version, whatever its triggers say
+//   plx update                      # the version the repo's schedule takes, if any
+//   plx update --now                # the newest version, whatever its step
 //   plx -n update --now             # preview in a worktree, push nothing
 //   plx -y update --to 0.102.0   # unattended, an explicit version
 import { basename, join, relative } from 'node:path';
-import { type Consumer, findConsumers, TEMPLATES, templateSource } from './consumers.ts';
+import { findConsumers, TEMPLATES, templateSource } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers } from './copier.ts';
 import { compareVersions } from './doctor.ts';
 import { run } from './effects.ts';
-import { catalogOf, MANIFEST_FILE, parseManifest } from './manifest.ts';
-import { MARKER_FILE, parseMarker } from './marker.ts';
-import { type Marked, maxAgeOf, needOf, type Release, type Stale, staleModules } from './need.ts';
+import { maxAgeOf, type Need, needOf, type Release } from './need.ts';
 import { overview } from './overview.ts';
 import { CLEAN_BODY, detail, emptySummary, openPullUrl, type Summary, takeVersion, versionBranch } from './take.ts';
 import { COMPENDIUM, isPlexusVersion, preflightForge, UsageError } from './version.ts';
@@ -55,11 +50,11 @@ export interface UpdateOptions {
   name?: string;
   /** The version to take, which is asking for it; default: the template's newest release. */
   to?: string;
-  /** Take the newest version whatever the triggers say: somebody asks. */
+  /** Take the newest version whatever its step: somebody asks. */
   now?: boolean;
-  /** The backstop age in days; default: the repo's answer `update_max_age`, else 30. */
+  /** The interval in days; default: the repo's answer `update_max_age`, else 7. */
   maxAge?: number;
-  /** The clock the backstop is measured against, as a date; default: now. */
+  /** The clock the interval is measured against, as a date; default: now. */
   today?: string;
 }
 
@@ -84,8 +79,7 @@ export async function update(ctx: Context, options: UpdateOptions): Promise<Summ
 
   await preflightForge(ctx);
   const releases = options.to === undefined ? await releasesOf(ctx) : [];
-  const version = options.to ?? newestOf(releases);
-  const summary = emptySummary(version, ctx.dryRun);
+  const newest = options.to ?? newestOf(releases);
 
   // The repo is judged by what its origin has on the branch the version lands
   // on, not by the checkout, which may be behind it or on a branch of its own.
@@ -100,13 +94,27 @@ export async function update(ctx: Context, options: UpdateOptions): Promise<Summ
     }),
   );
   const recorded = answers.map((a) => a.commit);
-  if (recorded.every((c) => c === version)) {
-    ctx.say(`• ${name}: already at ${version}`);
-    return summary;
+  if (recorded.every((c) => c === newest)) {
+    ctx.say(`• ${name}: already at ${newest}`);
+    return emptySummary(newest, ctx.dryRun);
   }
   // copier refuses a downgrade; say so before a worktree is made for nothing.
-  const past = recorded.find((c) => c && isPlexusVersion(c) && compareVersions(c, version) > 0);
-  if (past) throw new Error(`${name} is at ${past}, past ${version}; a repo is never taken back to an older version`);
+  const past = recorded.find((c) => c && isPlexusVersion(c) && compareVersions(c, newest) > 0);
+  if (past) throw new Error(`${name} is at ${past}, past ${newest}; a repo is never taken back to an older version`);
+
+  const asked = options.to !== undefined ? `--to ${newest}` : options.now ? '--now' : undefined;
+  const need: Need = asked
+    ? { take: true, version: newest, why: `asked for (${asked})` }
+    : needOf({
+        recorded,
+        releases,
+        maxAge: options.maxAge ?? maxAgeOf(answers[consumer.sites.indexOf(root)]?.answers ?? {}),
+        now: options.today === undefined ? new Date() : new Date(options.today),
+      });
+  if (need.held) ctx.say(`• ${name}: ${need.held} (plx update --now takes it)`);
+  // A repo that rests is looked at for the newest version: one asked for earlier may be on origin.
+  const version = need.take ? need.version : newest;
+  const summary = emptySummary(version, ctx.dryRun);
 
   const branch = versionBranch(version);
   const onOrigin = await ctx
@@ -129,15 +137,6 @@ export async function update(ctx: Context, options: UpdateOptions): Promise<Summ
     return summary;
   }
 
-  const asked = options.to !== undefined ? `--to ${version}` : options.now ? '--now' : undefined;
-  const need = needOf({
-    recorded,
-    releases,
-    asked,
-    stale: asked ? [] : await staleIn(ctx, consumer, repo, version),
-    maxAge: options.maxAge ?? maxAgeOf(answers[consumer.sites.indexOf(root)]?.answers ?? {}),
-    now: options.today === undefined ? new Date() : new Date(options.today),
-  });
   if (!need.take) {
     ctx.say(`• ${name}: rests — ${need.why} (plx update --now takes ${version})`);
     summary.resting.push({ path: name, reason: need.why });
@@ -165,40 +164,6 @@ export async function update(ctx: Context, options: UpdateOptions): Promise<Summ
     if (scratch) await ctx.stage(run('rm', ['-rf', scratch]));
   }
   return summary;
-}
-
-/**
- * The declared modules of the repo's sites that changed since their markers,
- * by the manifest of the version. A version without a manifest (one cut before
- * there were any, or a forge that cannot be asked) is said and checked for
- * nothing: the backstop still holds.
- */
-async function staleIn(ctx: Context, consumer: Consumer, repo: string, version: string): Promise<Stale[]> {
-  const text = await ctx
-    .read('gh', ['release', 'download', version, '-R', RELEASES_REPO, '-p', MANIFEST_FILE, '-O', '-'])
-    .catch(() => undefined);
-  if (text === undefined) {
-    ctx.say(
-      `  ${consumer.rel}: Plexus ${version} carries no ${MANIFEST_FILE} that can be read; its modules are not checked`,
-    );
-    return [];
-  }
-  const catalog = catalogOf(parseManifest(text));
-  const markers: Marked[] = [];
-  for (const site of consumer.sites) {
-    const file = join(relative(consumer.path, site.path), MARKER_FILE);
-    const marker =
-      (await ctx.read('git', ['show', `origin/${consumer.branch}:${file}`], { cwd: repo }).catch(() => undefined)) ??
-      (await ctx.readFile(join(site.path, MARKER_FILE)).catch(() => undefined));
-    if (marker === undefined) continue;
-    try {
-      const { plexus, modules } = parseMarker(marker);
-      markers.push({ where: join(site.rel, MARKER_FILE), plexus, modules });
-    } catch {
-      // An unreadable marker is doctor's finding, not a reason to take a version.
-    }
-  }
-  return staleModules(markers, catalog);
 }
 
 /** Where the versions are read from: the compendium's releases. */
