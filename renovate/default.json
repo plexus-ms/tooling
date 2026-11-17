@@ -67,6 +67,11 @@
       "automerge": true
     },
     {
+      "description": "A digest update carries no release timestamp of its own, so under Renovate's default `timestamp-required` its release-age check stays pending forever and holds the whole weekly group back from merging. The age is still checked where the newest matching version has a timestamp; an update without one proceeds.",
+      "matchUpdateTypes": ["digest"],
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
+    },
+    {
       "description": "The app is the unit of deployment (§ 3 PLX-Delivery): a major of one app's images moves as one PR, so one merge is one deploy and its services never run mismatched versions; patch and minor ride the weekly group. The group is named after the app directory, apps/<app>/.",
       "matchManagers": ["docker-compose"],
       "matchFileNames": ["apps/*/**"],
