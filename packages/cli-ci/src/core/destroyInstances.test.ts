@@ -17,10 +17,10 @@ test('the repo label replaces the slash', () => {
 });
 
 test('selectRunInstances takes this run and attempt, spares kept instances, and ignores other runs and unlabelled instances', () => {
-  const mine = instance('exo-build-41836428433-website-1-1', {});
-  const kept = instance('exo-build-41836428433-website-1-kept', { kept: '2026-11-04T13:17:00Z' });
-  const other = instance('exo-build-1-website-1', { run: '1' });
-  const attempt2 = instance('exo-build-41836428433-website-2', { attempt: '2' });
+  const mine = instance('exo-large-41836428433-website-1-1', {});
+  const kept = instance('exo-large-41836428433-website-1-kept', { kept: '2026-11-04T13:17:00Z' });
+  const other = instance('exo-large-1-website-1', { run: '1' });
+  const attempt2 = instance('exo-large-41836428433-website-2', { attempt: '2' });
   const foreign: Instance = { ...instance('davids-test', {}), labels: {} };
   assert.deepEqual(
     selectRunInstances([mine, kept, other, attempt2, foreign], run).map((i) => i.name),
@@ -30,12 +30,12 @@ test('selectRunInstances takes this run and attempt, spares kept instances, and 
 
 test('selectRunRegistrations matches every label shape of the run and leaves busy ones', () => {
   const runners = [
-    { id: 1, name: 'exo-build-41836428433-website-1', status: 'offline', busy: false },
-    { id: 2, name: 'exo-build-41836428433-vernier-app-1-2', status: 'online', busy: false },
+    { id: 1, name: 'exo-large-41836428433-website-1', status: 'offline', busy: false },
+    { id: 2, name: 'exo-large-41836428433-vernier-app-1-2', status: 'online', busy: false },
     { id: 3, name: 'exo-dummy-41836428433-1-orphan', status: 'offline', busy: false },
-    { id: 4, name: 'exo-build-41836428433-website-1', status: 'online', busy: true },
-    { id: 5, name: 'exo-build-99-website-1', status: 'offline', busy: false },
-    { id: 6, name: 'exo-build-41836428433-website-2', status: 'offline', busy: false },
+    { id: 4, name: 'exo-large-41836428433-website-1', status: 'online', busy: true },
+    { id: 5, name: 'exo-large-99-website-1', status: 'offline', busy: false },
+    { id: 6, name: 'exo-large-41836428433-website-2', status: 'offline', busy: false },
   ];
   assert.deepEqual(
     selectRunRegistrations(runners, run).map((r) => r.id),
@@ -62,8 +62,8 @@ function fakeExo(instances: Instance[], refusals: Record<string, number>) {
 }
 
 test('destroyInstances deletes the others when one is refused, and asks again for that one', async () => {
-  const starting = { ...instance('exo-build-41836428433-website-1', {}), state: 'starting' };
-  const running = instance('exo-build-41836428433-vernier-app-1', {});
+  const starting = { ...instance('exo-large-41836428433-website-1', {}), state: 'starting' };
+  const running = instance('exo-large-41836428433-vernier-app-1', {});
   const { exo, calls } = fakeExo([starting, running], { [starting.id]: 2 });
   const waits: number[] = [];
   const done = await destroyInstances(quiet, exo, undefined, run, { wait: async (ms) => void waits.push(ms) });
@@ -73,12 +73,12 @@ test('destroyInstances deletes the others when one is refused, and asks again fo
 });
 
 test('destroyInstances fails after the last retry, naming what is left, with the others deleted', async () => {
-  const stuck = { ...instance('exo-build-41836428433-website-1', {}), state: 'starting' };
-  const running = instance('exo-build-41836428433-vernier-app-1', {});
+  const stuck = { ...instance('exo-large-41836428433-website-1', {}), state: 'starting' };
+  const running = instance('exo-large-41836428433-vernier-app-1', {});
   const { exo, calls } = fakeExo([stuck, running], { [stuck.id]: 99 });
   await assert.rejects(
     destroyInstances(quiet, exo, undefined, run, { retries: 2, wait: async () => undefined }),
-    /1 instance\(s\) could not be deleted: exo-build-41836428433-website-1/,
+    /1 instance\(s\) could not be deleted: exo-large-41836428433-website-1/,
   );
   assert.equal(calls.filter((id) => id === running.id).length, 1);
   assert.equal(calls.filter((id) => id === stuck.id).length, 3);

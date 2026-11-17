@@ -1,5 +1,6 @@
 // Create the throwaway instances a run's large jobs need (§ 8 PLX-Delivery,
-// the hybrid strategy), one per build and per test leg of the plan, at once.
+// the hybrid strategy), one per leg of the plan, at once: the one machine an
+// app's build, its test or both run on.
 // For each: a JIT config from GitHub, the raw create-instance call with the
 // labels the cleanup and the sweep read, user-data that arms the teardown
 // layers first, then a wait for the runner to show online, since a boot that
@@ -22,8 +23,6 @@ import type { ObjectStorage } from './registry.ts';
 import { deadline, iso, registryBuckets } from './time.ts';
 import { RUNNER_USER_DATA, render } from './userData.ts';
 
-export type Kind = 'build' | 'test';
-
 /** What a runner's user-data is told. */
 export interface Deadlines {
   noJobMinutes: number;
@@ -32,7 +31,6 @@ export interface Deadlines {
 }
 
 export interface LaunchOptions {
-  kind: Kind;
   label: string;
   app?: string;
   run: RunIdentity;
@@ -95,7 +93,6 @@ export function renderUserData(options: LaunchOptions, jitconfig: string, now: D
     DEATH_MINUTES: String(options.deadlines.deathMinutes),
     ZONE: options.zone,
     LABEL: options.label,
-    KIND: options.kind,
     APP: options.app ?? '',
     REPO: options.run.repo,
     RUN: options.run.runId,
@@ -140,7 +137,6 @@ export function instanceLabels(
     run: options.run.runId,
     attempt: options.run.attempt,
     app: options.app || 'none',
-    kind: options.kind,
     'no-job-deadline': noJobDeadline,
     'death-deadline': deathDeadline,
   };
@@ -248,7 +244,7 @@ export function keptMail(options: LaunchOptions, id: string): { subject: string;
   return {
     subject: `plexus-ci: ${label} did not come online and is kept`,
     text: [
-      `The instance ${label} (${options.kind}, app ${options.app ?? 'none'}) of ${run.repo} run ${run.runId} attempt ${run.attempt} did not register its runner within ${options.onlineSeconds} seconds.`,
+      `The instance ${label} (app ${options.app ?? 'none'}) of ${run.repo} run ${run.runId} attempt ${run.attempt} did not register its runner within ${options.onlineSeconds} seconds.`,
       '',
       `It is stopped and kept as ${label}-kept:`,
       `  id    ${id}`,
@@ -293,9 +289,8 @@ async function keep(
   );
 }
 
-/** One instance to create: what its job is, the one label that job asks for, and its app. */
+/** One instance to create: the one label its job asks for, and its app. */
 export interface InstanceLeg {
-  kind: Kind;
   label: string;
   app: string;
 }
@@ -306,7 +301,7 @@ export async function createInstances(
   exo: Exo,
   github: GitHubRunners,
   legs: InstanceLeg[],
-  shared: Omit<LaunchOptions, 'label' | 'app' | 'kind'>,
+  shared: Omit<LaunchOptions, 'label' | 'app'>,
 ): Promise<Launch[]> {
   const launches = await Promise.allSettled(legs.map((leg) => launch(ctx, exo, github, { ...shared, ...leg })));
   const failed = launches.filter((l) => l.status === 'rejected');

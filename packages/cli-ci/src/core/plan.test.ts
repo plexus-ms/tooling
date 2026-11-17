@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Context } from '@plexus-ms/lib';
 import { fakeIo, notThere } from '../testing/fakeIo.ts';
-import { deployLegsOf, environmentOf, hashesOf, legsOf, plan, readHashes, testLegsOf } from './plan.ts';
+import { deployLegsOf, environmentOf, hashesOf, legsOf, plan, readHashes, verbsOf } from './plan.ts';
 
 const dryRun = JSON.stringify({
   tasks: [
@@ -47,22 +47,21 @@ test('readHashes asks each app’s package.json for the name Turbo knows it by',
 
 test('a leg names its runner from the strategy: the forge’s, a large slot, or an instance of its own', () => {
   assert.deepEqual(legsOf(['website'], hashes, 'build', 'hybrid', run), [
-    { app: 'website', hash: '0f2a', runner: 'exo-build-41-website-1', n: 1 },
+    { app: 'website', hash: '0f2a', runner: 'exo-large-41-website-1', n: 1, build: true, test: '' },
   ]);
   assert.equal(legsOf(['website'], hashes, 'build', 'github', run)[0]?.runner, 'ubuntu-latest');
   assert.equal(legsOf(['website'], hashes, 'build', 'on-prem', run)[0]?.runner, 'ci-large');
   assert.deepEqual(
     legsOf(['vernier-app'], hashes, 'repro', 'hybrid', { runId: '41', attempt: '2' }).map((l) => l.runner),
-    ['exo-build-41-vernier-app-2-1', 'exo-build-41-vernier-app-2-2'],
+    ['exo-large-41-vernier-app-2-1', 'exo-large-41-vernier-app-2-2'],
   );
   assert.throws(() => legsOf(['nope'], hashes, 'build', 'hybrid', run), /no build hash for nope/);
 });
 
-test('testLegsOf: one leg per app with a test task, carrying the build it tests', () => {
-  assert.deepEqual(testLegsOf(['website', 'vernier-app'], hashes, 'hybrid', run), [
-    { app: 'vernier-app', hash: '5b05', build: 'c51b', runner: 'exo-test-41-vernier-app-1' },
-  ]);
-  assert.equal(testLegsOf(['vernier-app'], hashes, 'on-prem', run)[0]?.runner, 'ci-large');
+test('a leg is named after the verbs it mounts', () => {
+  assert.equal(verbsOf({ build: true, test: '5b05' }), 'build, test');
+  assert.equal(verbsOf({ build: true, test: '' }), 'build');
+  assert.equal(verbsOf({ build: false, test: '5b05' }), 'test');
 });
 
 test('the environment follows the branch on a push or a run by hand, and a given one stands in', () => {
@@ -103,9 +102,9 @@ test('the plan skips what the registry holds, per build and per test, and plans 
       sha: 'abc',
     },
   });
-  assert.deepEqual(result.legs, [{ app: 'vernier-app', hash: 'c51b', runner: 'exo-build-41-vernier-app-1', n: 1 }]);
-  assert.deepEqual(result.tests, [
-    { app: 'vernier-app', hash: '5b05', build: 'c51b', runner: 'exo-test-41-vernier-app-1' },
+  // One leg, one instance: vernier-app's build and its test after it.
+  assert.deepEqual(result.legs, [
+    { app: 'vernier-app', hash: 'c51b', runner: 'exo-large-41-vernier-app-1', n: 1, build: true, test: '5b05' },
   ]);
   assert.deepEqual(result.skipped, [{ app: 'website', hash: '0f2a', ref: 'localhost:5000/website:build-0f2a' }]);
   assert.deepEqual(result.apps, hashes);
@@ -113,6 +112,42 @@ test('the plan skips what the registry holds, per build and per test, and plans 
   assert.deepEqual(result.deploys, [
     { app: 'vernier-app', host: 'ssh://plexus@vm101', image: 'ghcr.io/damage-ms/vernier-app:abc' },
   ]);
+});
+
+test('an app whose build the registry holds and whose test it does not gets a leg that only tests', async () => {
+  const io = fakeIo({}, undefined, {
+    curl: (_cwd, args) => (args.at(-1)?.includes('/manifests/build-') ? '' : notThere('curl')),
+  });
+  const result = await plan(new Context({}, io), {
+    apps: ['website', 'vernier-app'],
+    mode: 'build',
+    tests: true,
+    hashes,
+    strategy: 'hybrid',
+    registry: { kind: 'own' },
+    run,
+  });
+  assert.deepEqual(result.legs, [
+    { app: 'vernier-app', hash: 'c51b', runner: 'exo-large-41-vernier-app-1', n: 1, build: false, test: '5b05' },
+  ]);
+  assert.equal(result.skipped.length, 2);
+  // Without --test and in repro mode no leg tests.
+  const builds = await plan(new Context({}, io), {
+    apps: ['vernier-app'],
+    mode: 'repro',
+    tests: true,
+    hashes,
+    strategy: 'hybrid',
+    registry: { kind: 'own' },
+    run,
+  });
+  assert.deepEqual(
+    builds.legs.map((l) => [l.n, l.build, l.test]),
+    [
+      [1, true, ''],
+      [2, true, ''],
+    ],
+  );
 });
 
 test('with the forge’s registry the look-up is crane’s, and without an environment nothing deploys', async () => {

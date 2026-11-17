@@ -36,7 +36,6 @@ write_files:
       SELF_LAYERS=@@SELF_LAYERS@@
       ZONE=@@ZONE@@
       LABEL=@@LABEL@@
-      KIND=@@KIND@@
       APP=@@APP@@
       REPO=@@REPO@@
       RUN=@@RUN@@
@@ -142,7 +141,7 @@ write_files:
       set -a; . /etc/plexus-ci/env; set +a
       [ "\${SELF_LAYERS:-on}" != off ] || { logger -t plexus-ci "death: layers off, no mail, not deleting"; exit 0; }
       plexus-ci-mail "plexus-ci: $LABEL past its deadline" \\
-        "The instance $LABEL ($KIND, app $APP, $REPO run $RUN) reached its deathTimeout of @@DEATH_MINUTES@@ minutes and deletes itself. A job was still running or never ended; look at the run."
+        "The instance $LABEL (app $APP, $REPO run $RUN) reached its deathTimeout of @@DEATH_MINUTES@@ minutes and deletes itself. A job was still running or never ended; look at the run."
       exec plexus-ci-self-delete death
 
   - path: /etc/systemd/system/plexus-ci-no-job.service
@@ -251,9 +250,9 @@ runcmd:
   # The registry sidecars, when the launch named a bucket (§ 8 PLX-Delivery): :5000 on this month's bucket, read-write; :5001 on the previous month's, read-only. The same two containers as .github/ci/registry.sh starts on a GitHub runner.
   - . /etc/plexus-ci/env && if [ -n "$REGISTRY_ENDPOINT" ]; then docker run -d --name registry --restart unless-stopped -p 127.0.0.1:5000:5000 -e REGISTRY_STORAGE=s3 -e REGISTRY_STORAGE_S3_REGIONENDPOINT="$REGISTRY_ENDPOINT" -e REGISTRY_STORAGE_S3_REGION="$REGISTRY_REGION" -e REGISTRY_STORAGE_S3_BUCKET="$REGISTRY_BUCKET" -e REGISTRY_STORAGE_S3_ACCESSKEY="$REGISTRY_ACCESS_KEY" -e REGISTRY_STORAGE_S3_SECRETKEY="$REGISTRY_SECRET_KEY" -e REGISTRY_STORAGE_S3_FORCEPATHSTYLE=true -e REGISTRY_STORAGE_DELETE_ENABLED=true registry:2 >/dev/null; fi
   - . /etc/plexus-ci/env && if [ -n "$REGISTRY_ENDPOINT" ]; then docker run -d --name registry-previous --restart on-failure:3 -p 127.0.0.1:5001:5000 -e REGISTRY_STORAGE=s3 -e REGISTRY_STORAGE_S3_REGIONENDPOINT="$REGISTRY_ENDPOINT" -e REGISTRY_STORAGE_S3_REGION="$REGISTRY_REGION" -e REGISTRY_STORAGE_S3_BUCKET="$REGISTRY_PREVIOUS_BUCKET" -e REGISTRY_STORAGE_S3_ACCESSKEY="$REGISTRY_ACCESS_KEY" -e REGISTRY_STORAGE_S3_SECRETKEY="$REGISTRY_SECRET_KEY" -e REGISTRY_STORAGE_S3_FORCEPATHSTYLE=true -e 'REGISTRY_STORAGE_MAINTENANCE_READONLY={"enabled":true}' registry:2 >/dev/null; fi
-  # A builder: the docker driver cannot export a registry cache, so BuildKit runs in its own container on the host's network, where localhost:5000 is the sidecar; bootstrapped now so that the build does not wait for it.
-  - . /etc/plexus-ci/env && if [ "$KIND" = build ]; then su -s /bin/bash runner -c 'docker buildx create --name ci --driver docker-container --driver-opt network=host --bootstrap >/dev/null' & fi
-  - . /etc/plexus-ci/env && if [ "$KIND" = test ]; then docker pull -q postgres:18.6 >/dev/null & docker pull -q rustfs/rustfs:1.0.4 >/dev/null & fi
+  # A builder: the docker driver cannot export a registry cache, so BuildKit runs in its own container on the host's network, where localhost:5000 is the sidecar; bootstrapped now so that the build does not wait for it. Every instance gets it and the test's images: there is one kind of instance, whatever its leg owes.
+  - su -s /bin/bash runner -c 'docker buildx create --name ci --driver docker-container --driver-opt network=host --bootstrap >/dev/null' &
+  - docker pull -q postgres:18.6 >/dev/null & docker pull -q rustfs/rustfs:1.0.4 >/dev/null &
   - systemctl start plexus-ci-runner.service
 `;
 

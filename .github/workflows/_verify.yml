@@ -7,11 +7,18 @@ name: _verify
 # (@plexus-ms/cli-ci, pinned in the caller's mise.toml); every step here is
 # one invocation.
 #
-#   plan      small   the build and test hashes from one Turbo dry run, the look-ups, the
-#                     matrices; under hybrid, one instance per image to build and test to run
-#   build     large   the image from the pruned context, pushed to the registry as build-<hash>
-#   test      large   the app's compose stack on the candidate, its tests, the tag test-<hash>
-#   cleanup   small   hybrid only: delete what this run launched
+#   plan             small   the build and test hashes from one Turbo dry run, the look-ups,
+#                            the matrix; under hybrid, one instance per app that owes something
+#   build-and-test   large   per app, on one machine: `build`, the image from the pruned
+#                            context, pushed to the registry as build-<hash>; then `test`, the
+#                            app's compose stack on the candidate, its tests, the tag test-<hash>
+#   cleanup          small   hybrid only: delete what this run launched
+#
+# The large job carries two verbs because they want the same machine: a test
+# starts when its own build ends, no second machine boots or idles meanwhile,
+# and a failed build tests nothing. Which of the two a leg owes is the plan's:
+# both, the test alone where the registry holds the build, or the build alone
+# for an app without tests; the job is named after exactly those.
 #
 # Where a job of a size runs is the strategy's (`strategy`): the forge's
 # runners, the slots of the tenant's runner hosts, or, for a large job under
@@ -19,9 +26,8 @@ name: _verify
 # the pair on the tenant's object storage, or the forge's registry.
 #
 # A decision comes from a content hash, never from a diff: the same inputs
-# are built once and tested once. The result conditions read job results and
-# never `success()`, because a build or test skipped by its hash is
-# `skipped`, and the default condition reads that through the whole chain.
+# are built once and tested once, and a run whose hashes all hit has no
+# large job at all.
 #
 # The caller's secrets are one: the vault's service account token.
 # Everything else is read from the vault `<owner>-ci` (§ 3 PLX-Secrets): the
@@ -128,7 +134,6 @@ jobs:
     runs-on: ${{ inputs.strategy == 'github' && 'ubuntu-latest' || 'ci-small' }}
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
-      tests: ${{ steps.plan.outputs.tests }}
       apps: ${{ steps.plan.outputs.apps }}
       deploys: ${{ steps.plan.outputs.deploys }}
       environment: ${{ steps.plan.outputs.environment }}
@@ -193,7 +198,7 @@ jobs:
       # The relay's port is no secret, and load-secrets masks every value it
       # loads: a 3-digit port turns up in a 16-digit content hash now and then,
       # and a job output that holds a masked string is dropped (GitHub: "Skip
-      # output ... since it may contain secret"), so the plan's `tests` and
+      # output ... since it may contain secret"), so the plan's `matrix` and
       # `apps` would vanish and nothing would build. `op` is on the path from
       # the step above; what it reads here is registered as no secret.
       - name: Read the relay's port from the vault
@@ -246,12 +251,12 @@ jobs:
           DEPLOY: ${{ inputs.deploy && 'yes' || '' }}
           ENVIRONMENT: ${{ inputs.environment }}
         run: plx-ci plan --test ${DEPLOY:+--deploy --environment "$ENVIRONMENT" --inventory operations/inventory}
-      # Hybrid: one instance per image to build and per test to run, created
-      # at once, each waited for until its runner is online. One that misses
-      # is kept, stopped and mailed about, and replaced once.
+      # Hybrid: one instance per leg, created at once, each waited for until
+      # its runner is online. One that misses is kept, stopped and mailed
+      # about, and replaced once.
       - name: A token that may register and remove runners on this repo
         id: runners
-        if: ${{ inputs.strategy == 'hybrid' && (steps.plan.outputs.matrix != '[]' || steps.plan.outputs.tests != '[]') }}
+        if: ${{ inputs.strategy == 'hybrid' && steps.plan.outputs.matrix != '[]' }}
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ env.APP_CLIENT_ID }}
@@ -260,18 +265,22 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-administration: write
       - name: Create the instances
-        if: ${{ inputs.strategy == 'hybrid' && (steps.plan.outputs.matrix != '[]' || steps.plan.outputs.tests != '[]') }}
+        if: ${{ inputs.strategy == 'hybrid' && steps.plan.outputs.matrix != '[]' }}
         env:
           RUNNER_TOKEN: ${{ steps.runners.outputs.token }}
           MATRIX: ${{ steps.plan.outputs.matrix }}
-          TESTS: ${{ steps.plan.outputs.tests }}
           INSTANCE_TYPE: ${{ inputs.instance-type }}
           NO_JOB_MINUTES: 10
           DEATH_MINUTES: 45
           POWEROFF_MINUTES: 50
-        run: plx-ci hybrid create-instances "$MATRIX" "$TESTS"
+        run: plx-ci hybrid create-instances "$MATRIX"
 
-  build:
+  # One job per leg of the plan, an app that owes something, and one machine
+  # for it: the build where `matrix.build` says so, then the test where
+  # `matrix.test` carries its hash. A build that fails ends the job, so its
+  # test never starts; the other apps' legs run on (fail-fast off).
+  build-and-test:
+    name: ${{ matrix.build && (matrix.test != '' && 'build, test' || 'build') || 'test' }} (${{ matrix.app }})
     needs: plan
     if: ${{ needs.plan.outputs.matrix != '[]' }}
     strategy:
@@ -302,10 +311,12 @@ jobs:
           cd .plx-ci && corepack enable && pnpm install --frozen-lockfile --ignore-scripts >/dev/null
           pnpm --filter @plexus-ms/cli-ci... run build >/dev/null
           mkdir -p bin && ln -sf "$PWD/packages/cli-ci/dist/plx-ci.js" bin/plx-ci && echo "$PWD/bin" >> "$GITHUB_PATH"
+      # A step output, not the job's environment: the key is the build's, and
+      # the test that follows on this machine has no business with it.
       - name: The app's fixed Next key
+        id: key
+        if: ${{ matrix.build }}
         uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
-        with:
-          export-env: true
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.op-service-account-token }}
           NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: op://${{ env.VAULT }}/app_${{ matrix.app }}/server-actions-key
@@ -320,64 +331,10 @@ jobs:
           REGISTRY_REGION: op://${{ env.VAULT }}/bucket-registry/region
           REGISTRY_ACCESS_KEY: op://${{ env.VAULT }}/bucket-registry/access-key-id
           REGISTRY_SECRET_KEY: op://${{ env.VAULT }}/bucket-registry/secret-access-key
-      - name: Log in to the forge's registry
-        if: ${{ inputs.registry == 'ghcr' }}
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-      - name: The registry
-        run: plx-ci registry
-      - name: Build
-        run: plx-ci build "${{ matrix.app }}" "${{ matrix.hash }}" "$GITHUB_SHA"
-
-  # After every build, whether or not one failed: a test whose candidate is
-  # missing fails on its own, the others run. Not in a cancelled run.
-  test:
-    needs: [plan, build]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.tests != '[]' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.plan.outputs.tests) }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5
-        if: ${{ inputs.tooling-ref == '' }}
-        with:
-          install_args: node npm:@plexus-ms/cli-ci
-      - uses: actions/checkout@v7
-        if: ${{ inputs.tooling-ref != '' }}
-        with:
-          repository: plexus-ms/tooling
-          ref: ${{ inputs.tooling-ref }}
-          path: .plx-ci
-      - uses: actions/setup-node@v7
-        if: ${{ inputs.tooling-ref != '' }}
-        with:
-          node-version-file: .plx-ci/mise.toml
-      - name: plx-ci from the unreleased tooling
-        if: ${{ inputs.tooling-ref != '' }}
-        run: |
-          cd .plx-ci && corepack enable && pnpm install --frozen-lockfile --ignore-scripts >/dev/null
-          pnpm --filter @plexus-ms/cli-ci... run build >/dev/null
-          mkdir -p bin && ln -sf "$PWD/packages/cli-ci/dist/plx-ci.js" bin/plx-ci && echo "$PWD/bin" >> "$GITHUB_PATH"
-      - name: Load the registry's keys from the vault
-        if: ${{ inputs.registry == 'own' && inputs.strategy != 'hybrid' }}
-        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
-        with:
-          export-env: true
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.op-service-account-token }}
-          REGISTRY_ENDPOINT: op://${{ env.VAULT }}/bucket-registry/endpoint
-          REGISTRY_REGION: op://${{ env.VAULT }}/bucket-registry/region
-          REGISTRY_ACCESS_KEY: op://${{ env.VAULT }}/bucket-registry/access-key-id
-          REGISTRY_SECRET_KEY: op://${{ env.VAULT }}/bucket-registry/secret-access-key
       # plx-ci test finds the candidate with crane, which reads the login
       # docker writes below; into the job's home, as in plan.
       - name: Install crane
-        if: ${{ inputs.registry == 'ghcr' }}
+        if: ${{ inputs.registry == 'ghcr' && matrix.test != '' }}
         run: |
           mkdir -p "$HOME/.local/bin" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           curl -fsSL "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" | tar -xz -C "$HOME/.local/bin" crane
@@ -388,27 +345,34 @@ jobs:
         run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
       - name: The registry
         run: plx-ci registry
+      - name: Build
+        if: ${{ matrix.build }}
+        env:
+          NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${{ steps.key.outputs.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }}
+        run: plx-ci build "${{ matrix.app }}" "${{ matrix.hash }}" "$GITHUB_SHA"
       # The specs and their dependencies, the app's own; Chromium with its
       # system libraries at the Playwright version the lockfile pins.
       - name: Install the app's dependencies and the browser
+        if: ${{ matrix.test != '' }}
         run: |
           corepack enable && pnpm install --frozen-lockfile --filter "{./apps/${{ matrix.app }}}..."
           pnpm --filter "./apps/${{ matrix.app }}" exec playwright install --with-deps chromium
       - name: Test
-        run: plx-ci test "${{ matrix.app }}" "${{ matrix.build }}" "${{ matrix.hash }}"
+        if: ${{ matrix.test != '' }}
+        run: plx-ci test "${{ matrix.app }}" "${{ matrix.hash }}" "${{ matrix.test }}"
 
   # Hybrid: delete what this run launched, whatever the jobs ended in: an
   # instance a failed job left, or a runner that never took one. Skipped
   # where plan succeeded and launched nothing (one instance per entry of
-  # matrix and of tests, so both empty is none); a plan that failed or was
+  # the matrix, so an empty one is none); a plan that failed or was
   # cancelled may have launched part, and is cleaned up after. It never
   # fails the run: what it leaves, the instances' own deadlines and the
   # daily housekeeping remove.
   cleanup:
-    needs: [plan, build, test]
+    needs: [plan, build-and-test]
     if: >-
       ${{ always() && inputs.strategy == 'hybrid' && needs.plan.result != 'skipped'
-          && !(needs.plan.result == 'success' && needs.plan.outputs.matrix == '[]' && needs.plan.outputs.tests == '[]') }}
+          && !(needs.plan.result == 'success' && needs.plan.outputs.matrix == '[]') }}
     continue-on-error: true
     runs-on: ${{ inputs.strategy == 'github' && 'ubuntu-latest' || 'ci-small' }}
     steps:

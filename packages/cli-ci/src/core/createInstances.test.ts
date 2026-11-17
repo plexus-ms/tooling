@@ -17,8 +17,7 @@ import { GitHubRunners } from './github.ts';
 
 const now = new Date('2026-11-04T10:40:27Z');
 const options: LaunchOptions = {
-  kind: 'build',
-  label: 'exo-build-41-website-1',
+  label: 'exo-large-41-website-1',
   app: 'website',
   run: { repo: 'damage-ms/web', runId: '41', attempt: '1' },
   runnerToken: 'ghs_x',
@@ -39,7 +38,7 @@ const options: LaunchOptions = {
 
 test('the user-data is rendered with the run’s facts and the month’s buckets, and fits the API', () => {
   const text = renderUserData(options, 'JIT', now);
-  assert.match(text, /^hostname: exo-build-41-website-1$/m);
+  assert.match(text, /^hostname: exo-large-41-website-1$/m);
   assert.match(text, /REGISTRY_BUCKET=damage-ms-ci-registry-2026-11/);
   assert.match(text, /REGISTRY_PREVIOUS_BUCKET=damage-ms-ci-registry-2026-10/);
   assert.match(text, /SELF_LAYERS=off/);
@@ -54,7 +53,6 @@ test('the labels carry what the cleanup and the sweep read', () => {
     run: '41',
     attempt: '1',
     app: 'website',
-    kind: 'build',
     'no-job-deadline': '2026-11-04T10:50:27Z',
     'death-deadline': '2026-11-04T11:25:27Z',
   });
@@ -66,7 +64,7 @@ test('launch: three lookups, JIT config, create, wait, online; the instance id c
     curl: (_cwd, _args, input = '') => {
       calls.push(`curl ${input.match(/request = "(\w+)"/)?.[1]} ${input.match(/url = "([^"]+)"/)?.[1]}`);
       if (input.includes('generate-jitconfig')) return JSON.stringify({ encoded_jit_config: 'JIT', runner: { id: 7 } });
-      return JSON.stringify({ runners: [{ id: 7, name: 'exo-build-41-website-1', status: 'online', busy: false }] });
+      return JSON.stringify({ runners: [{ id: 7, name: 'exo-large-41-website-1', status: 'online', busy: false }] });
     },
     exo: (_cwd, args, input) => {
       calls.push(`exo ${args[1]}`);
@@ -79,7 +77,7 @@ test('launch: three lookups, JIT config, create, wait, online; the instance id c
           return JSON.stringify({ 'security-groups': [{ id: 'g1', name: 'runners' }] });
         case 'create-instance': {
           const body = JSON.parse(input ?? '{}') as { name: string; labels: Record<string, string> };
-          assert.equal(body.name, 'exo-build-41-website-1');
+          assert.equal(body.name, 'exo-large-41-website-1');
           assert.equal(body.labels.app, 'website');
           return JSON.stringify({ id: 'op1', state: 'pending', reference: { id: 'inst1' } });
         }
@@ -103,7 +101,7 @@ test('launch: three lookups, JIT config, create, wait, online; the instance id c
     'exo create-instance',
   ]);
   assert.ok(calls.includes('exo get-operation'));
-  assert.ok(calls.some((c) => c.startsWith('curl GET') && c.includes('name=exo-build-41-website-1')));
+  assert.ok(calls.some((c) => c.startsWith('curl GET') && c.includes('name=exo-large-41-website-1')));
 });
 
 test('launch under --dry-run performs nothing and reports the placeholder id', async () => {
@@ -209,7 +207,7 @@ test('a miss is kept: stopped, renamed and labelled, mailed about, its registrat
   ]);
   assert.ok(!w.calls.some((c) => c.startsWith('exo delete-instance')));
   assert.equal(w.updates.length, 1);
-  assert.equal(w.updates[0]?.name, 'exo-build-41-website-1-kept');
+  assert.equal(w.updates[0]?.name, 'exo-large-41-website-1-kept');
   assert.equal(w.updates[0]?.labels.kept, '2026-11-04T10:40:27Z');
   assert.equal(w.updates[0]?.labels.run, '41');
   assert.deepEqual(w.mails, ['smtp://smtp.x:587']);
@@ -219,7 +217,7 @@ test('a second miss is kept as well and fails the launch; nothing is deleted', a
   const w = world(() => false);
   await assert.rejects(
     launch(w.ctx, w.exo, w.github, options),
-    /2 instance\(s\) of exo-build-41-website-1 failed to come online and are kept, giving up/,
+    /2 instance\(s\) of exo-large-41-website-1 failed to come online and are kept, giving up/,
   );
   assert.deepEqual(
     w.updates.map((u) => u.id),
@@ -232,8 +230,8 @@ test('a second miss is kept as well and fails the launch; nothing is deleted', a
 
 test('the mail about a kept instance names it, its id and its zone', () => {
   const mail = keptMail(options, 'inst1');
-  assert.match(mail.subject, /exo-build-41-website-1 did not come online and is kept/);
-  assert.match(mail.text, /kept as exo-build-41-website-1-kept/);
+  assert.match(mail.subject, /exo-large-41-website-1 did not come online and is kept/);
+  assert.match(mail.text, /kept as exo-large-41-website-1-kept/);
   assert.match(mail.text, /id {4}inst1/);
   assert.match(mail.text, /zone {2}de-fra-1/);
   assert.match(mail.text, /damage-ms\/web run 41 attempt 1/);
@@ -241,21 +239,22 @@ test('the mail about a kept instance names it, its id and its zone', () => {
 
 test('createInstances launches every leg and fails as one when a launch does', async () => {
   const w = world(() => true);
-  const { label: _label, app: _app, kind: _kind, ...shared } = options;
+  const { label: _label, app: _app, ...shared } = options;
   const launches = await createInstances(
     w.ctx,
     w.exo,
     w.github,
     [
-      { kind: 'build', label: 'exo-build-41-website-1', app: 'website' },
-      { kind: 'test', label: 'exo-build-41-website-1', app: 'website' },
+      // The fake forge knows one runner, so both legs ask for its label.
+      { label: 'exo-large-41-website-1', app: 'website' },
+      { label: 'exo-large-41-website-1', app: 'vernier-app' },
     ],
     shared,
   );
   assert.equal(launches.length, 2);
   const none = world(() => false);
   await assert.rejects(
-    createInstances(none.ctx, none.exo, none.github, [{ kind: 'build', label: options.label, app: 'website' }], shared),
+    createInstances(none.ctx, none.exo, none.github, [{ label: options.label, app: 'website' }], shared),
     /1 launch\(es\) failed/,
   );
 });

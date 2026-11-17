@@ -35,7 +35,7 @@ export function selectRunInstances(instances: Instance[], run: RunIdentity): Ins
   );
 }
 
-/** The registrations this run's launches minted: `exo-<kind>-<run>[-<app>…]-<attempt>[-<suffix>]`, not busy with a job. */
+/** The registrations this run's launches minted: `exo-large-<run>[-<app>…]-<attempt>[-<suffix>]`, not busy with a job. */
 export function selectRunRegistrations(runners: Runner[], run: RunIdentity): Runner[] {
   const pattern = new RegExp(`^exo-[a-z]+-${run.runId}(-[^-]+)*-${run.attempt}(-[a-z0-9]+)?$`);
   return runners.filter((r) => !r.busy && pattern.test(r.name));

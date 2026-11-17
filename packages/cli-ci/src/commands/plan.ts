@@ -1,11 +1,11 @@
 // plx-ci plan [--test] [--deploy] [apps...]: the hashes and the look-ups
-// (§ 8 PLX-Delivery), printed as the matrices the build and the test jobs fan
-// out over, each leg naming its runner from the strategy, and the apps with
-// their hashes for the publish. With --deploy, the environment the run
+// (§ 8 PLX-Delivery), printed as the matrix the large jobs fan out over, each
+// leg naming its runner from the strategy and what it owes there, the build,
+// the test or both, and the apps with their hashes for the publish. With --deploy, the environment the run
 // releases into and each app's target there, from a checkout of the platform
 // repo's inventory. Launches nothing: under hybrid, `plx-ci hybrid
-// create-instances` reads the matrices next. Writes matrix=, tests=, apps=,
-// deploys= and environment= to GITHUB_OUTPUT when that is set.
+// create-instances` reads the matrix next. Writes matrix=, apps=, deploys=
+// and environment= to GITHUB_OUTPUT when that is set.
 // From the environment: CI_STRATEGY, CI_REGISTRY, CI_OVERLAY; GITHUB_RUN_ID
 // and GITHUB_RUN_ATTEMPT (they name the instances under hybrid); for
 // --deploy GITHUB_EVENT_NAME, GITHUB_REF_NAME, GITHUB_SHA and IMAGE_PREFIX.
@@ -17,7 +17,7 @@ import { appendFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readDeployTargets, targetsIn } from '@plexus-ms/lib';
 import type { Command } from 'commander';
-import { environmentOf, type Mode, plan, readHashes } from '../core/plan.ts';
+import { environmentOf, type Mode, plan, readHashes, verbsOf } from '../core/plan.ts';
 import { contextOf } from '../program.ts';
 import { imagePrefix, need, registryFor, settings, withStrategy } from './shared.ts';
 
@@ -85,8 +85,7 @@ export function register(program: Command): void {
       });
       ctx.result(result, (r) =>
         [
-          ...r.legs.map((l) => `build ${l.app} ${l.hash} ${l.runner}`),
-          ...r.tests.map((l) => `test ${l.app} ${l.hash} ${l.runner}`),
+          ...r.legs.map((l) => `${verbsOf(l)} ${l.app} ${l.hash}${l.test ? ` ${l.test}` : ''} ${l.runner}`),
           ...r.deploys.map((l) => `deploy ${l.app} ${l.host} ${l.image}`),
         ].join('\n'),
       );
@@ -95,7 +94,6 @@ export function register(program: Command): void {
           env.GITHUB_OUTPUT,
           [
             `matrix=${JSON.stringify(result.legs)}`,
-            `tests=${JSON.stringify(result.tests)}`,
             `apps=${JSON.stringify(result.apps)}`,
             `deploys=${JSON.stringify(result.deploys)}`,
             `environment=${result.environment}`,

@@ -1,8 +1,8 @@
 // plx-ci hybrid: what only the hybrid strategy needs (§ 8 PLX-Delivery), the
 // throwaway instances its large jobs run on.
 //
-// create-instances <matrix-json> [tests-json]: one instance per build and per
-// test leg of the plan, at once, each waited for until its runner is online;
+// create-instances <matrix-json>: one instance per leg of the plan, for the
+// app's build, its test or both, at once, each waited for until its runner is online;
 // one that misses is kept, stopped and mailed about, and replaced once. From
 // the environment: GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT;
 // RUNNER_TOKEN (Administration: write on the repo); EXOSCALE_API_KEY/_SECRET
@@ -20,23 +20,21 @@
 // seven days and deleted after fourteen. From the environment:
 // EXOSCALE_API_KEY/_SECRET; SMTP_*, MAIL_* (optional, else no mail).
 //
-//   plx-ci hybrid create-instances "$MATRIX" "$TESTS"
+//   plx-ci hybrid create-instances "$MATRIX"
 //   plx-ci hybrid destroy-instances
 //   plx-ci -n hybrid sweep-instances      # lists, deletes nothing
 import type { Command } from 'commander';
 import { createInstances, DEFAULTS, type InstanceLeg, type LaunchOptions } from '../core/createInstances.ts';
 import { destroyInstances } from '../core/destroyInstances.ts';
 import { smtpFromEnv } from '../core/mail.ts';
-import type { Leg, TestLeg } from '../core/plan.ts';
+import type { Leg } from '../core/plan.ts';
 import { storageFromEnv } from '../core/registry.ts';
 import { sweepInstances } from '../core/sweepInstances.ts';
 import { contextOf } from '../program.ts';
 import { exoOf, githubOf, need, runIdentity, zoneOf } from './shared.ts';
 
-/** The launch options the environment carries; label, app and kind come from the plan's legs. */
-export function launchOptionsFromEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): Omit<LaunchOptions, 'label' | 'app' | 'kind'> {
+/** The launch options the environment carries; label and app come from the plan's legs. */
+export function launchOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): Omit<LaunchOptions, 'label' | 'app'> {
   const minutes = (name: string) => Number(need(name, env));
   return {
     run: runIdentity(env),
@@ -61,14 +59,9 @@ export function launchOptionsFromEnv(
   };
 }
 
-/** The instances a plan's matrices ask for: one per leg, labelled as the leg's runner. */
-export function instanceLegs(matrix: string, tests = '[]'): InstanceLeg[] {
-  const builds = JSON.parse(matrix) as Leg[];
-  const testLegs = JSON.parse(tests) as TestLeg[];
-  return [
-    ...builds.map((l): InstanceLeg => ({ kind: 'build', label: l.runner, app: l.app })),
-    ...testLegs.map((l): InstanceLeg => ({ kind: 'test', label: l.runner, app: l.app })),
-  ];
+/** The instances a plan's matrix asks for: one per leg, labelled as the leg's runner. */
+export function instanceLegs(matrix: string): InstanceLeg[] {
+  return (JSON.parse(matrix) as Leg[]).map((l) => ({ label: l.runner, app: l.app }));
 }
 
 export function register(program: Command): void {
@@ -79,15 +72,14 @@ export function register(program: Command): void {
   hybrid
     .command('create-instances')
     .description(
-      'create one instance per build and test leg of the plan and wait for each runner; a miss is kept, stopped, mailed about and replaced once',
+      'create one instance per leg of the plan and wait for each runner; a miss is kept, stopped, mailed about and replaced once',
     )
-    .argument('<matrix>', 'the plan’s build matrix, JSON')
-    .argument('[tests]', 'the plan’s test matrix, JSON')
-    .action(async (matrix: string, tests: string | undefined, _opts: unknown, command: Command) => {
+    .argument('<matrix>', 'the plan’s matrix, JSON')
+    .action(async (matrix: string, _opts: unknown, command: Command) => {
       const ctx = contextOf(command);
       const github = githubOf(ctx);
       if (!github) throw new Error('RUNNER_TOKEN is empty');
-      const legs = instanceLegs(matrix, tests);
+      const legs = instanceLegs(matrix);
       const result = await createInstances(ctx, exoOf(ctx), github, legs, launchOptionsFromEnv());
       ctx.result(result, (r) => r.map((l) => `${l.id} ${l.label} ${l.createdAt}`).join('\n'));
     });

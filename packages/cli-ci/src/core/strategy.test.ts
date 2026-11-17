@@ -24,10 +24,10 @@ test('an answer outside its set is a usage error that names the set', () => {
 
 test('a size runs on the forge, on a slot, or under hybrid on an instance of its own when it is large', () => {
   assert.equal(runnerOf('github', 'small'), 'ubuntu-latest');
-  assert.equal(runnerOf('github', 'large', 'exo-build-1-a-1'), 'ubuntu-latest');
+  assert.equal(runnerOf('github', 'large', 'exo-large-1-a-1'), 'ubuntu-latest');
   assert.equal(runnerOf('on-prem', 'medium'), 'ci-medium');
-  assert.equal(runnerOf('on-prem', 'large', 'exo-build-1-a-1'), 'ci-large');
+  assert.equal(runnerOf('on-prem', 'large', 'exo-large-1-a-1'), 'ci-large');
   assert.equal(runnerOf('hybrid', 'small'), 'ci-small');
-  assert.equal(runnerOf('hybrid', 'large', 'exo-build-1-a-1'), 'exo-build-1-a-1');
+  assert.equal(runnerOf('hybrid', 'large', 'exo-large-1-a-1'), 'exo-large-1-a-1');
   assert.throws(() => runnerOf('hybrid', 'large'), /needs its instance/);
 });
