@@ -347,18 +347,36 @@ jobs:
         run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
       - name: The registry
         run: plx-ci registry
+      # The specs and their dependencies, the app's own; Chromium's headless
+      # shell, which is all a headless spec launches, with its system libraries
+      # at the Playwright version the lockfile pins. Started here in the
+      # background, so that it runs beside the build, and awaited below.
+      - name: Start installing the app's dependencies and the browser
+        if: ${{ matrix.test != '' }}
+        run: |
+          {
+            set +e
+            (
+              set -e
+              corepack enable
+              pnpm install --frozen-lockfile --filter "{./apps/${{ matrix.app }}}..."
+              pnpm --filter "./apps/${{ matrix.app }}" exec playwright install --with-deps --only-shell chromium
+            )
+            echo $? > "$RUNNER_TEMP/install.exit"
+          } > "$RUNNER_TEMP/install.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/install.pid"
       - name: Build
         if: ${{ matrix.build }}
         env:
           NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${{ steps.key.outputs.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }}
         run: plx-ci build "${{ matrix.app }}" "${{ matrix.hash }}" "$GITHUB_SHA"
-      # The specs and their dependencies, the app's own; Chromium with its
-      # system libraries at the Playwright version the lockfile pins.
+      # The install's log, to its end, and its outcome; an install that died
+      # without one has failed.
       - name: Install the app's dependencies and the browser
         if: ${{ matrix.test != '' }}
         run: |
-          corepack enable && pnpm install --frozen-lockfile --filter "{./apps/${{ matrix.app }}}..."
-          pnpm --filter "./apps/${{ matrix.app }}" exec playwright install --with-deps chromium
+          tail --pid="$(cat "$RUNNER_TEMP/install.pid")" -n +1 -f "$RUNNER_TEMP/install.log"
+          exit "$(cat "$RUNNER_TEMP/install.exit" 2>/dev/null || echo 1)"
       - name: Test
         if: ${{ matrix.test != '' }}
         run: plx-ci test "${{ matrix.app }}" "${{ matrix.hash }}" "${{ matrix.test }}"
