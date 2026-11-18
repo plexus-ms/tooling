@@ -173,15 +173,41 @@ class Remote {
   }
 }
 
+/** A healthcheck as the compose file spells it; every key may be absent or of any type. */
+type Healthcheck = Record<string, unknown>;
+
 /**
- * Whether the app service declares a healthcheck that is not disabled
- * (`PLX-App/Healthcheck`): the deploy waits on it, so a file without one
- * cannot be deployed. Read from the rendered file, as compose would read it;
- * anchors and merge keys resolve, `extends` and `include` do not.
+ * The app service's healthcheck in the rendered file, as compose would read
+ * it: anchors and merge keys resolve, `extends` and `include` do not. A file
+ * that is not YAML compose could read (duplicate keys among them) is a usage
+ * error naming the file, before anything reaches the host.
  */
-export function declaresHealthcheck(text: string): boolean {
-  const check = parse(text, { merge: true })?.services?.web?.healthcheck;
-  return check != null && check.disable !== true && check.test?.[0] !== 'NONE';
+export function healthcheckOf(text: string, path: string): Healthcheck | undefined {
+  let doc: unknown;
+  try {
+    doc = parse(text, { merge: true });
+  } catch (error) {
+    throw new UsageError(`${path}: not valid YAML: ${(error as Error).message.split('\n')[0]?.replace(/:$/, '')}`);
+  }
+  const check = (doc as { services?: { web?: { healthcheck?: unknown } } } | null)?.services?.web?.healthcheck;
+  return check !== null && typeof check === 'object' && !Array.isArray(check) ? (check as Healthcheck) : undefined;
+}
+
+/** Compose's truthy spellings of a boolean, any case, quoted or not: `true`, `yes`, `y`, `on`. */
+const truthy = (value: unknown): boolean =>
+  value === true || (typeof value === 'string' && ['true', 'yes', 'y', 'on'].includes(value.toLowerCase()));
+
+/**
+ * Whether the healthcheck can ever report healthy (`PLX-App/Healthcheck`):
+ * a `test` of its own, a non-empty string or a non-empty list whose first
+ * word is not NONE, and not disabled. The deploy waits on it, so anything
+ * else cannot be deployed; one that inherits the image's test does not count.
+ */
+export function declaresHealthcheck(check: Healthcheck | undefined): check is Healthcheck {
+  if (check === undefined || truthy(check.disable)) return false;
+  const { test } = check;
+  if (typeof test === 'string') return test.trim() !== '';
+  return Array.isArray(test) && test.length > 0 && test[0] !== 'NONE';
 }
 
 /** What every host-side step works with: one connection, the app dir's commands, and the result filled in as they go. */
@@ -223,9 +249,14 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
   if (compose === undefined)
     throw new UsageError(`no compose.yaml under ${source}; run from the app's source repo (§ 2 PLX-App)`);
   const rendered = renderCompose(text, image, compose);
-  if (!declaresHealthcheck(rendered))
+  // The wait's budget: `retries` looks, two seconds apart.
+  const budget = retries * 2;
+  const check = healthcheckOf(rendered, compose);
+  if (!declaresHealthcheck(check))
     throw new UsageError(
-      `${compose}: the web service declares no healthcheck, and the deploy waits for it to turn healthy (PLX-App/Healthcheck)`,
+      `${compose}: the web service declares no healthcheck with a test of its own, and the deploy waits for it to turn healthy (PLX-App/Healthcheck); ` +
+        `\`extends\` and \`include\` are not followed, and an image's own HEALTHCHECK does not count; to use it, declare it here:\n` +
+        `    healthcheck: { test: [CMD, <the image's check command>], start_period: ${budget}s, start_interval: 1s }`,
     );
 
   ctx.say(`→ deploying ${image ?? '<image pinned in compose.yaml>'}`);

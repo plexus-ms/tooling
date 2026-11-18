@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { Context, type Options } from './context.ts';
-import { declaresHealthcheck, defaultAppDir, deploy, q, renderCompose } from './deploy.ts';
+import { declaresHealthcheck, defaultAppDir, deploy, healthcheckOf, q, renderCompose } from './deploy.ts';
 import { fakeIo, type Tree } from './testing/fakeIo.ts';
 import { UsageError } from './version.ts';
 
@@ -199,30 +199,69 @@ test('a failing pull leaves the host as it was, cleans the staging dir and rethr
   assert.equal(h.live, 'ghcr.io/x/web:old');
 });
 
-test('an app service without a healthcheck is a usage error naming the requirement, before anything reaches the host', async () => {
-  for (const file of [COMPOSE, `${COMPOSE}    healthcheck:\n      disable: true\n`]) {
-    const tree: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': file } } } } };
+/** Healthchecks that can never report healthy on their own: none, disabled in each form compose reads as true, no test of their own. */
+const NEVER_HEALTHY = [
+  '',
+  '    healthcheck:\n      disable: true\n',
+  ...['"true"', 'True', '"yes"', 'yes', 'on', '"Y"'].map(
+    (v) => `    healthcheck:\n      test: [CMD, "true"]\n      disable: ${v}\n`,
+  ),
+  '    healthcheck: {}\n',
+  '    healthcheck:\n      interval: 5s\n',
+  '    healthcheck:\n      test: []\n',
+  '    healthcheck:\n      test: ""\n',
+  '    healthcheck:\n      test: [NONE]\n',
+];
+
+test('an app service without a healthcheck that can turn healthy is a usage error naming the requirement, before anything reaches the host', async () => {
+  for (const stanza of NEVER_HEALTHY) {
+    const tree: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': COMPOSE + stanza } } } } };
     const { ctx, commands } = harness(tree, host('ghcr.io/x/web:old'));
     await assert.rejects(
       deploy(ctx, { host: 'deploy@h', app: 'web', image: 'ghcr.io/x/web:new', dir: '/repo' }),
-      (e: Error) => e instanceof UsageError && /declares no healthcheck.*PLX-App\/Healthcheck/.test(e.message),
+      (e: Error) => {
+        assert.ok(e instanceof UsageError, stanza);
+        assert.match(e.message, /declares no healthcheck.*PLX-App\/Healthcheck/);
+        // What the verb does not see, and the stanza that fixes the image-HEALTHCHECK case.
+        assert.match(e.message, /`extends` and `include` are not followed/);
+        assert.match(e.message, /an image's own HEALTHCHECK does not count/);
+        assert.match(e.message, /\n {4}healthcheck: \{ test: \[CMD, .*\], start_period: 60s, start_interval: 1s \}$/);
+        return true;
+      },
     );
-    assert.deepEqual(commands, []);
+    assert.deepEqual(commands, [], stanza);
   }
 });
 
-test('declaresHealthcheck reads the app service, anchors and merge keys resolved, a disabled check not counted', () => {
-  assert.equal(declaresHealthcheck(COMPOSE + HEALTHCHECK), true);
-  assert.equal(declaresHealthcheck(COMPOSE), false);
+test('a compose file that is not valid YAML is a usage error naming it, before anything reaches the host', async () => {
+  const tree: Tree = {
+    repo: { apps: { web: { docker: { 'compose.yaml': `${COMPOSE}${HEALTHCHECK}    image: x\n` } } } },
+  };
+  const { ctx, commands } = harness(tree, host('ghcr.io/x/web:old'));
+  await assert.rejects(
+    deploy(ctx, { host: 'deploy@h', app: 'web', image: 'ghcr.io/x/web:new', dir: '/repo' }),
+    (e: Error) =>
+      e instanceof UsageError &&
+      /^apps\/web\/docker\/compose.yaml: not valid YAML: Map keys must be unique at line \d+, column \d+$/.test(
+        e.message,
+      ),
+  );
+  assert.deepEqual(commands, []);
+});
+
+test('declaresHealthcheck reads the app service, anchors and merge keys resolved; a test of its own, string or list, counts', () => {
+  const declares = (text: string) => declaresHealthcheck(healthcheckOf(text, 'c'));
+  assert.equal(declares(COMPOSE + HEALTHCHECK), true);
+  assert.equal(declares(`${COMPOSE}    healthcheck:\n      test: curl -f localhost\n`), true);
+  assert.equal(declares(`${COMPOSE}    healthcheck:\n      test: [CMD-SHELL, "true"]\n      disable: false\n`), true);
+  assert.equal(declares(`${COMPOSE}    healthcheck:\n      test: [CMD, "true"]\n      disable: "no"\n`), true);
+  for (const stanza of NEVER_HEALTHY) assert.equal(declares(COMPOSE + stanza), false, stanza);
   assert.equal(
-    declaresHealthcheck('services:\n  db:\n    healthcheck:\n      test: [CMD, "true"]\n  web:\n    image: x\n'),
+    declares('services:\n  db:\n    healthcheck:\n      test: [CMD, "true"]\n  web:\n    image: x\n'),
     false,
   );
-  assert.equal(declaresHealthcheck(`${COMPOSE}    healthcheck:\n      test: [NONE]\n`), false);
   assert.equal(
-    declaresHealthcheck(
-      'x-web: &web\n  healthcheck:\n    test: [CMD, "true"]\nservices:\n  web:\n    <<: *web\n    image: x\n',
-    ),
+    declares('x-web: &web\n  healthcheck:\n    test: [CMD, "true"]\nservices:\n  web:\n    <<: *web\n    image: x\n'),
     true,
   );
 });
