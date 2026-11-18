@@ -30,10 +30,10 @@ on:
         type: string
         default: medium
       tasks:
-        description: The repo's mise tasks to run, in order, separated by spaces.
+        description: The repo's mise tasks to run, in order, separated by spaces. `check` includes `lint` by contract (`PLX-Repo/SubVerbs`).
         required: false
         type: string
-        default: lint check
+        default: check
       turbo-cache:
         description: Use Turbo's remote cache in the tenant's bucket; needs the vault's token.
         required: false
