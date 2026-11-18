@@ -448,7 +448,7 @@ test('dry run previews both phases and the propagation in scratch clones, and ch
     has(out, `gh release create 0.2.0 --verify-tag --title 0.2.0 --notes 'Plexus 0.2.0: the commits since 0.1.0.`),
     'the preview shows the notes',
   );
-  assert.ok(has(out, '- alpha moves, delta arrives'), 'from the commits since the last version');
+  assert.ok(has(out, '- `alpha moves, delta arrives`'), 'from the commits since the last version');
   consumersUntouched();
   assert.match(read(join(WS, 'acme/web/.github/workflows/ci.yml')), /@0\.1\.0/, 'consumer workflow refs untouched');
   assert.throws(() => onVersion('acme-web', '0.2.0', 'template-owned.txt'), 'no version branch pushed');
@@ -574,10 +574,11 @@ test('happy path: tooling first, the npm wait, the rest, and no pull request in 
   // The compendium is released last, like the others: one step, no draft, nothing uploaded.
   assert.ok(templateRelease < at('gh[compendium] release create 0.2.0'), `order in:\n${log.join('\n')}`);
   assert.ok(!log.some((l) => has(l, '--draft') || has(l, 'release upload')), 'no draft, no asset');
-  // Every release lists the subjects of the commits since the previous version, the bookkeeping last.
+  // Every release lists the subjects of the commits since the previous version, the bookkeeping last, each
+  // a code span, so that nothing in a subject is live on the forge.
   assert.equal(
     notesOf('compendium', '0.2.0'),
-    'Plexus 0.2.0: the commits since 0.1.0.\n\n- alpha moves, delta arrives\n- chore: Plexus 0.2.0 bookkeeping\n',
+    'Plexus 0.2.0: the commits since 0.1.0.\n\n- `alpha moves, delta arrives`\n- `chore: Plexus 0.2.0 bookkeeping`\n',
   );
   assert.equal(
     notesOf('template-app-nextjs', '0.2.0'),
@@ -922,7 +923,7 @@ test("a run that stops at the compendium's release leaves the version unseen by 
   assert.equal(fakeLog().filter((l) => has(l, 'gh[compendium] release create')).length, 2, 'one failed, one done');
   const next = await run({ yes: true });
   assert.equal(next.error, undefined, next.out);
-  assert.match(notesOf('compendium', '0.3.0'), /^- beta sharpens its requirement$/m);
+  assert.match(notesOf('compendium', '0.3.0'), /^- `beta sharpens its requirement`$/m);
 });
 
 test('disagreeing latest tags refuse a derived version; a hand-made tag refuses the bookkeeping it lacks', async () => {

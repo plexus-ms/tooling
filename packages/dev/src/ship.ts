@@ -22,7 +22,7 @@
 // templates against the workspace's consumers (preview.ts), a maintainer's test.
 //
 // Every release lists the subjects of the commits since the previous version,
-// so a tenant can read what a version concerns. The step of the number is the
+// each a code span, so a tenant can read what a version concerns. The step of the number is the
 // maintainers' to choose and says how urgently a repo takes the version (§ 3
 // PLX-Updates): a hotfix is cut as a patch (`--to`), routine work as the next
 // minor (the default), a changed contract as a major. ship checks nothing
@@ -328,7 +328,20 @@ async function releaseNotes(ctx: Context, repo: VersionedRepo, next: string, ref
     .split('\n')
     .filter(Boolean);
   const since = previous ? `since ${previous.replace(/^v/, '')}` : 'in the first version';
-  return [`Plexus ${next}: the commits ${since}.`, '', ...subjects.map((s) => `- ${s}`)].join('\n');
+  return [`Plexus ${next}: the commits ${since}.`, '', ...subjects.map((s) => `- ${codeSpan(s)}`)].join('\n');
+}
+
+/**
+ * A commit subject as a Markdown code span, so that nothing in it is live on
+ * the forge: no `@scope/package` mention, no `#` heading or reference, no
+ * emphasis or link. The fence is one backtick longer than the longest run in
+ * the subject, padded with a space where the subject begins or ends with one.
+ */
+export function codeSpan(text: string): string {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longest + 1);
+  const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
+  return `${fence}${pad}${text}${pad}${fence}`;
 }
 
 /**
