@@ -23,6 +23,13 @@ export interface ExecOptions {
    * with, shown when the verbosity asks for subprocess output.
    */
   echo?: boolean;
+  /**
+   * How long the process may run, in milliseconds. It then runs in a process
+   * group of its own, which is sent SIGTERM when the time is up (SIGKILL a
+   * few seconds later) and SIGKILL when this process is interrupted, so that
+   * nothing it started outlives it; the exec rejects with a TimeoutError.
+   */
+  timeout?: number;
 }
 
 export interface Io {
@@ -59,6 +66,51 @@ export class ExecError extends Error {
   }
 }
 
+/** A process killed because it ran past its time limit (`ExecOptions.timeout`). */
+export class TimeoutError extends ExecError {
+  readonly limit: number;
+
+  constructor(command: string, limit: number, stderr: string) {
+    super(command, null, stderr);
+    this.message = `${command} did not finish within ${limit} ms and was killed${stderr ? `\n${stderr.trimEnd()}` : ''}`;
+    this.limit = limit;
+  }
+}
+
+/** How long a process past its time limit has between SIGTERM and SIGKILL. */
+const GRACE = 5000;
+
+const SIGNALS = ['SIGINT', 'SIGTERM'] as const;
+const cleanups: (() => void)[] = [];
+
+function interrupted(signal: NodeJS.Signals): void {
+  for (const cleanup of cleanups.splice(0).reverse()) {
+    try {
+      cleanup();
+    } catch {
+      // the others still run, and the process still ends
+    }
+  }
+  for (const s of SIGNALS) process.removeListener(s, interrupted);
+  process.kill(process.pid, signal);
+}
+
+/**
+ * Run `cleanup` (synchronous) if the process is ended by SIGINT or SIGTERM
+ * before the returned release is called: what a `finally` cannot do, since a
+ * signal ends node without unwinding. The latest registered runs first; the
+ * process then ends by the same signal, as it would have without.
+ */
+export function onInterrupt(cleanup: () => void): () => void {
+  if (cleanups.length === 0) for (const s of SIGNALS) process.on(s, interrupted);
+  cleanups.push(cleanup);
+  return () => {
+    const at = cleanups.indexOf(cleanup);
+    if (at >= 0) cleanups.splice(at, 1);
+    if (cleanups.length === 0) for (const s of SIGNALS) process.removeListener(s, interrupted);
+  };
+}
+
 /**
  * A read whose failure can be the answer "not there": undefined when it
  * rejects with an ExecError that `absent` accepts, the error otherwise. By
@@ -89,9 +141,11 @@ export function realIo(prompt?: Io['prompt']): Io {
     prompt: prompt && isInteractive() ? prompt : undefined,
     exec: (command, args, options = {}) =>
       new Promise((resolve, reject) => {
+        const limit = options.timeout;
         const child = spawn(command, args, {
           cwd: options.cwd,
           env: options.env,
+          detached: limit !== undefined,
           stdio: [
             options.input !== undefined ? 'pipe' : options.inherit ? 'inherit' : 'ignore',
             options.inherit ? process.stderr.fd : 'pipe',
@@ -108,9 +162,35 @@ export function realIo(prompt?: Io['prompt']): Io {
           stderr += chunk;
           if (options.inherit || options.echo) process.stderr.write(chunk);
         });
-        child.on('error', reject);
+        let timedOut = false;
+        const group = (signal: NodeJS.Signals) => () => {
+          try {
+            if (child.pid !== undefined) process.kill(-child.pid, signal);
+          } catch {
+            // the group is gone already
+          }
+        };
+        const timer =
+          limit === undefined
+            ? undefined
+            : setTimeout(() => {
+                timedOut = true;
+                group('SIGTERM')();
+                setTimeout(group('SIGKILL'), GRACE).unref();
+              }, limit);
+        const release = limit === undefined ? undefined : onInterrupt(group('SIGKILL'));
+        const settle = () => {
+          clearTimeout(timer);
+          release?.();
+        };
+        child.on('error', (error) => {
+          settle();
+          reject(error);
+        });
         child.on('close', (code) => {
-          if (code === 0) resolve(stdout);
+          settle();
+          if (timedOut && limit !== undefined) reject(new TimeoutError(render(command, args), limit, stderr));
+          else if (code === 0) resolve(stdout);
           else reject(new ExecError(render(command, args), code, stderr));
         });
         if (options.input !== undefined) child.stdin?.end(options.input);

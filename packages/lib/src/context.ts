@@ -152,6 +152,7 @@ export class Context {
           input: step.input,
           inherit,
           echo: shown && !inherit,
+          timeout: step.timeout,
           env: step.env === undefined ? undefined : { ...process.env, ...step.env },
         });
       case 'write':

@@ -17,6 +17,8 @@ export type Step =
       interactive?: boolean;
       /** Extra environment for the process (a credential that must not be on argv); not part of the description. */
       env?: NodeJS.ProcessEnv;
+      /** How long it may run, in milliseconds (`ExecOptions.timeout`); not part of the description. */
+      timeout?: number;
     }
   | { kind: 'write'; path: string; content: string };
 
@@ -25,7 +27,7 @@ export type Plan = Step[];
 export const run = (
   command: string,
   args: string[] = [],
-  options: { cwd?: string; input?: string; interactive?: boolean; env?: NodeJS.ProcessEnv } = {},
+  options: { cwd?: string; input?: string; interactive?: boolean; env?: NodeJS.ProcessEnv; timeout?: number } = {},
 ): Step => ({
   kind: 'run',
   command,
