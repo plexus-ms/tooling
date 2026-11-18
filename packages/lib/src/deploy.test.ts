@@ -234,6 +234,23 @@ const NEVER_HEALTHY = [
   '    healthcheck:\n      test: [NONE]\n',
 ];
 
+test('a healthcheck the app service inherits through a same-file `extends` counts', async () => {
+  const text = `services:
+  base:
+    healthcheck: { test: [CMD, "true"], start_period: 60s, start_interval: 1s }
+  web:
+    extends: base
+    image: \${PLEXUS_DEPLOYMENT_IMAGE}
+`;
+  const tree: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': text } } } } };
+  const { ctx } = harness(tree, host('ghcr.io/x/web:old'));
+  await assert.doesNotReject(
+    deploy(ctx, { host: 'deploy@h', app: 'web', image: 'ghcr.io/x/web:new', dir: '/repo' }).catch((e: Error) => {
+      if (e instanceof UsageError) throw e;
+    }),
+  );
+});
+
 test('an app service without a healthcheck that can turn healthy is a usage error naming the requirement, before anything reaches the host', async () => {
   for (const stanza of NEVER_HEALTHY) {
     const tree: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': COMPOSE + stanza } } } } };
@@ -244,7 +261,7 @@ test('an app service without a healthcheck that can turn healthy is a usage erro
         assert.ok(e instanceof UsageError, stanza);
         assert.match(e.message, /declares no healthcheck.*PLX-App\/Healthcheck/);
         // What the verb does not see, and the stanza that fixes the image-HEALTHCHECK case.
-        assert.match(e.message, /`extends` and `include` are not followed/);
+        assert.match(e.message, /`include` and `extends` of another file are not followed/);
         assert.match(e.message, /an image's own HEALTHCHECK does not count/);
         assert.match(e.message, /\n {4}healthcheck: \{ test: \[CMD, .*\], start_period: 60s, start_interval: 1s \}$/);
         return true;

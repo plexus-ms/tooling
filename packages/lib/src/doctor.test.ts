@@ -324,6 +324,106 @@ test('PLX-App/LoopbackPort: a data service may publish no fixed host port, the a
   );
 });
 
+test('PLX-App/LoopbackPort takes the bare, the :? and the $ spellings of the variable, over TCP; a default fixes a port', () => {
+  const ported = (ports: unknown[]) =>
+    named(app('stateless', { compose: { services: { web: web({ ports }) } } }), 'PLX-App/LoopbackPort').length;
+  for (const spec of [
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000',
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORT:?set by the platform}:3000',
+    '127.0.0.1:$PLEXUS_LOOPBACK_PORT:3000',
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000/tcp',
+  ])
+    assert.equal(ported([spec]), 0, spec);
+  assert.equal(ported([{ target: 3000, host_ip: '127.0.0.1', published: '${PLEXUS_LOOPBACK_PORT:?x}' }]), 0);
+  for (const spec of [
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORT:-3000}:3000',
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000/udp',
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORTX}:3000',
+  ])
+    assert.equal(ported([spec]), 1, spec);
+  assert.equal(
+    ported([{ target: 3000, host_ip: '127.0.0.1', published: '${PLEXUS_LOOPBACK_PORT}', protocol: 'udp' }]),
+    1,
+  );
+});
+
+test('PLX-App/Stateful/MigrateService: the image placeholder in another spelling is the same image', () => {
+  const services = {
+    ...STATEFUL.services,
+    migrate: { ...STATEFUL.services.migrate, image: '${PLEXUS_DEPLOYMENT_IMAGE}' },
+  };
+  assert.deepEqual(named(app('stateful', { compose: { services } }), 'PLX-App/Stateful/MigrateService'), []);
+});
+
+test('a service that extends another of the same file is judged merged with it', () => {
+  const based = parseCompose(
+    `services:
+  base:
+    image: \${PLEXUS_DEPLOYMENT_IMAGE:?rendered by the deploy verb}
+    env_file: [{ path: .env, required: false }]
+    labels: [plexus.tenant=t]
+  web:
+    extends: base
+    env_file: [{ path: .env.secret, required: false }]
+    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT}:3000"]
+    labels: { team: x }
+    healthcheck: { test: [CMD, "true"] }
+`,
+    'c',
+  );
+  assert.deepEqual(based.services.web?.labels, { 'plexus.tenant': 't', team: 'x' }, 'labels merged across spellings');
+  assert.equal((based.services.web?.env_file as unknown[] | undefined)?.length, 2, 'env files concatenated');
+  assert.deepEqual(findings(app('stateless', { compose: { services: { web: based.services.web ?? {} } } })), []);
+
+  const migrating = parseCompose(
+    `services:
+  web: { image: "\${PLEXUS_DEPLOYMENT_IMAGE}", labels: { plexus.tenant: t }, command: serve }
+  migrate:
+    extends: { service: web }
+    profiles: [migrate]
+    command: migrate
+`,
+    'c',
+  );
+  assert.deepEqual(migrating.services.migrate, {
+    image: '${PLEXUS_DEPLOYMENT_IMAGE}',
+    labels: { 'plexus.tenant': 't' },
+    command: 'migrate',
+    profiles: ['migrate'],
+  });
+});
+
+test('one level of extends is merged: a base that extends another is read as written', () => {
+  const compose = parseCompose(
+    'services:\n  a: { labels: { plexus.tenant: t } }\n  b: { extends: a }\n  c: { extends: b, image: x }\n',
+    'c',
+  );
+  assert.deepEqual(compose.services.b, { labels: { 'plexus.tenant': 't' } });
+  assert.deepEqual(compose.services.c, { image: 'x' });
+});
+
+test('an extends naming another file is not followed; the service is read as written', () => {
+  const compose = parseCompose(
+    'services:\n  web:\n    extends: { file: base.yaml, service: web }\n    image: x\n',
+    'c',
+  );
+  assert.deepEqual(compose.services.web, { extends: { file: 'base.yaml', service: 'web' }, image: 'x' });
+});
+
+test('a compose file that uses include is one PLX-App/Compose problem, and no other compose check judges it', () => {
+  const text = `include: [db.yaml]
+services:
+  web:
+    image: nginx
+`;
+  assert.deepEqual(findings(appOf(text)), [
+    {
+      requirement: 'PLX-App/Compose',
+      problem: 'docker/compose.yaml uses `include`, which the checks do not read; no compose check judges the file',
+    },
+  ]);
+});
+
 test('PLX-App/ImageRef takes the bare form and the :? form, nothing else', () => {
   const imaged = (image: string) => app('stateless', { compose: { services: { web: web({ image }) } } });
   assert.deepEqual(named(imaged('${PLEXUS_DEPLOYMENT_IMAGE}'), 'PLX-App/ImageRef'), []);

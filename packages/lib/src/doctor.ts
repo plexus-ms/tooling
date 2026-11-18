@@ -29,6 +29,7 @@ import {
   isMapping,
   labelsOf,
   type Mapping,
+  normalImage,
   parseCompose,
   truthy,
 } from './compose.ts';
@@ -119,6 +120,8 @@ function appMarker(app: AppFacts): string[] {
 function composeFile(app: AppFacts): string[] {
   if (app.composeProblem) return [app.composeProblem];
   if (!app.compose) return ['no docker/compose.yaml'];
+  if (app.compose.includes)
+    return ['docker/compose.yaml uses `include`, which the checks do not read; no compose check judges the file'];
   if (!app.compose.services[APP_SERVICE])
     return [`docker/compose.yaml declares no \`${APP_SERVICE}\` service, the app service the deploy verb reads`];
   return [];
@@ -173,6 +176,14 @@ function singlePort(compose: Compose): string[] {
 const LOOPBACK_PORT = `\${PLEXUS_LOOPBACK_PORT}`;
 const LOOPBACK_FORM = `127.0.0.1:${LOOPBACK_PORT}:<container-port>`;
 
+/**
+ * The host port the platform sets: `${PLEXUS_LOOPBACK_PORT}`, with a
+ * `:?message` that fails loudly when it is unset, or `$PLEXUS_LOOPBACK_PORT`.
+ * A default (`:-3000`) fixes a port, and is not it.
+ */
+const isLoopbackVar = (host: string): boolean =>
+  /^(?:\$\{PLEXUS_LOOPBACK_PORT(?::\?[^}]*)?\}|\$PLEXUS_LOOPBACK_PORT)$/.test(host);
+
 function loopbackPort(compose: Compose): string[] {
   const problems: string[] = [];
   const own = portsOf(compose.services[APP_SERVICE] ?? {});
@@ -184,7 +195,7 @@ function loopbackPort(compose: Compose): string[] {
     if (name === APP_SERVICE) continue;
     for (const port of portsOf(service)) {
       const host = hostPortOf(port);
-      if (host && host !== LOOPBACK_PORT)
+      if (host && !isLoopbackVar(host))
         problems.push(`service \`${name}\` fixes host port \`${host}\` (\`${renderPort(port)}\`)`);
     }
   }
@@ -215,7 +226,9 @@ function migrateService(compose: Compose): string[] {
   if (!profiles.includes('migrate'))
     problems.push('the `migrate` service is not under `profiles: ["migrate"]`, so a plain `up` starts it');
   const own = compose.services[APP_SERVICE]?.image;
-  if (own !== undefined && migrate.image !== own)
+  const same =
+    typeof own === 'string' && typeof migrate.image === 'string' && normalImage(migrate.image) === normalImage(own);
+  if (own !== undefined && !same)
     problems.push(
       `the \`migrate\` service runs \`${String(migrate.image ?? 'no image')}\`, not the app's own image \`${String(own)}\``,
     );
@@ -230,17 +243,24 @@ function seed(app: AppFacts): string[] {
   return ['package.json has no `seed` script'];
 }
 
-/** A compose check: runs once the file was read; PLX-App/Compose reports why it was not. */
+/** The compose file, when the checks can judge it whole: read, and without an `include` of files they do not read. */
+const judged = (app: AppFacts): Compose | undefined => (app.compose?.includes ? undefined : app.compose);
+
+/** A compose check: runs once the file was read whole; PLX-App/Compose reports why it was not. */
 const onCompose =
   (check: (compose: Compose) => string[]) =>
-  (app: AppFacts): string[] =>
-    app.compose ? check(app.compose) : [];
+  (app: AppFacts): string[] => {
+    const compose = judged(app);
+    return compose ? check(compose) : [];
+  };
 
-/** A check of the app service: runs once the file declares it; PLX-App/Compose reports why it does not. */
+/** A check of the app service: runs once the file, read whole, declares it; PLX-App/Compose reports why it does not. */
 const onAppService =
   (check: (compose: Compose) => string[]) =>
-  (app: AppFacts): string[] =>
-    app.compose?.services[APP_SERVICE] ? check(app.compose) : [];
+  (app: AppFacts): string[] => {
+    const compose = judged(app);
+    return compose?.services[APP_SERVICE] ? check(compose) : [];
+  };
 
 interface RepoCheck {
   binds: 'repo';
@@ -533,9 +553,22 @@ function hostPortOf(port: unknown): string | undefined {
   return parts.length >= 2 ? parts[parts.length - 2] : undefined;
 }
 
+/** The app service's port as the platform binds it: the loopback address, its host port, one container port, over TCP (HTTP). */
 function isLoopback(port: unknown): boolean {
   if (isMapping(port))
-    return port.host_ip === '127.0.0.1' && port.published === LOOPBACK_PORT && /^\d+$/.test(String(port.target));
-  const [ip, host, container, ...rest] = partsOf(String(port));
-  return ip === '127.0.0.1' && host === LOOPBACK_PORT && /^\d+$/.test(container ?? '') && rest.length === 0;
+    return (
+      port.host_ip === '127.0.0.1' &&
+      isLoopbackVar(String(port.published ?? '')) &&
+      /^\d+$/.test(String(port.target)) &&
+      (port.protocol == null || port.protocol === 'tcp')
+    );
+  const spec = String(port);
+  const [ip, host, container, ...rest] = partsOf(spec);
+  return (
+    ip === '127.0.0.1' &&
+    isLoopbackVar(host ?? '') &&
+    /^\d+$/.test(container ?? '') &&
+    rest.length === 0 &&
+    !spec.endsWith('/udp')
+  );
 }

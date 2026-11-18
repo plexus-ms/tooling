@@ -42,7 +42,7 @@
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { declaresHealthcheck, healthcheckOf, type Mapping, parseCompose } from './compose.ts';
+import { declaresHealthcheck, healthcheckOf, IMAGE_PLACEHOLDER, type Mapping, parseCompose } from './compose.ts';
 import type { Context } from './context.ts';
 import { DEFAULT_ENVIRONMENT, deploymentSlug } from './deployTargets.ts';
 import { run } from './effects.ts';
@@ -83,7 +83,6 @@ export interface Deploy {
   unchanged?: boolean;
 }
 
-const PLACEHOLDER = /\$\{PLEXUS_DEPLOYMENT_IMAGE(:[^}]*)?\}/g;
 const INCOMING = '.incoming';
 
 /**
@@ -94,14 +93,14 @@ const INCOMING = '.incoming';
  * would ship an empty image; both are errors here, never on the host.
  */
 export function renderCompose(text: string, image: string | undefined, path: string): string {
-  const has = PLACEHOLDER.test(text);
-  PLACEHOLDER.lastIndex = 0;
+  const has = IMAGE_PLACEHOLDER.test(text);
+  IMAGE_PLACEHOLDER.lastIndex = 0;
   if (image) {
     if (!has)
       throw new UsageError(
         `${path} does not reference \${PLEXUS_DEPLOYMENT_IMAGE}; an image ref was given but nothing would use it (§ 3 PLX-App)`,
       );
-    return text.replace(PLACEHOLDER, image);
+    return text.replace(IMAGE_PLACEHOLDER, image);
   }
   if (has) throw new UsageError(`${path} references \${PLEXUS_DEPLOYMENT_IMAGE} but no image ref was given`);
   return text;
@@ -242,7 +241,7 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
   if (!declaresHealthcheck(check))
     throw new UsageError(
       `${compose}: the web service declares no healthcheck with a test of its own, and the deploy waits for it to turn healthy (PLX-App/Healthcheck); ` +
-        `\`extends\` and \`include\` are not followed, and an image's own HEALTHCHECK does not count; to use it, declare it here:\n` +
+        `\`include\` and \`extends\` of another file are not followed, and an image's own HEALTHCHECK does not count; to use it, declare it here:\n` +
         `    healthcheck: { test: [CMD, <the image's check command>], start_period: ${budget}s, start_interval: 1s }`,
     );
   const slow = slowStart(check, budget);
