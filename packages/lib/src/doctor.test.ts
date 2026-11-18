@@ -652,3 +652,20 @@ test('a workspace scan names the git roots it did not check because they are not
   assert.equal(report.inRepo, false);
   assert.ok(!report.units.some((u) => u.path === 'loose'), 'a marker outside any git root is no unit');
 });
+
+test('a marker that still carries plexus or modules gets a hint, not a finding', () => {
+  const report = diagnose([
+    repo({ marker: { declaration: { deviations: [], body: '', obsolete: ['plexus', 'modules'] } } }),
+    app('stateless', {
+      marker: { declaration: { profile: 'stateless', deviations: [], body: '', obsolete: ['modules'] } },
+    }),
+  ]);
+  assert.equal(report.failed, 0);
+  assert.deepEqual(
+    report.units.map((u) => u.hints),
+    [
+      ["the marker's `plexus` and `modules` are no longer read and can go"],
+      ["the marker's `modules` is no longer read and can go"],
+    ],
+  );
+});

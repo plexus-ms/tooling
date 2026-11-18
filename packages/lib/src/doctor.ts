@@ -312,6 +312,8 @@ export interface UnitReport {
   /** The deviations its marker lists, whose checks were not run. */
   deviations: string[];
   findings: Finding[];
+  /** What is worth doing and fails no check, such as deleting keys nothing reads any more. */
+  hints?: string[];
 }
 
 export interface Report {
@@ -350,7 +352,18 @@ function diagnoseUnit(unit: Facts, known: Set<string>): UnitReport {
     if (deviations.includes(name)) continue;
     for (const problem of run(c, unit, profile)) findings.push({ requirement: name, problem });
   }
-  return { path: unit.path, kind: unit.kind, ...(profile ? { profile } : {}), deviations, findings };
+  const obsolete = (declaration?.obsolete ?? []).map((k) => `\`${k}\``).join(' and ');
+  const hints = obsolete
+    ? [`the marker's ${obsolete} ${obsolete.includes(' and ') ? 'are' : 'is'} no longer read and can go`]
+    : [];
+  return {
+    path: unit.path,
+    kind: unit.kind,
+    ...(profile ? { profile } : {}),
+    deviations,
+    findings,
+    ...(hints.length > 0 ? { hints } : {}),
+  };
 }
 
 /** A check's problems with a unit, or none where it does not bind the unit: another kind, profile, or a third-party app. */

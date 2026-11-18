@@ -4,7 +4,8 @@
 // that needs a marker parses it here. Neither what a unit follows nor the
 // Plexus version is in a marker: a unit is bound by the contracts by being a
 // repo or an app, and a repo is on the version its `plx` pin names (§ 1.5 PLX).
-// Keys a marker of an earlier version still carries are not read.
+// Keys a marker of an earlier version still carries (`plexus`, `modules`) are
+// not read; the declaration names them, so that a verb can say they can go.
 import { parse } from 'yaml';
 
 export interface Declaration {
@@ -14,22 +15,40 @@ export interface Declaration {
   deviations: string[];
   /** The prose after the frontmatter: what the unit is, and a reason for each deviation. */
   body: string;
+  /** Keys of an earlier version's marker it still carries, which nothing reads any more. */
+  obsolete?: string[];
 }
+
+/** What markers carried before the unit's kind followed from where it sits and the version from the plx pin. */
+const OBSOLETE_KEYS = ['plexus', 'modules'];
 
 export const MARKER_FILE = 'PLEXUS.md';
 
-/** A marker from its text; throws when its frontmatter does not parse or `deviations` is not a list of names. */
+/**
+ * A marker from its text; throws when its frontmatter does not parse,
+ * `profile` is not a string, or `deviations` is not a list of names. An empty
+ * `deviations:` is an empty list.
+ */
 export function parseMarker(text: string): Declaration {
   const { data, body } = splitFrontmatter(text);
   const { profile, deviations = [] } = data;
-  if (!Array.isArray(deviations) || !deviations.every((d) => typeof d === 'string'))
+  if (profile != null && typeof profile !== 'string') throw new Error('marker: `profile` must be a string');
+  const listed = deviations ?? [];
+  if (!Array.isArray(listed) || !listed.every((d) => typeof d === 'string'))
     throw new Error('marker: `deviations` must be a list of requirement names');
-  return { ...(profile == null ? {} : { profile: String(profile) }), deviations, body };
+  const obsolete = OBSOLETE_KEYS.filter((k) => k in data);
+  return {
+    ...(profile == null ? {} : { profile }),
+    deviations: listed,
+    body,
+    ...(obsolete.length > 0 ? { obsolete } : {}),
+  };
 }
 
 /** The YAML between the leading `---` lines, as a plain object, and the rest. */
 export function splitFrontmatter(text: string): { data: Record<string, unknown>; body: string } {
-  const match = /^---\r?\n(?:([\s\S]*?)\r?\n)?---(?:\r?\n|$)([\s\S]*)$/.exec(text);
+  // A UTF-8 byte order mark, which some editors write, comes before the `---`.
+  const match = /^\uFEFF?---\r?\n(?:([\s\S]*?)\r?\n)?---(?:\r?\n|$)([\s\S]*)$/.exec(text);
   if (!match) throw new Error('no frontmatter: expected a `---` block at the top');
   const data: unknown = parse(match[1] ?? '') ?? {};
   if (typeof data !== 'object' || Array.isArray(data)) throw new Error('frontmatter is not a mapping');

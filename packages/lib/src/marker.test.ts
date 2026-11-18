@@ -11,8 +11,24 @@ test('parseMarker reads the profile and the deviations and keeps the prose', () 
   assert.deepEqual(parseMarker('---\n---\n\n- A repo.\n'), { deviations: [], body: '\n- A repo.\n' }, 'empty');
 });
 
-test('parseMarker does not read what earlier markers carried', () => {
-  assert.deepEqual(parseMarker('---\nplexus: 0.62.0\nmodules: [PLX-Repo]\n---\n'), { deviations: [], body: '' });
+test('parseMarker does not read what earlier markers carried, and names it', () => {
+  assert.deepEqual(parseMarker('---\nplexus: 0.62.0\nmodules: [PLX-Repo]\n---\n'), {
+    deviations: [],
+    body: '',
+    obsolete: ['plexus', 'modules'],
+  });
+  assert.deepEqual(parseMarker('---\nmodules: []\n---\n').obsolete, ['modules']);
+});
+
+test('parseMarker: an empty deviations is none, a byte order mark is no matter, a profile is a string', () => {
+  assert.deepEqual(parseMarker('---\ndeviations:\n---\n'), { deviations: [], body: '' });
+  assert.deepEqual(parseMarker('\uFEFF---\nprofile: stateless\n---\n'), {
+    profile: 'stateless',
+    deviations: [],
+    body: '',
+  });
+  assert.throws(() => parseMarker('---\nprofile: [stateful]\n---\n'), /`profile` must be a string/);
+  assert.throws(() => parseMarker('---\nprofile: 1\n---\n'), /`profile` must be a string/);
 });
 
 test('parseMarker rejects what is not a marker', () => {

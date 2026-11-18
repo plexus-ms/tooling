@@ -52,3 +52,24 @@ test('renderReport says which repo it checked from inside one, and which git roo
     '✓ .\n• not Plexus repos (no PLEXUS.md, no app in apps/), not checked: notes, x/compendium\n✓ 1 unit passes every check',
   );
 });
+
+test('renderReport gives a hint as a line of its own, which -q leaves out', () => {
+  const report: DoctorReport = {
+    ...at,
+    units: [
+      {
+        path: 'web',
+        kind: 'repo',
+        deviations: [],
+        findings: [],
+        hints: ["the marker's `plexus` and `modules` are no longer read and can go"],
+      },
+    ],
+    failed: 0,
+  };
+  assert.equal(
+    renderReport(report, style(false), true),
+    "✓ web\n• web: the marker's `plexus` and `modules` are no longer read and can go\n✓ 1 unit passes every check",
+  );
+  assert.equal(renderReport(report, style(false), false), '✓ 1 unit passes every check');
+});

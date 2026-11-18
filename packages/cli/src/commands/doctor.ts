@@ -4,7 +4,8 @@
 // renders the report: which repo was checked when the directory is inside
 // one; a failing check is one line, `✗ <requirement> <unit>: <what is
 // wrong>`; a unit with none is `✓ <unit>`, with its profile and the
-// deviations its marker lists; in a workspace, one line naming the git roots
+// deviations its marker lists; a hint, which fails nothing, as `• <unit>:
+// <hint>`; in a workspace, one line naming the git roots
 // that are not Plexus repos; then a summary. Exit code 1 when a check fails
 // or no unit is found. -q keeps the failures and the summary only.
 import { resolve } from 'node:path';
@@ -44,9 +45,9 @@ export function renderReport(report: DoctorReport, s: Style, showPassing: boolea
       const notes = [u.kind === 'repo' ? '' : u.kind, u.profile ?? '', ...u.deviations.map((d) => `deviates: ${d}`)];
       const note = notes.filter(Boolean).join(', ');
       if (showPassing) lines.push(`${s.ok('✓')} ${u.path}${note ? ` ${s.dim(`[${note}]`)}` : ''}`);
-      continue;
     }
     for (const f of u.findings) lines.push(`${s.warn('✗')} ${f.requirement} ${u.path}: ${f.problem}`);
+    if (showPassing) for (const h of u.hints ?? []) lines.push(s.dim(`• ${u.path}: ${h}`));
   }
   if (report.skipped.length > 0)
     lines.push(s.dim(`• not Plexus repos (no PLEXUS.md, no app in apps/), not checked: ${report.skipped.join(', ')}`));
