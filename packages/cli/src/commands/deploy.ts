@@ -17,7 +17,6 @@ import { contextOf } from '../program.ts';
 
 interface Opts {
   image?: string;
-  healthUrl?: string;
   retries: string;
   environment?: string;
   appDir?: string;
@@ -29,16 +28,12 @@ export function register(program: Command): void {
   program
     .command('deploy')
     .description(
-      'render the app’s compose file with the image pinned, stage it on the host, pull, migrate, swap, up, poll readiness, roll back on failure',
+      'render the app’s compose file with the image pinned, stage it on the host, pull, migrate, swap, up, wait for the healthcheck, roll back on failure',
     )
     .argument('<host>', 'ssh target, deploy@host')
     .argument('<app>', 'the app, apps/<app> in the checkout')
     .option('--image <ref>', 'the image ref to pin; absent for a third-party app whose compose.yaml pins its own')
-    .option(
-      '--health-url <url>',
-      'readiness URL polled on the host (default: /healthz, or the plexus.healthz label, on the loopback port)',
-    )
-    .option('--retries <n>', 'poll attempts, two seconds apart', '30')
+    .option('--retries <n>', 'looks at the app container’s health status, two seconds apart', '30')
     .option(
       '-e, --environment <name>',
       'the environment deployed into; decides the app dir’s slug (default: production)',
@@ -55,7 +50,6 @@ export function register(program: Command): void {
         host,
         app,
         image: opts.image,
-        healthUrl: opts.healthUrl,
         retries: Number(opts.retries),
         environment: opts.environment,
         appDir: opts.appDir,

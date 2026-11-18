@@ -1,13 +1,18 @@
 // The offline harness of the deploy verb, reborn from ci-cd's bash days: a
 // fake `ssh` on PATH that runs each remote one-liner locally with bash, in a
 // scratch app dir standing in for /opt/stacks/<app>, with a fake
-// `docker` and a fake `curl` next to it. Every docker call is appended to
-// FAKE_LOG; the fake docker keeps "what runs" in <app dir>/.running, read by
-// `compose ps`/`inspect`, written by `compose up`, so reality on the fake host
-// is a file the verb never reads itself.
+// `docker` next to it. Every docker call is appended to FAKE_LOG; the fake
+// docker keeps "what runs" in <app dir>/.running, read by `compose ps`/`inspect`,
+// written by `compose up`, so reality on the fake host is a file the verb
+// never reads itself.
 //
-//   FAKE_PULL_FAIL=1   `docker compose pull` exits 1
-//   an image containing "bad" never answers the fake curl
+//   FAKE_PULL_FAIL=1        `docker compose pull` exits 1
+//   FAKE_STARTING_LOOKS=n   the first n looks at the health status, counted
+//                           in <app dir>/.looks, answer `starting`
+//   an image containing "bad" never turns healthy
+//
+// A no-op `sleep` stands in for the wait's pause between looks: the tests
+// count looks, not seconds.
 import assert from 'node:assert/strict';
 import {
   chmodSync,
@@ -58,7 +63,9 @@ if [ "$1" = inspect ]; then
   # inspect --format <fmt> <cid>
   case "$3" in
     *Config.Image*) cat .running ;;
-    *plexus.healthz*) echo "" ;;
+    *State.Health*)
+      n=$(( $(cat .looks 2>/dev/null || echo 0) + 1 )); echo "$n" > .looks
+      if grep -q bad .running || [ "$n" -le "\${FAKE_STARTING_LOOKS:-0}" ]; then echo starting; else echo healthy; fi ;;
   esac
   exit 0
 fi
@@ -77,29 +84,25 @@ esac
 `,
 );
 
-fake(
-  'curl',
-  `
-[ -f .running ] || exit 7
-grep -q bad .running && exit 22 || exit 0
-`,
-);
+fake('sleep', ':');
 
 const COMPOSE = `services:
   web:
     image: \${PLEXUS_DEPLOYMENT_IMAGE:?set}
     ports: ["127.0.0.1:3011:3000"]
+    healthcheck:
+      test: ["CMD", "true"]
   migrate:
     image: \${PLEXUS_DEPLOYMENT_IMAGE:?set}
     command: pnpm migrate
     profiles: ["migrate"]
 `;
 
-function fixture(previous?: string) {
+function fixture(previous?: string, compose = COMPOSE) {
   const root = mkdtempSync(join(TMP, 'case-'));
   const checkout = join(root, 'checkout');
   mkdirSync(join(checkout, 'apps/web/docker'), { recursive: true });
-  writeFileSync(join(checkout, 'apps/web/docker/compose.yaml'), COMPOSE);
+  writeFileSync(join(checkout, 'apps/web/docker/compose.yaml'), compose);
   const appDir = join(root, 'host', 'web');
   mkdirSync(appDir, { recursive: true });
   writeFileSync(join(appDir, '.env'), 'PLEXUS_LOOPBACK_PORT=3011\n');
@@ -112,7 +115,14 @@ function fixture(previous?: string) {
   return { checkout, appDir, log };
 }
 
-function run(options: Options, checkout: string, appDir: string, image: string, env: Record<string, string> = {}) {
+function run(
+  options: Options,
+  checkout: string,
+  appDir: string,
+  image: string,
+  env: Record<string, string> = {},
+  retries = 1,
+) {
   const stderr = new PassThrough();
   let err = '';
   stderr.on('data', (c: Buffer) => {
@@ -124,7 +134,7 @@ function run(options: Options, checkout: string, appDir: string, image: string, 
   process.env.PATH = `${BIN}:${process.env.PATH}`;
   Object.assign(process.env, env);
   const ctx = new Context(options, io);
-  return deploy(ctx, { host: 'deploy@fake', app: 'web', image, appDir, dir: checkout, retries: 1 })
+  return deploy(ctx, { host: 'deploy@fake', app: 'web', image, appDir, dir: checkout, retries })
     .finally(() => {
       process.env = saved;
     })
@@ -156,7 +166,7 @@ test('happy path on the fake host: pull and migrate against the staged file, swa
     'docker compose [staged] run --rm migrate',
     'docker compose up -d --remove-orphans',
   ]);
-  assert.match(err, /health: {3}http:\/\/127.0.0.1:3011\/healthz/);
+  assert.match(err, /health: {2}the healthcheck of service web/);
   assert.match(err, /✓ ghcr.io\/x\/web:new is live and healthy/);
 });
 
@@ -197,4 +207,67 @@ test('a first deploy on an empty app dir works, and an unhealthy one fails witho
   assert.equal(r.rolledBack, false);
   assert.match(err, /nothing to roll back to/);
   assert.ok(!existsSync(join(bad.appDir, 'compose.yaml.prev')));
+});
+
+test('an app service without a healthcheck fails before the host is touched, naming the requirement', async () => {
+  const { checkout, appDir, log } = fixture('ghcr.io/x/web:old', COMPOSE.replace(/ {4}healthcheck:\n.*\n/, ''));
+  await assert.rejects(
+    run({}, checkout, appDir, 'ghcr.io/x/web:new', { FAKE_LOG: log }),
+    /declares no healthcheck.*PLX-App\/Healthcheck/,
+  );
+  assert.equal(readFileSync(join(appDir, '.running'), 'utf8').trim(), 'ghcr.io/x/web:old');
+  assert.match(readFileSync(join(appDir, 'compose.yaml'), 'utf8'), /image: ghcr.io\/x\/web:old/);
+  assert.ok(!existsSync(join(appDir, '.incoming')));
+  assert.deepEqual(dockerLog(log), []);
+});
+
+/** The health looks in a docker log, in order. */
+const looks = (lines: string[]) => lines.filter((l) => l.includes('State.Health'));
+
+test('a container that turns healthy only after a few looks is accepted, within --retries looks', async () => {
+  const { checkout, appDir, log } = fixture('ghcr.io/x/web:old');
+  const env = { FAKE_LOG: log, FAKE_STARTING_LOOKS: '2' };
+  const { result, err } = await run({}, checkout, appDir, 'ghcr.io/x/web:new', env, 3);
+  assert.equal(result.healthy, true);
+  assert.equal(result.rolledBack, false);
+  assert.equal(looks(dockerLog(log)).length, 3);
+  assert.match(err, /✓ ghcr.io\/x\/web:new is live and healthy/);
+
+  // One look fewer than it needs, and it is rolled back.
+  const short = fixture('ghcr.io/x/web:old');
+  const { result: r } = await run(
+    {},
+    short.checkout,
+    short.appDir,
+    'ghcr.io/x/web:new',
+    { ...env, FAKE_LOG: short.log },
+    2,
+  );
+  assert.equal(r.healthy, false);
+  assert.equal(r.rolledBack, true);
+});
+
+test('"already live and healthy" is decided by a single look; a container still starting gets the full deploy', async () => {
+  const { checkout, appDir, log } = fixture('ghcr.io/x/web:same');
+  const env = { FAKE_LOG: log, FAKE_STARTING_LOOKS: '1' };
+  const { result } = await run({}, checkout, appDir, 'ghcr.io/x/web:same', env, 3);
+  assert.equal(result.unchanged, undefined);
+  assert.equal(result.healthy, true);
+  const lines = dockerLog(log);
+  const pull = lines.findIndex((l) => l.endsWith(' pull'));
+  assert.ok(pull > 0);
+  assert.equal(looks(lines.slice(0, pull)).length, 1);
+
+  const healthy = fixture('ghcr.io/x/web:same');
+  const { result: same } = await run(
+    {},
+    healthy.checkout,
+    healthy.appDir,
+    'ghcr.io/x/web:same',
+    { FAKE_LOG: healthy.log },
+    3,
+  );
+  assert.equal(same.unchanged, true);
+  assert.equal(looks(dockerLog(healthy.log)).length, 1);
+  assert.ok(!dockerLog(healthy.log).some((l) => l.endsWith(' pull')));
 });
