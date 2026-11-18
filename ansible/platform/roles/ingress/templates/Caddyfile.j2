@@ -6,6 +6,12 @@
 # the inventory record); an app without one serves the host's root. The
 # prefix is stripped before the request reaches the app, so the app serves
 # from its own root and learns its public URL from its environment.
+#
+# /healthz is refused from outside, for every app, root and prefixed alike:
+# defence in depth for apps whose healthcheck answers on that conventional
+# path, which publicly would tell anyone whether the app's dependencies are
+# up. The deploy does not depend on it; it reads the container's health from
+# Docker on the host.
 {% for host, apps in plexus_apps | groupby('host') %}
 {{ host }} {
 	encode zstd gzip
@@ -19,6 +25,7 @@
 
 	handle {
 {% endif %}
+		respond /healthz 403
 		reverse_proxy 127.0.0.1:{{ app.loopback_port }}
 	}
 {% endfor %}
