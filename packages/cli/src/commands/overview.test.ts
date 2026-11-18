@@ -8,6 +8,7 @@ test('renderTree draws the tree with one annotation per facet', () => {
   const web: Directory = {
     name: 'web',
     path: '/ws/web',
+    gitRoot: true,
     git: { branch: 'develop', dirty: true, remote: 'gh:t/web' },
     copier: { commit: '0.62.0', src: 'https://github.com/plexus-ms/preset-repo-web.git', answers: {} },
     declaration: { deviations: [], body: '' },

@@ -1,7 +1,7 @@
 // doctor: the repo's checks (§ 13.4 PLX). Does this unit do what its
 // contracts require?
 //
-// A unit is a repo or an app (model.ts, unitsOf): every repo is bound by
+// A unit is a repo or an app (§ 1.2 PLX; `examine` below): every repo is bound by
 // PLX-Repo, every app by PLX-App with the profile its marker states, and an app
 // under the operations repo's `apps/` is third-party, every other app built
 // (§ 2 PLX-App). Each check is named after its requirement and lives in one
@@ -17,10 +17,10 @@
 // its check; a deviation without a reason in the marker's body, or naming no
 // requirement, is a finding of its own. Findings are reported, never fixed.
 //
-//   plx doctor          # this repo and its apps
-//   plx doctor ~/dev    # every unit with a marker beneath
+//   plx doctor          # this repo and its apps, from anywhere inside it
+//   plx doctor ~/dev    # every Plexus repo beneath, and its apps
 import { realpath } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import {
   APP_SERVICE,
   type Compose,
@@ -36,8 +36,8 @@ import type { Context } from './context.ts';
 import { ExecError } from './io.ts';
 import { REQUIREMENT_NAME } from './lints.ts';
 import { type Declaration, MARKER_FILE, reasonGiven } from './marker.ts';
-import { type Directory, type Kind, unitsOf } from './model.ts';
-import { overview } from './overview.ts';
+import { APPS_DIR, type Directory, hasMarker, holdsApp, isOperations, type Kind } from './model.ts';
+import { directoryAt, overview } from './overview.ts';
 import { bundledIndex } from './standardIndex.ts';
 
 export type Profile = 'stateless' | 'stateful';
@@ -344,27 +344,72 @@ function run(c: RepoCheck | AppCheck, unit: Facts, profile: Profile | undefined)
 
 // --- the reads -------------------------------------------------------------------
 
+/** What doctor read under the directory it was given. */
+export interface Examination {
+  /** What the unit paths are relative to: the repo's root when the directory is in a repo, else the directory. */
+  root: string;
+  /** Whether the directory is in a repo; then `root` is that repo's root, and only that repo is read. */
+  inRepo: boolean;
+  /** Each repo, then its apps. */
+  facts: Facts[];
+  /** In a workspace, the git roots that are not Plexus repos and were not checked, relative to `root`. */
+  skipped: string[];
+}
+
 /**
- * Read every unit under `root`: the repo `root` is, with its apps, or every
- * unit with a marker beneath it.
+ * Read the units (§ 1.2 PLX) under `dir`. A repo is a git root; its apps are
+ * the directories directly in its `apps/` that hold anything (model.ts,
+ * `holdsApp`), with a marker or without. In a repo, or anywhere inside one,
+ * that repo is read, from its root, and no git root nested in it: that is
+ * another repo, and none of its files are this repo's. Outside any repo,
+ * `dir` is a workspace: every git root beneath it is read that is a Plexus
+ * repo, which carries a marker or has an app, and the others are named.
  */
-export async function examine(ctx: Context, root: string): Promise<Facts[]> {
-  const tree = await overview(ctx, root, { git: false });
-  const rootIsRepo = (await ctx.readDir(root)).some((e) => e.name === '.git');
-  const repos = new Map<Directory, RepoFacts>();
-  const facts: Facts[] = [];
-  for (const unit of unitsOf(tree, { rootIsRepo })) {
-    const path = relative(tree.path, unit.dir.path) || '.';
-    if (unit.kind === 'app' && unit.repo) {
-      const repo = repos.get(unit.repo);
-      if (!repo) throw new Error(`${path}: an app read before its repo`);
-      facts.push(await readApp(ctx, unit.dir, path, repo));
-    } else {
-      const repo = await readRepo(ctx, unit.dir, path, unit.kind === 'operations' ? 'operations' : 'repo');
-      repos.set(unit.dir, repo);
-      facts.push(repo);
-    }
+export async function examine(ctx: Context, dir: string): Promise<Examination> {
+  const top = await enclosingGitRoot(ctx, dir);
+  if (top) {
+    const repo = await directoryAt(ctx, top);
+    return { root: top, inRepo: true, facts: await readUnits(ctx, repo, await appsOf(ctx, repo), top), skipped: [] };
   }
+  const facts: Facts[] = [];
+  const skipped: string[] = [];
+  const visit = async (d: Directory) => {
+    if (d.gitRoot) {
+      const apps = await appsOf(ctx, d);
+      if (hasMarker(d) || apps.length > 0) facts.push(...(await readUnits(ctx, d, apps, dir)));
+      else skipped.push(relative(dir, d.path) || '.');
+    }
+    for (const child of d.children) await visit(child);
+  };
+  await visit(await overview(ctx, dir, { git: false }));
+  return { root: dir, inRepo: false, facts, skipped };
+}
+
+/** The nearest directory at or above `dir` that holds `.git`, if any. */
+async function enclosingGitRoot(ctx: Context, dir: string): Promise<string | undefined> {
+  for (let at = resolve(dir); ; at = dirname(at)) {
+    const entries = await ctx.readDir(at).catch(() => []);
+    if (entries.some((e) => e.name === '.git')) return at;
+    if (dirname(at) === at) return undefined;
+  }
+}
+
+/** The apps of a repo: the directories directly in its `apps/` that hold one, in name order. */
+async function appsOf(ctx: Context, repo: Directory): Promise<string[]> {
+  const appsDir = join(repo.path, APPS_DIR);
+  const apps: string[] = [];
+  for (const entry of await ctx.readDir(appsDir).catch(() => [])) {
+    const path = join(appsDir, entry.name);
+    if (entry.directory && holdsApp(await ctx.readDir(path).catch(() => []))) apps.push(path);
+  }
+  return apps.sort();
+}
+
+/** A repo and its apps, with paths relative to `base`. */
+async function readUnits(ctx: Context, dir: Directory, apps: string[], base: string): Promise<Facts[]> {
+  const repo = await readRepo(ctx, dir, relative(base, dir.path) || '.', isOperations(dir) ? 'operations' : 'repo');
+  const facts: Facts[] = [repo];
+  for (const path of apps) facts.push(await readApp(ctx, await directoryAt(ctx, path), relative(base, path), repo));
   return facts;
 }
 

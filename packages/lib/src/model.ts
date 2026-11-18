@@ -9,6 +9,8 @@ import { templateOf } from './templates.ts';
 export interface Directory {
   name: string;
   path: string;
+  /** `.git` is here: a directory for a checkout, a file for a linked worktree or a submodule. Read even when the git facet is not. */
+  gitRoot?: true;
   git?: GitFacet;
   template?: TemplateFacet;
   copier?: Answers;
@@ -43,7 +45,7 @@ export interface TemplateFacet {
 /** What a unit is: an app, the operations repo, or any other repo (§ 1.2 PLX). */
 export type Kind = 'app' | 'operations' | 'repo';
 
-/** A directory with a marker, readable or not, and what it is. */
+/** A repo or an app, and what it is. */
 export interface Unit {
   dir: Directory;
   kind: Kind;
@@ -54,8 +56,21 @@ export interface Unit {
 /** The template the operations repo is rendered from (§ 1.6 PLX). */
 const OPERATIONS_TEMPLATE = 'template-repo-operations';
 
-const hasMarker = (dir: Directory): boolean =>
+/** Whether the directory carries a marker, readable or not. */
+export const hasMarker = (dir: Directory): boolean =>
   Boolean(dir.declaration || dir.problems?.some((p) => p.startsWith(MARKER_FILE)));
+
+/** The directory that holds a repo's apps, one directory each (§ 2 PLX-App). */
+export const APPS_DIR = 'apps';
+
+/**
+ * Whether a directory's entries make it an app, once it sits directly in its
+ * repo's `apps/`: anything but dotfiles (an empty directory, or one holding
+ * only a `.gitkeep`, is none), and no `.git` (a checkout of its own is a repo
+ * of its own, not this repo's app).
+ */
+export const holdsApp = (entries: readonly { name: string }[]): boolean =>
+  entries.some((e) => !e.name.startsWith('.')) && !entries.some((e) => e.name === '.git');
 
 /**
  * The operations repo is the one rendered from the operations template: its
@@ -65,30 +80,32 @@ export const isOperations = (dir: Directory): boolean =>
   dir.copier?.src !== undefined && templateOf(dir.copier.src, [OPERATIONS_TEMPLATE]) !== undefined;
 
 /**
- * Every unit of a scanned tree, in tree order. What a unit is follows from
- * where it is (§ 1.3 PLX), never from what its marker says: a marker at
- * `apps/<name>/` of a repo makes an app of that repo, any other marker a repo,
- * the operations repo when its answers file says so. With `rootIsRepo`, the
- * root is a repo whether it carries a marker or not.
+ * Every unit of a scanned tree that carries a marker, in tree order, as
+ * overview labels them. What a unit is follows from where it is (§ 1.3 PLX),
+ * never from what its marker says: a repo is a git root, the operations repo
+ * when its answers file says so; an app is a directory directly in the
+ * `apps/` of its nearest enclosing git root. A git root is a Plexus repo when
+ * it carries a marker or its `apps/` holds an app. doctor finds its units by
+ * the same rules, reading each repo's `apps/` itself (doctor.ts), so that an
+ * app without a marker is found too.
  */
-export function unitsOf(root: Directory, options: { rootIsRepo?: boolean } = {}): Unit[] {
+export function unitsOf(root: Directory): Unit[] {
   const units: Unit[] = [];
-  /** `appsOf` is the repo when `dir` sits directly in that repo's `apps/`. */
-  const visit = (dir: Directory, repo: Directory | undefined, appsOf: Directory | undefined) => {
+  /** `repo` is the nearest enclosing git root; `inApps`, that `dir` sits directly in its `apps/`. */
+  const visit = (dir: Directory, repo: Directory | undefined, inApps: boolean) => {
     let here = repo;
-    if (hasMarker(dir) || (dir === root && options.rootIsRepo)) {
-      if (repo && appsOf === repo) units.push({ dir, kind: 'app', repo });
-      else {
+    if (dir.gitRoot) {
+      here = dir;
+      const apps = dir.children.find((c) => c.name === APPS_DIR)?.children ?? [];
+      if (hasMarker(dir) || apps.some((a) => !a.gitRoot))
         units.push({ dir, kind: isOperations(dir) ? 'operations' : 'repo' });
-        here = dir;
-      }
-    }
+    } else if (inApps && repo && hasMarker(dir)) units.push({ dir, kind: 'app', repo });
     for (const child of dir.children) {
-      if (child.name === 'apps' && here === dir) for (const app of child.children) visit(app, here, here);
-      else visit(child, here, undefined);
+      if (child.name === APPS_DIR && here === dir) for (const app of child.children) visit(app, here, true);
+      else visit(child, here, false);
     }
   };
-  visit(root, undefined, undefined);
+  visit(root, undefined, false);
   return units;
 }
 
@@ -101,5 +118,5 @@ export function shortRemote(url: string): string {
 
 /** Whether a directory, or anything below it, carries a facet worth showing. */
 export function isNotable(dir: Directory): boolean {
-  return Boolean(dir.git || dir.template || dir.copier || dir.declaration || dir.problems?.length);
+  return Boolean(dir.gitRoot || dir.git || dir.template || dir.copier || dir.declaration || dir.problems?.length);
 }

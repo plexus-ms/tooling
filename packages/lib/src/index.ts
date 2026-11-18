@@ -54,6 +54,7 @@ export {
   type AppFacts,
   CHECKS,
   diagnose,
+  type Examination,
   examine,
   type Facts,
   type Finding,

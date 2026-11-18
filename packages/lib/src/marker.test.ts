@@ -41,38 +41,6 @@ test('parseAnswers separates copier bookkeeping from the answers', () => {
   });
 });
 
-test('unitsOf derives what a unit is from where it sits', () => {
-  const marked = { declaration: { deviations: [], body: '' } };
-  const d = (path: string, facets: Partial<Directory>, children: Directory[] = []): Directory => ({
-    name: path.split('/').pop() ?? path,
-    path,
-    children,
-    ...facets,
-  });
-  const ops = { copier: { src: 'gh:plexus-ms/template-repo-operations', answers: {} } };
-  const root = d('/ws', {}, [
-    d('/ws/ops', { ...marked, ...ops }, [d('/ws/ops/apps', {}, [d('/ws/ops/apps/id', marked)])]),
-    d('/ws/web', marked, [
-      d('/ws/web/apps', {}, [d('/ws/web/apps/site', marked, [d('/ws/web/apps/site/apps', {}, [d('/x', marked)])])]),
-    ]),
-    d('/ws/loose', {}, [d('/ws/loose/apps', {}, [d('/ws/loose/apps/a', marked)])]),
-  ]);
-  const units = unitsOf(root).map((u) => [u.dir.path, u.kind, u.repo?.path]);
-  assert.deepEqual(units, [
-    ['/ws/ops', 'operations', undefined],
-    ['/ws/ops/apps/id', 'app', '/ws/ops'],
-    ['/ws/web', 'repo', undefined],
-    ['/ws/web/apps/site', 'app', '/ws/web'],
-    ['/x', 'repo', undefined],
-    ['/ws/loose/apps/a', 'repo', undefined],
-  ]);
-  assert.deepEqual(
-    unitsOf(d('/r', {}, [d('/r/apps', {}, [d('/r/apps/a', marked)])]), { rootIsRepo: true }).map((u) => u.kind),
-    ['repo', 'app'],
-    'a repo without a marker, run in, still holds its apps',
-  );
-});
-
 test('shortRemote shortens GitHub remotes in every spelling', () => {
   for (const url of [
     'git@github.com:plexus-ms/packages.git',

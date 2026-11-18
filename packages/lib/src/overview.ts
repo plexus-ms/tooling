@@ -11,6 +11,7 @@
 import { join } from 'node:path';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers, TEMPLATE_FILES } from './copier.ts';
+import type { DirEntry } from './io.ts';
 import { MARKER_FILE, parseMarker } from './marker.ts';
 import { type Directory, type GitFacet, isNotable, shortRemote, type TemplateFacet } from './model.ts';
 import { plxPinOf } from './version.ts';
@@ -92,12 +93,41 @@ async function sync(ctx: Context, dir: Directory): Promise<void> {
 
 async function walk(ctx: Context, path: string, name: string, options: Required<ScanOptions>): Promise<Directory> {
   const entries = await ctx.readDir(path);
+  const dir = await facetsOf(ctx, path, name, entries, options);
+  const subdirs = entries
+    .filter((e) => e.directory && e.name !== '.git' && !PRUNED.has(e.name))
+    .map((e) => e.name)
+    .sort();
+  for (const sub of subdirs) {
+    const child = await walk(ctx, join(path, sub), sub, options);
+    if (isNotable(child) || child.children.length > 0) dir.children.push(child);
+  }
+  return dir;
+}
+
+/** One directory as the walk records it, without its children; no git facet. */
+export async function directoryAt(ctx: Context, path: string): Promise<Directory> {
+  const name = path.replace(/\/+$/, '').split('/').pop() || path;
+  return facetsOf(ctx, path, name, await ctx.readDir(path), { git: false, fetch: false });
+}
+
+/** The facets of one directory, from its entries. */
+async function facetsOf(
+  ctx: Context,
+  path: string,
+  name: string,
+  entries: DirEntry[],
+  options: Required<ScanOptions>,
+): Promise<Directory> {
   const files = new Set(entries.filter((e) => !e.directory).map((e) => e.name));
   const names = new Set(entries.map((e) => e.name));
   const dir: Directory = { name, path, children: [] };
 
-  // `.git` is a directory for a checkout and a file for a worktree or submodule.
-  if (names.has('.git') && options.git) dir.git = await gitFacet(ctx, path);
+  // `.git` is a directory for a checkout and a file for a linked worktree or submodule.
+  if (names.has('.git')) {
+    dir.gitRoot = true;
+    if (options.git) dir.git = await gitFacet(ctx, path);
+  }
   if (TEMPLATE_FILES.some((f) => files.has(f))) dir.template = options.git ? await templateFacet(ctx, path) : {};
   if (files.has(ANSWERS_FILE)) {
     await facet(ctx, dir, ANSWERS_FILE, (text) => {
@@ -114,15 +144,6 @@ async function walk(ctx: Context, path: string, name: string, options: Required<
       const pin = plxPinOf(text);
       if (pin) dir.pin = pin;
     });
-  }
-
-  const subdirs = entries
-    .filter((e) => e.directory && e.name !== '.git' && !PRUNED.has(e.name))
-    .map((e) => e.name)
-    .sort();
-  for (const sub of subdirs) {
-    const child = await walk(ctx, join(path, sub), sub, options);
-    if (isNotable(child) || child.children.length > 0) dir.children.push(child);
   }
   return dir;
 }

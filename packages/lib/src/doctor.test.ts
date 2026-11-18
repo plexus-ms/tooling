@@ -393,7 +393,7 @@ const ws = (): Tree => ({
         docker: { 'compose.yaml': COMPOSE, Dockerfile: 'FROM node' },
         'package.json': '{"scripts":{}}',
       },
-      notes: { 'readme.md': 'not an app: no marker' },
+      kept: { '.gitkeep': '' },
     },
   },
   ops: {
@@ -412,13 +412,25 @@ const ws = (): Tree => ({
   },
 });
 
-async function doctorOver(tree: Tree, root: string, webTasks: string[]) {
+const VERBS = ['dev', 'build', 'verify', 'lint', 'check', 'test'];
+
+async function doctorOver(
+  tree: Tree,
+  root: string,
+  webTasks: string[] = VERBS,
+  tracked: Record<string, string[]> = {},
+) {
+  const files: Record<string, string[]> = { '/ws/web': ['PLEXUS.md', 'apps/site/docker/compose.yaml'], ...tracked };
   const git = (cwd: string, args: string[]) =>
-    args[0] === 'ls-files' && cwd === '/ws/web' ? 'PLEXUS.md\0apps/site/docker/compose.yaml\0' : undefined;
+    args[0] === 'ls-files' && files[cwd] ? files[cwd].map((f) => `${f}\0`).join('') : undefined;
   const mise = miseTasks({ '/ws/web': webTasks, '/ws/ops': ['dev', 'build', 'verify', 'check', 'test'] });
   const ctx = new Context({}, fakeIo({ ws: tree }, git, { mise: (cwd) => mise(cwd) }));
-  return diagnose(await examine(ctx, root));
+  const { facts, ...examined } = await examine(ctx, root);
+  return { ...examined, ...diagnose(facts) };
 }
+
+const requirements = (report: Awaited<ReturnType<typeof doctorOver>>) =>
+  report.units.map((u) => [u.path, u.kind, u.findings.map((f) => f.requirement)]);
 
 test('doctor in a repo fails on a missing build task and passes once it exists', async () => {
   const verbs = ['dev', 'verify', 'lint', 'check', 'test'];
@@ -434,9 +446,8 @@ test('doctor in a repo fails on a missing build task and passes once it exists',
   assert.equal(after.failed, 0);
 });
 
-test('doctor over a workspace checks every unit with a marker beneath, apps by their repo', async () => {
-  const verbs = ['dev', 'build', 'verify', 'lint', 'check', 'test'];
-  const report = await doctorOver(ws(), '/ws', verbs);
+test('doctor over a workspace checks every Plexus repo beneath, apps by their repo', async () => {
+  const report = await doctorOver(ws(), '/ws');
   assert.deepEqual(
     report.units.map((u) => [u.path, u.kind, u.profile, u.deviations, u.findings]),
     [
@@ -455,10 +466,9 @@ test('doctor over a workspace checks every unit with a marker beneath, apps by t
 });
 
 test('a repo without a marker, run in, fails PLX-Repo/Marker and still has its apps checked', async () => {
-  const verbs = ['dev', 'build', 'verify', 'lint', 'check', 'test'];
   const tree = ws();
   delete (tree.web as Tree)['PLEXUS.md'];
-  const report = await doctorOver(tree, '/ws/web', verbs);
+  const report = await doctorOver(tree, '/ws/web');
   assert.deepEqual(
     report.units.map((u) => [u.path, u.findings.map((f) => f.requirement)]),
     [
@@ -466,4 +476,79 @@ test('a repo without a marker, run in, fails PLX-Repo/Marker and still has its a
       ['apps/site', []],
     ],
   );
+});
+
+// --- what a unit is: git roots, not markers ---------------------------------------------
+
+const webOf = (tree: Tree) => tree.web as Tree;
+
+test('(a) a checkout nested in a repo is not part of it: run on the repo, doctor reads neither it nor its apps', async () => {
+  const tree = ws();
+  webOf(tree)['.claude'] = {
+    worktrees: {
+      x: {
+        '.git': 'gitdir: /ws/web/.git/worktrees/x\n',
+        'PLEXUS.md': MARKER,
+        apps: { other: { 'PLEXUS.md': '---\nprofile: stateless\n---\n' } },
+      },
+    },
+  };
+  assert.deepEqual(requirements(await doctorOver(tree, '/ws/web')), [
+    ['.', 'repo', []],
+    ['apps/site', 'app', []],
+  ]);
+  // From inside it, the nested checkout is the repo; a linked worktree's `.git` is a file.
+  const inside = await doctorOver(tree, '/ws/web/.claude/worktrees/x/apps/other');
+  assert.equal(inside.root, '/ws/web/.claude/worktrees/x');
+  assert.deepEqual(
+    inside.units.map((u) => u.path),
+    ['.', 'apps/other'],
+  );
+});
+
+test('(b) in a workspace, a repo without a marker is still the repo, its apps still apps', async () => {
+  const tree = ws();
+  delete webOf(tree)['PLEXUS.md'];
+  const report = await doctorOver(tree, '/ws');
+  assert.deepEqual(
+    requirements(report).filter(([path]) => String(path).startsWith('web')),
+    [
+      ['web', 'repo', ['PLX-Repo/Marker']],
+      ['web/apps/site', 'app', []],
+    ],
+  );
+});
+
+test('(c) an app directory without a marker fails PLX-App/Marker; one holding only dotfiles is no app', async () => {
+  const tree = ws();
+  const apps = webOf(tree).apps as Tree;
+  apps.shop = { docker: { 'compose.yaml': COMPOSE, Dockerfile: 'FROM node' }, 'package.json': '{}' };
+  const report = await doctorOver(tree, '/ws/web');
+  assert.deepEqual(
+    report.units.map((u) => u.path),
+    ['.', 'apps/shop', 'apps/site'],
+    'apps/kept holds only .gitkeep',
+  );
+  assert.deepEqual(report.units[1]?.findings, [{ requirement: 'PLX-App/Marker', problem: 'no PLEXUS.md' }]);
+});
+
+test('(d) run from inside an app, doctor checks the repo the app is in, from its root', async () => {
+  const report = await doctorOver(ws(), '/ws/web/apps/site');
+  assert.equal(report.root, '/ws/web');
+  assert.equal(report.inRepo, true);
+  assert.deepEqual(requirements(report), [
+    ['.', 'repo', []],
+    ['apps/site', 'app', []],
+  ]);
+});
+
+test('a workspace scan names the git roots it did not check because they are not Plexus repos', async () => {
+  const tree = ws();
+  tree.compendium = { '.git': {}, 'README.md': 'prose' };
+  tree.empty = { '.git': {}, apps: { kept: { '.gitkeep': '' } } };
+  tree.loose = { 'PLEXUS.md': MARKER };
+  const report = await doctorOver(tree, '/ws');
+  assert.deepEqual(report.skipped, ['compendium', 'empty']);
+  assert.equal(report.inRepo, false);
+  assert.ok(!report.units.some((u) => u.path === 'loose'), 'a marker outside any git root is no unit');
 });
