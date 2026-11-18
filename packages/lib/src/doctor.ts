@@ -504,12 +504,17 @@ async function readRepo(ctx: Context, dir: Directory, path: string, kind: RepoFa
 /**
  * The repo's root mise tasks, hidden ones included, as mise lists them, so
  * that tasks from every file mise reads count; a task counts under its name
- * and each of its aliases, as `mise run` finds it by either. Tasks a parent
- * directory's or the global config contributes are not the repo's; mise
- * names their files by their canonical path, so the repo's is compared
- * canonically. Whatever keeps the list from being read (no mise on PATH, an
- * untrusted config, output without the `source` that tells the repo's tasks
- * apart) is one problem, which PLX-Repo/Verbs reports.
+ * and each of its aliases, as `mise run` finds it by either. A task is the
+ * repo's when it is not global and either its `source` is under the repo or
+ * its `dir` is the repo's root: a file the repo includes from outside it
+ * (`[task_config] includes`) is named by its own path, outside, but its tasks
+ * run in the repo, while a parent directory's config gives its tasks the
+ * parent as their `dir`. mise names files and dirs by their canonical path,
+ * and an include as written (`<repo>/../shared/tasks.toml`), so the repo is
+ * compared canonically and the source once normalized. Whatever keeps the
+ * list from being read (no mise on PATH, an untrusted config, output without
+ * the `source` that tells the repo's tasks apart) is one problem, which
+ * PLX-Repo/Verbs reports.
  */
 async function rootTasks(ctx: Context, repo: string): Promise<RepoFacts['tasks']> {
   let out: string;
@@ -534,10 +539,14 @@ async function rootTasks(ctx: Context, repo: string): Promise<RepoFacts['tasks']
   const listed = tasks.filter((t) => isMapping(t) && typeof t.name === 'string');
   if (listed.some((t) => typeof t.source !== 'string'))
     return { problem: "`mise tasks ls --json` gives no task's `source`, which tells the repo's own tasks apart" };
-  const own = `${await realpath(repo).catch(() => repo)}/`;
+  const roots = new Set([resolve(repo), await realpath(repo).catch(() => resolve(repo))]);
+  const under = (path: string) => [...roots].some((root) => path.startsWith(`${root}/`));
+  const isOwn = (task: Mapping) =>
+    task.global !== true &&
+    (under(resolve(String(task.source))) || (typeof task.dir === 'string' && roots.has(resolve(task.dir))));
   const names: string[] = [];
   for (const task of listed) {
-    if (task.global === true || !String(task.source).startsWith(own)) continue;
+    if (!isOwn(task)) continue;
     const aliases = Array.isArray(task.aliases)
       ? task.aliases.filter((a: unknown): a is string => typeof a === 'string')
       : [];

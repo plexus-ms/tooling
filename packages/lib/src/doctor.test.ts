@@ -801,6 +801,27 @@ test("a task's alias counts as the task, as `mise run` finds it", async () => {
   assert.deepEqual(report.units[0]?.findings, []);
 });
 
+test("a task from a file the repo includes from outside counts by its `dir`; a parent config's task still does not", async () => {
+  // As mise lists them (see the report): an included file is named by its own
+  // path, absolute or as written, and its tasks run in the repo; a parent
+  // config's tasks run in the parent.
+  const task = (name: string, source: string, dir: string) => ({ name, source, dir, global: false });
+  const report = await withMise(() =>
+    JSON.stringify([
+      task('dev', '/ws/web/mise.toml', '/ws/web'),
+      task('build', '/shared/tasks.toml', '/ws/web'),
+      task('verify', '/ws/web/../shared/more.toml', '/ws/web'),
+      task('lint', '/ws/web/mise/tasks.toml', '/elsewhere'),
+      task('check', '/ws/mise.toml', '/ws'),
+      task('test', '/ws/web/../mise.toml', '/ws'),
+    ]),
+  );
+  assert.deepEqual(report.units[0]?.findings, [
+    { requirement: 'PLX-Repo/SubVerbs', problem: 'no root mise task `check`' },
+    { requirement: 'PLX-Repo/SubVerbs', problem: 'no root mise task `test`' },
+  ]);
+});
+
 test('a task list without `source` fails with one clear message, not every task missing', async () => {
   const report = await withMise(() => JSON.stringify(VERBS.map((name) => ({ name, global: false }))));
   assert.deepEqual(report.units[0]?.findings, [
