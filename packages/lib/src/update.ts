@@ -33,13 +33,14 @@
 //   plx -n update --now             # preview in a worktree, push nothing
 //   plx -y update --to 0.102.0   # unattended, an explicit version
 import { basename, join, relative } from 'node:path';
-import { findConsumers, TEMPLATES, templateSource } from './consumers.ts';
+import { findConsumers } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers } from './copier.ts';
 import { run } from './effects.ts';
 import { maxAgeOf, type Need, needOf, type Release } from './need.ts';
 import { overview } from './overview.ts';
 import { CLEAN_BODY, detail, emptySummary, openPullUrl, type Summary, takeVersion, versionBranch } from './take.ts';
+import { TEMPLATES, templateSource } from './templates.ts';
 import { COMPENDIUM, compareVersions, isPlexusVersion, preflightForge, UsageError } from './version.ts';
 
 export interface UpdateOptions {

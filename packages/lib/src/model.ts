@@ -2,9 +2,9 @@
 // directory and the facets it carries. A facet is present exactly when its
 // marker file is. What a directory *is* (an app, the operations repo, a repo)
 // is derived from where it sits and what it carries, never stored.
-import { templateOf } from './consumers.ts';
 import type { Answers } from './copier.ts';
 import { type Declaration, MARKER_FILE } from './marker.ts';
+import { templateOf } from './templates.ts';
 
 export interface Directory {
   name: string;

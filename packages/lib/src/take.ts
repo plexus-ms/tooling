@@ -14,10 +14,11 @@
 // @plexus-ms/dev) uses the same steps against the local template checkouts, and opens nothing.
 import { join, relative } from 'node:path';
 import { bumpWorkflowRefs, hasConflictMarkers, hasUnmergedEntries, WORKFLOW_REF } from './bookkeeping.ts';
-import { type Consumer, RENAMED_TEMPLATES, type Site, templateSource } from './consumers.ts';
+import type { Consumer, Site } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, copierVia } from './copier.ts';
 import { run, write } from './effects.ts';
+import { RENAMED_TEMPLATES, templateSource } from './templates.ts';
 
 export interface Summary {
   version: string;

@@ -32,16 +32,7 @@ export {
   type Mapping,
   parseCompose,
 } from './compose.ts';
-export {
-  type Consumer,
-  expectedBranch,
-  findConsumers,
-  RENAMED_TEMPLATES,
-  type Site,
-  TEMPLATES,
-  templateOf,
-  templateSource,
-} from './consumers.ts';
+export { type Consumer, expectedBranch, findConsumers, type Site } from './consumers.ts';
 export { Context, type Options } from './context.ts';
 export { ANSWERS_FILE, type Answers, COPIER_VERSION, copierVia, parseAnswers, TEMPLATE_FILES } from './copier.ts';
 export { type Deploy, type DeployOptions, defaultAppDir, deploy, q as shellQuote, renderCompose } from './deploy.ts';
@@ -143,6 +134,7 @@ export {
 } from './standardIndex.ts';
 export { mergeLine, renderSummary } from './summary.ts';
 export { detail, emptySummary, isClean, type Summary, type Take, takeVersion } from './take.ts';
+export { RENAMED_TEMPLATES, TEMPLATES, templateOf, templateSource } from './templates.ts';
 export { type UpdateOptions, update } from './update.ts';
 export {
   COMPENDIUM,

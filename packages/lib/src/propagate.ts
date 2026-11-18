@@ -16,10 +16,11 @@
 //   plx propagate ~/dev --now            # every repo, the newest version whatever its step
 //   plx -n propagate ~/dev --now         # preview in worktrees, push nothing
 //   plx -y propagate ~/dev --to 0.66.0
-import { findConsumers, TEMPLATES, templateSource } from './consumers.ts';
+import { findConsumers } from './consumers.ts';
 import type { Context } from './context.ts';
 import { overview } from './overview.ts';
 import { detail, emptySummary, mergeSummary, type Summary } from './take.ts';
+import { TEMPLATES, templateSource } from './templates.ts';
 import { update } from './update.ts';
 import { isPlexusVersion, UsageError } from './version.ts';
 
