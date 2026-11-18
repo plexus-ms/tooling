@@ -414,16 +414,36 @@ test('an extends naming another file is not followed; the service is read as wri
   assert.deepEqual(compose.services.web, { extends: { file: 'base.yaml', service: 'web' }, image: 'x' });
 });
 
-test('a compose file that uses include is one PLX-App/Compose problem, and no other compose check judges it', () => {
+test('a compose file that uses include passes PLX-App/Compose, gets a hint, and is judged on what it declares itself', () => {
   const text = `include: [db.yaml]
 services:
   web:
     image: nginx
 `;
-  assert.deepEqual(findings(appOf(text)), [
+  const report = diagnose([appOf(text)]).units[0];
+  assert.ok(report);
+  assert.deepEqual(named(appOf(text), 'PLX-App/Compose'), [], 'the file exists and declares the app service');
+  assert.deepEqual(report.hints, [
+    'docker/compose.yaml uses `include`: the compose checks read what the file itself declares, not the files it includes',
+  ]);
+  // The other compose checks run on the file's own services.
+  assert.deepEqual(
+    [...new Set(report.findings.map((f) => f.requirement))],
+    [
+      'PLX-App/TenantLabel',
+      'PLX-App/EnvFileLoad',
+      'PLX-App/ImageRef',
+      'PLX-App/SinglePort',
+      'PLX-App/LoopbackPort',
+      'PLX-App/Healthcheck',
+    ],
+  );
+  // Without the app service in the file itself, PLX-App/Compose says the included files were not read.
+  assert.deepEqual(named(appOf('include: [web.yaml]\n'), 'PLX-App/Compose'), [
     {
       requirement: 'PLX-App/Compose',
-      problem: 'docker/compose.yaml uses `include`, which the checks do not read; no compose check judges the file',
+      problem:
+        'docker/compose.yaml declares no `web` service itself (the files it includes are not read), the app service the deploy verb reads',
     },
   ]);
 });

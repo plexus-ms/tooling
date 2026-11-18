@@ -121,13 +121,14 @@ function appMarker(app: AppFacts): string[] {
   return [];
 }
 
+/** What the contract page says doctor checks of it: the file exists and declares the app service. */
 function composeFile(app: AppFacts): string[] {
   if (app.composeProblem) return [app.composeProblem];
   if (!app.compose) return ['no docker/compose.yaml'];
-  if (app.compose.includes)
-    return ['docker/compose.yaml uses `include`, which the checks do not read; no compose check judges the file'];
   if (!app.compose.services[APP_SERVICE])
-    return [`docker/compose.yaml declares no \`${APP_SERVICE}\` service, the app service the deploy verb reads`];
+    return [
+      `docker/compose.yaml declares no \`${APP_SERVICE}\` service${app.compose.includes ? ' itself (the files it includes are not read)' : ''}, the app service the deploy verb reads`,
+    ];
   return [];
 }
 
@@ -257,24 +258,21 @@ function seed(app: AppFacts): string[] {
   return ['package.json has no `seed` script'];
 }
 
-/** The compose file, when the checks can judge it whole: read, and without an `include` of files they do not read. */
-const judged = (app: AppFacts): Compose | undefined => (app.compose?.includes ? undefined : app.compose);
-
-/** A compose check: runs once the file was read whole; PLX-App/Compose reports why it was not. */
+/**
+ * A compose check: runs once the file was read, on what the file itself
+ * declares (an `include`d file is not read; the unit gets a hint saying so);
+ * PLX-App/Compose reports why it was not read.
+ */
 const onCompose =
   (check: (compose: Compose) => string[]) =>
-  (app: AppFacts): string[] => {
-    const compose = judged(app);
-    return compose ? check(compose) : [];
-  };
+  (app: AppFacts): string[] =>
+    app.compose ? check(app.compose) : [];
 
-/** A check of the app service: runs once the file, read whole, declares it; PLX-App/Compose reports why it does not. */
+/** A check of the app service: runs once the file declares it; PLX-App/Compose reports why it does not. */
 const onAppService =
   (check: (compose: Compose) => string[]) =>
-  (app: AppFacts): string[] => {
-    const compose = judged(app);
-    return compose?.services[APP_SERVICE] ? check(compose) : [];
-  };
+  (app: AppFacts): string[] =>
+    app.compose?.services[APP_SERVICE] ? check(app.compose) : [];
 
 interface RepoCheck {
   binds: 'repo';
@@ -373,9 +371,13 @@ function diagnoseUnit(unit: Facts, known: Set<string>): UnitReport {
     for (const problem of run(c, unit, profile)) findings.push({ requirement: name, problem });
   }
   const obsolete = (declaration?.obsolete ?? []).map((k) => `\`${k}\``).join(' and ');
-  const hints = obsolete
-    ? [`the marker's ${obsolete} ${obsolete.includes(' and ') ? 'are' : 'is'} no longer read and can go`]
-    : [];
+  const hints: string[] = [];
+  if (obsolete)
+    hints.push(`the marker's ${obsolete} ${obsolete.includes(' and ') ? 'are' : 'is'} no longer read and can go`);
+  if (unit.kind === 'app' && unit.compose?.includes)
+    hints.push(
+      'docker/compose.yaml uses `include`: the compose checks read what the file itself declares, not the files it includes',
+    );
   return {
     path: unit.path,
     kind: unit.kind,
