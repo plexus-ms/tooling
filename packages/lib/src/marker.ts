@@ -37,14 +37,66 @@ export function splitFrontmatter(text: string): { data: Record<string, unknown>;
 }
 
 /**
- * Whether the body gives a reason for a deviation: a bullet that names it
- * and says something besides (§ 1.4 PLX), as in
+ * Whether the body gives a reason for a deviation (§ 1.4 PLX): a list item
+ * that opens with the requirement's name, in backticks or bare, optionally
+ * followed by a colon, and says something besides, on its first line or the
+ * lines that continue it, as in
  * `` - `PLX-App/Stateful/MigrateService`: the image migrates on startup. ``
+ * A longer name (`<name>-x`, `<name>/Sub`) is not the name; a name mentioned
+ * further into an item, or inside fenced code, gives no reason for it.
  */
 export function reasonGiven(body: string, name: string): boolean {
-  const named = new RegExp(`${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/])`);
-  return body.split('\n').some((line) => {
-    const bullet = /^\s*[-*]\s+(.*)$/.exec(line)?.[1];
-    return bullet !== undefined && named.test(bullet) && /\w/.test(bullet.replace(named, '').replace(/`/g, ''));
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const opens = new RegExp(`^(\`?)${escaped}\\1(?![\\w/-])\\s*:?(.*)$`, 's');
+  return listItems(body).some((item) => {
+    const rest = opens.exec(item)?.[2];
+    return rest !== undefined && /\w/.test(rest.replace(/`/g, ''));
   });
+}
+
+/** A list item's first line: its marker (`-`, `*`, `+`, `1.` or `1)`) and the text after it. */
+const ITEM = /^(\s*)(?:[-*+]|\d{1,9}[.)])(\s+)(.*)$/;
+const FENCE = /^\s*(```|~~~)/;
+
+/**
+ * The text of each Markdown list item of a body, its continuation lines
+ * joined to its first, in order: a line indented to the item's text, or a
+ * line straight after it without a blank line between, continues it; a new
+ * item, a blank line followed by a line indented less, or a fence ends it.
+ * Fenced code is no item and continues none.
+ */
+function listItems(body: string): string[] {
+  const items: string[] = [];
+  let current: { text: string[]; indent: number } | undefined;
+  let blank = false;
+  let fence: string | undefined;
+  const close = () => {
+    if (current) items.push(current.text.join(' '));
+    current = undefined;
+  };
+  for (const line of body.split(/\r?\n/)) {
+    const fenced = FENCE.exec(line)?.[1];
+    if (fence) {
+      if (fenced === fence) fence = undefined;
+      continue;
+    }
+    if (fenced) {
+      close();
+      fence = fenced;
+      continue;
+    }
+    const item = ITEM.exec(line);
+    if (item) {
+      close();
+      const [, lead = '', gap = '', text = ''] = item;
+      current = { text: [text.trim()], indent: lead.length + line.slice(lead.length).indexOf(gap) + gap.length };
+      blank = false;
+    } else if (line.trim() === '') blank = true;
+    else if (current && (!blank || line.length - line.trimStart().length >= current.indent)) {
+      current.text.push(line.trim());
+      blank = false;
+    } else close();
+  }
+  close();
+  return items;
 }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseAnswers } from './copier.ts';
 import { parseMarker, reasonGiven } from './marker.ts';
-import { type Directory, shortRemote, unitsOf } from './model.ts';
+import { shortRemote } from './model.ts';
 
 test('parseMarker reads the profile and the deviations and keeps the prose', () => {
   const d = parseMarker('---\nprofile: stateful\ndeviations: [PLX-App/Stateful/Seed]\n---\n\n- Free-form prose.\n');
@@ -28,6 +28,36 @@ test('reasonGiven wants a bullet that names the deviation and says why', () => {
   assert.equal(reasonGiven(`- \`${name}\`:\n`, name), false, 'a bullet with the name alone gives no reason');
   assert.equal(reasonGiven(`- \`${name}X\`: another name.\n`, name), false);
   assert.equal(reasonGiven(`  * ${name} because the image migrates itself\n`, name), true);
+});
+
+test('reasonGiven reads list items of every marker, with the lines that continue them', () => {
+  const name = 'PLX-App/Healthcheck';
+  for (const body of [
+    `+ \`${name}\`: the image checks itself.`,
+    `1. \`${name}\`: the image checks itself.`,
+    `2) ${name}: the image checks itself.`,
+    `- \`${name}\`:\n  the image checks itself.`,
+    `- \`${name}\`:\n\n  the image checks itself, as its maintainers document.`,
+    `- \`${name}\`:\nthe image checks itself (a lazy continuation).`,
+    `Intro.\n\n10. \`${name}\` the image checks itself.`,
+  ])
+    assert.equal(reasonGiven(body, name), true, body);
+});
+
+test('reasonGiven wants the name to open the item, whole, outside fenced code', () => {
+  const name = 'PLX-App/Healthcheck';
+  for (const body of [
+    `- \`PLX-App/Dockerfile\`: unlike ${name}, the file is the image's.`,
+    `- [${name}](https://example.org/app.md)`,
+    `\`\`\`\n- \`${name}\`: inside a fence.\n\`\`\``,
+    `~~~md\n- ${name}: inside a fence.\n~~~`,
+    `- \`${name}-foo\`: another name.`,
+    `- ${name}-foo: another name.`,
+    `- \`${name}/Sub\`: another name.`,
+    `- \`${name}\`:\n\nA paragraph after the list is not the item's.`,
+    `- \`${name}\`:\n- \`PLX-App/Dockerfile\`: the next item's reason.`,
+  ])
+    assert.equal(reasonGiven(body, name), false, body);
 });
 
 test('parseAnswers separates copier bookkeeping from the answers', () => {
