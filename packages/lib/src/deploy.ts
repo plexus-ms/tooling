@@ -241,7 +241,7 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
   if (!declaresHealthcheck(check))
     throw new UsageError(
       `${compose}: the web service declares no healthcheck with a test of its own, and the deploy waits for it to turn healthy (PLX-App/Healthcheck); ` +
-        `\`include\` and \`extends\` of another file are not followed, and an image's own HEALTHCHECK does not count; to use it, declare it here:\n` +
+        `the files an \`include\` names are not read, nor a service an \`extends\` takes from another file (\`file:\`), and an image's own HEALTHCHECK does not count; to use it, declare it here:\n` +
         `    healthcheck: { test: [CMD, <the image's check command>], start_period: ${budget}s, start_interval: 1s }`,
     );
   const slow = slowStart(check, budget);

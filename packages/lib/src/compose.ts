@@ -4,10 +4,16 @@
 // over it. It reads what compose would read as far as plain YAML goes, with
 // anchors and merge keys resolved, and `${…}` interpolation left as written.
 // A service that `extends` another service of the same file is read merged
-// with it (`resolveExtends`). Not followed: `extends` of a service in another
-// file (`file:`), a base's own `extends` (one level is merged, no chain), and
-// `include`, whose presence is recorded so that a reader can refuse to judge
-// a file it reads only half of.
+// with it, through a chain of such services (`resolveExtends`); services that
+// extend each other in a cycle are an error naming them, as compose refuses
+// them. Not read: the files an `include` names, whose presence is recorded so
+// that a reader can say what it did not read, and a service an `extends`
+// takes from another file (`file:`), where the chain stops and the service is
+// read as written. Where the merge differs from compose's: a list both sides
+// give is de-duplicated by value as written, where compose first normalizes
+// it (so `.env` and `./.env` are two entries to both, while `"3000"` and
+// `3000` are one port to both), and volumes and devices are not merged by
+// their target in the container, as compose merges them.
 import { parse } from 'yaml';
 import { UsageError } from './version.ts';
 
@@ -44,8 +50,7 @@ export function parseCompose(text: string, path: string): Compose {
   const declared = isMapping(doc) && isMapping(doc.services) ? doc.services : {};
   const written: Record<string, Mapping> = {};
   for (const [name, service] of Object.entries(declared)) if (isMapping(service)) written[name] = service;
-  const services: Record<string, Mapping> = {};
-  for (const [name, service] of Object.entries(written)) services[name] = resolveExtends(service, written);
+  const services = resolveExtends(written, path);
   return { services, ...(isMapping(doc) && doc.include != null ? { includes: true as const } : {}) };
 }
 
@@ -59,7 +64,7 @@ export const IMAGE_PLACEHOLDER = /\$\{PLEXUS_DEPLOYMENT_IMAGE(:[^}]*)?\}/g;
 /** An image as the deploy verb will run it: every spelling of the placeholder as one. */
 export const normalImage = (image: string): string => image.replace(IMAGE_PLACEHOLDER, '${PLEXUS_DEPLOYMENT_IMAGE}');
 
-/** Lists compose concatenates when a service extends another; any other list of the service replaces the base's. */
+/** Lists compose concatenates when a service extends another, dropping duplicates; any other list of the service replaces the base's. */
 const CONCATENATED = new Set([
   'ports',
   'expose',
@@ -72,26 +77,71 @@ const CONCATENATED = new Set([
   'tmpfs',
 ]);
 
-/**
- * A service merged with the service of the same file it `extends`, one
- * level, as compose merges them: the service's own keys over the base's; a
- * mapping on both sides (labels in either spelling, healthcheck, environment)
- * merged key by key; ports, env files and the like concatenated. An `extends`
- * naming another file, or no service of this file, leaves the service as
- * written.
- */
-function resolveExtends(service: Mapping, services: Record<string, Mapping>): Mapping {
-  const { extends: ext, ...own } = service;
+/** The service of this file a service extends, if it names one: `extends: <name>` or `{ service: <name> }` without `file:`. */
+function baseOf(service: Mapping): string | undefined {
+  const ext = service.extends;
   const ref = isMapping(ext) ? (ext.file == null ? ext.service : undefined) : ext;
-  const base = typeof ref === 'string' ? services[ref] : undefined;
-  if (!base || base === service) return service;
-  const { extends: _chain, ...inherited } = base;
+  return typeof ref === 'string' ? ref : undefined;
+}
+
+/** A list entry's identity for de-duplication: a scalar by its text, a mapping or list by its whole value. */
+const identity = (value: unknown): string =>
+  value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value);
+
+/** Two lists concatenated, an entry equal to an earlier one dropped. */
+function union(base: unknown[], own: unknown[]): unknown[] {
+  const seen = new Set<string>();
+  return [...base, ...own].filter((entry) => {
+    const id = identity(entry);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+/**
+ * Every service merged with the services of the same file it `extends`,
+ * through the whole chain, as compose merges them: the service's own keys
+ * over its base's (itself merged first); a mapping on both sides (labels in
+ * either spelling, healthcheck, environment) merged key by key; ports, env
+ * files and the like concatenated without duplicates. An `extends` naming
+ * another file, or no service of this file, ends the chain: that service is
+ * read as written. A cycle is a usage error naming the services in it.
+ */
+function resolveExtends(written: Record<string, Mapping>, path: string): Record<string, Mapping> {
+  const resolved: Record<string, Mapping> = {};
+  const chain: string[] = [];
+  const resolve = (name: string): Mapping => {
+    const done = resolved[name];
+    if (done) return done;
+    const service = written[name] ?? {};
+    const at = chain.indexOf(name);
+    if (at >= 0)
+      throw new UsageError(`${path}: services extend each other in a cycle: ${[...chain.slice(at), name].join(' → ')}`);
+    const ref = baseOf(service);
+    let merged = service;
+    if (ref !== undefined && written[ref]) {
+      chain.push(name);
+      merged = merge(resolve(ref), service);
+      chain.pop();
+    }
+    resolved[name] = merged;
+    return merged;
+  };
+  for (const name of Object.keys(written)) resolve(name);
+  return resolved;
+}
+
+/** A service over its (resolved) base, as compose merges one level. */
+function merge(base: Mapping, service: Mapping): Mapping {
+  const { extends: _own, ...own } = service;
+  const { extends: _inherited, ...inherited } = base;
   const merged: Mapping = { ...inherited };
   for (const [key, value] of Object.entries(own)) {
     const from = merged[key];
     if (key === 'labels' && from !== undefined) merged[key] = { ...labelsOf(base), ...labelsOf(service) };
     else if (isMapping(from) && isMapping(value)) merged[key] = { ...from, ...value };
-    else if (CONCATENATED.has(key) && Array.isArray(from) && Array.isArray(value)) merged[key] = [...from, ...value];
+    else if (CONCATENATED.has(key) && Array.isArray(from) && Array.isArray(value)) merged[key] = union(from, value);
     else merged[key] = value;
   }
   return merged;

@@ -9,6 +9,7 @@ import { REQUIREMENT_NAME } from './lints.ts';
 import { unitsOf } from './model.ts';
 import { overview } from './overview.ts';
 import { type FakeExec, fakeIo, link, type Tree, UNREADABLE } from './testing/fakeIo.ts';
+import { UsageError } from './version.ts';
 
 // --- the list of checks is the compendium's ------------------------------------
 
@@ -397,13 +398,87 @@ test('a service that extends another of the same file is judged merged with it',
   });
 });
 
-test('one level of extends is merged: a base that extends another is read as written', () => {
+// The next two cases are the ones compared with `docker compose config --no-interpolate` (see the report).
+test('a chain of extends within the file is merged all the way, as compose merges it', () => {
   const compose = parseCompose(
-    'services:\n  a: { labels: { plexus.tenant: t } }\n  b: { extends: a }\n  c: { extends: b, image: x }\n',
+    `services:
+  base:
+    image: base
+    labels: { a: "1" }
+    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT}:3000"]
+    healthcheck: { test: [CMD, "true"], interval: 5s }
+  middle:
+    extends: base
+    labels: { b: "2" }
+    env_file: [.env]
+  web:
+    extends: { service: middle }
+    labels: { c: "3" }
+    environment: { X: "1" }
+`,
     'c',
   );
-  assert.deepEqual(compose.services.b, { labels: { 'plexus.tenant': 't' } });
-  assert.deepEqual(compose.services.c, { image: 'x' });
+  assert.deepEqual(compose.services.web, {
+    image: 'base',
+    labels: { a: '1', b: '2', c: '3' },
+    ports: ['127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000'],
+    healthcheck: { test: ['CMD', 'true'], interval: '5s' },
+    env_file: ['.env'],
+    environment: { X: '1' },
+  });
+  // A chain that reaches a service of another file stops there; that service is read as written.
+  const stopped = parseCompose(
+    'services:\n  a: { extends: { file: other.yaml, service: x }, image: a }\n  b: { extends: a, labels: [k=v] }\n',
+    'c',
+  );
+  assert.deepEqual(stopped.services.b, { image: 'a', labels: ['k=v'] });
+});
+
+test('lists both sides of an extends give are concatenated without duplicates, as compose does', () => {
+  const compose = parseCompose(
+    `services:
+  base:
+    image: base
+    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT}:3000", "9000:9000"]
+    expose: ["3000"]
+    dns: [1.1.1.1]
+    env_file: [.env, { path: .env.secret, required: false }]
+    volumes: [data:/data]
+  web:
+    extends: base
+    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT}:3000"]
+    expose: ["3000", "4000"]
+    dns: [1.1.1.1, 8.8.8.8]
+    env_file: [.env, { path: .env.secret, required: false }]
+    volumes: [data:/data, other:/other]
+`,
+    'c',
+  );
+  const web = compose.services.web ?? {};
+  assert.deepEqual(web.ports, ['127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000', '9000:9000']);
+  assert.deepEqual(web.expose, ['3000', '4000']);
+  assert.deepEqual(web.dns, ['1.1.1.1', '8.8.8.8']);
+  assert.deepEqual(web.env_file, ['.env', { path: '.env.secret', required: false }]);
+  assert.deepEqual(web.volumes, ['data:/data', 'other:/other']);
+  // A port spelled as a number and as a string is one port, to compose as here.
+  const spelled = parseCompose('services:\n  a: { ports: ["3000"] }\n  web: { extends: a, ports: [3000] }\n', 'c');
+  assert.deepEqual(spelled.services.web?.ports, ['3000']);
+});
+
+test('services that extend each other in a cycle are an error naming them', () => {
+  assert.throws(
+    () =>
+      parseCompose(
+        'services:\n  a: { extends: b, image: x }\n  b: { extends: c }\n  c: { extends: a }\n  web: { image: y }\n',
+        'docker/compose.yaml',
+      ),
+    (e: Error) => {
+      assert.ok(e instanceof UsageError);
+      assert.equal(e.message, 'docker/compose.yaml: services extend each other in a cycle: a → b → c → a');
+      return true;
+    },
+  );
+  assert.throws(() => parseCompose('services:\n  web: { extends: web }\n', 'c'), /cycle: web → web$/);
 });
 
 test('an extends naming another file is not followed; the service is read as written', () => {

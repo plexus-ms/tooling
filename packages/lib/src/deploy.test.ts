@@ -261,7 +261,10 @@ test('an app service without a healthcheck that can turn healthy is a usage erro
         assert.ok(e instanceof UsageError, stanza);
         assert.match(e.message, /declares no healthcheck.*PLX-App\/Healthcheck/);
         // What the verb does not see, and the stanza that fixes the image-HEALTHCHECK case.
-        assert.match(e.message, /`include` and `extends` of another file are not followed/);
+        assert.match(
+          e.message,
+          /the files an `include` names are not read, nor a service an `extends` takes from another file \(`file:`\)/,
+        );
         assert.match(e.message, /an image's own HEALTHCHECK does not count/);
         assert.match(e.message, /\n {4}healthcheck: \{ test: \[CMD, .*\], start_period: 60s, start_interval: 1s \}$/);
         return true;
