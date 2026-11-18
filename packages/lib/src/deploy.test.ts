@@ -2,7 +2,16 @@ import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { Context, type Options } from './context.ts';
-import { declaresHealthcheck, defaultAppDir, deploy, healthcheckOf, q, renderCompose } from './deploy.ts';
+import {
+  declaresHealthcheck,
+  defaultAppDir,
+  deploy,
+  healthcheckOf,
+  q,
+  renderCompose,
+  seconds,
+  slowStart,
+} from './deploy.ts';
 import { fakeIo, type Tree } from './testing/fakeIo.ts';
 import { UsageError } from './version.ts';
 
@@ -264,6 +273,66 @@ test('declaresHealthcheck reads the app service, anchors and merge keys resolved
     declares('x-web: &web\n  healthcheck:\n    test: [CMD, "true"]\nservices:\n  web:\n    <<: *web\n    image: x\n'),
     true,
   );
+});
+
+/** The stanza apps generated before the template set start_interval carry. */
+const OLD_STANZA = '    healthcheck:\n      test: [CMD, "true"]\n      interval: 30s\n      start_period: 10s\n';
+/** The template's stanza: probed every second for the whole of the default wait. */
+const TEMPLATE_STANZA = `${OLD_STANZA.replace('10s', '1m0s')}      start_interval: 1s\n`;
+
+test('a healthcheck without start_interval, or with a start_period under the wait, warns in one line before the deploy, which proceeds', async () => {
+  const cases: [string, number | undefined, RegExp | undefined][] = [
+    [OLD_STANZA, undefined, /the web healthcheck sets no start_interval, /],
+    [`${OLD_STANZA}      start_interval: 1s\n`, undefined, /has a start_period of 10s, under the deploy's 60s wait/],
+    [`${OLD_STANZA}      start_interval: 1s\n`, 5, undefined],
+    [TEMPLATE_STANZA, undefined, undefined],
+  ];
+  for (const dryRun of [false, true])
+    for (const [stanza, retries, reason] of cases) {
+      const tree: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': COMPOSE + stanza } } } } };
+      const { ctx, err } = harness(tree, host('ghcr.io/x/web:old'), { dryRun });
+      const result = await deploy(ctx, {
+        host: 'deploy@h',
+        app: 'web',
+        image: 'ghcr.io/x/web:new',
+        dir: '/repo',
+        retries,
+      });
+      assert.equal(result.healthy, true);
+      const warnings = err()
+        .split('\n')
+        .filter((l) => l.startsWith('⚠'));
+      if (!reason) {
+        assert.deepEqual(warnings, [], stanza);
+        continue;
+      }
+      assert.equal(warnings.length, 1, stanza);
+      const warning = warnings.join('');
+      assert.match(warning, /^⚠ apps\/web\/docker\/compose.yaml: the web healthcheck /);
+      assert.match(warning, reason);
+      assert.match(
+        warning,
+        /may probe it only every interval .* healthy late or rolls it back; set start_interval: 1s and start_period: 60s$/,
+      );
+      // Before the deploy: ahead of the first line that reaches the host.
+      assert.ok(err().indexOf('⚠') < err().indexOf('previous:'));
+    }
+});
+
+/** A compose variable the deploy does not interpolate, so the verb cannot read the duration. */
+const VARIABLE = ['$', '{PERIOD:-60s}'].join('');
+
+test('slowStart and seconds read compose durations; a value the verb cannot read is left to compose', () => {
+  assert.equal(seconds('1m30s'), 90);
+  assert.equal(seconds('1.5m'), 90);
+  assert.equal(seconds('500ms'), 0.5);
+  assert.equal(seconds('1h0m0s'), 3600);
+  assert.equal(seconds('90'), undefined);
+  assert.equal(seconds(VARIABLE), undefined);
+  assert.equal(slowStart({ start_interval: '1s', start_period: '60s' }, 60), undefined);
+  assert.equal(slowStart({ start_interval: '1s', start_period: VARIABLE }, 60), undefined);
+  assert.equal(slowStart({ start_interval: '1s' }, 60), "has a start_period of 0s, under the deploy's 60s wait");
+  assert.equal(slowStart({ start_period: '2m' }, 60), 'sets no start_interval');
 });
 
 test('no compose file under the source is a usage error before anything reaches the host', async () => {

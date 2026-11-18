@@ -210,6 +210,30 @@ export function declaresHealthcheck(check: Healthcheck | undefined): check is He
   return Array.isArray(test) && test.length > 0 && test[0] !== 'NONE';
 }
 
+/** A compose duration (Go's syntax: `1m30s`, `500ms`) in seconds, or undefined when it is not one. */
+export function seconds(duration: unknown): number | undefined {
+  if (typeof duration !== 'string' || !/^((\d+\.?\d*|\.\d+)(ns|us|µs|ms|s|m|h))+$/.test(duration)) return undefined;
+  const unit: Record<string, number> = { ns: 1e-9, us: 1e-6, µs: 1e-6, ms: 1e-3, s: 1, m: 60, h: 3600 };
+  let total = 0;
+  for (const [, n, u] of duration.matchAll(/(\d+\.?\d*|\.\d+)(ns|us|µs|ms|s|m|h)/g))
+    total += Number(n) * (unit[u as string] ?? 0);
+  return total;
+}
+
+/**
+ * Why the healthcheck would be seen healthy late, or not at all within a
+ * wait of `budget` seconds: without `start_interval`, or once a short
+ * `start_period` is over, Docker probes only every `interval`. Undefined when
+ * the timing keys cover the wait; a value the verb cannot read is left to compose.
+ */
+export function slowStart(check: Healthcheck, budget: number): string | undefined {
+  if (check.start_interval == null) return 'sets no start_interval';
+  const period = check.start_period == null ? 0 : seconds(check.start_period);
+  if (period !== undefined && period < budget)
+    return `has a start_period of ${period}s, under the deploy's ${budget}s wait`;
+  return undefined;
+}
+
 /** What every host-side step works with: one connection, the app dir's commands, and the result filled in as they go. */
 interface Session {
   ctx: Context;
@@ -258,12 +282,17 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
         `\`extends\` and \`include\` are not followed, and an image's own HEALTHCHECK does not count; to use it, declare it here:\n` +
         `    healthcheck: { test: [CMD, <the image's check command>], start_period: ${budget}s, start_interval: 1s }`,
     );
+  const slow = slowStart(check, budget);
 
   ctx.say(`→ deploying ${image ?? '<image pinned in compose.yaml>'}`);
   ctx.say(`  host:    ${host}`);
   ctx.say(`  dir:     ${appDir}`);
   ctx.say(`  compose: ${compose}`);
   ctx.say('  health:  the healthcheck of service web, as Docker reports it');
+  if (slow)
+    ctx.say(
+      `⚠ ${compose}: the web healthcheck ${slow}, so Docker may probe it only every interval while the deploy waits, which then sees it healthy late or rolls it back; set start_interval: 1s and start_period: ${budget}s`,
+    );
 
   const D = q(appDir);
   // The staged compose file, read in place: --project-directory keeps .env and
