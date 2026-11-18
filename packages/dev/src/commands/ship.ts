@@ -24,7 +24,10 @@ export function register(program: Command): void {
       'cut the version: tag and release every versioned repo identically; repos take it themselves (plx update, plx propagate)',
     )
     .argument('[dir]', 'the workspace: plexus-ms/ sits under it, and the consumers the dry run previews', '.')
-    .option('--to <version>', 'the Plexus version, plain semver (default: minor+1 over the latest version)')
+    .option(
+      '--to <version>',
+      'the Plexus version, plain semver, not below the latest (default: minor+1 over the latest version)',
+    )
     .action(async (dir: string, opts: { to?: string }, command: Command) => {
       const ctx = contextOf(command);
       const result = await ship(ctx, { workspace: resolve(dir), to: opts.to });

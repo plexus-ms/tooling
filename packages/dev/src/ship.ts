@@ -26,7 +26,7 @@
 // maintainers' to choose and says how urgently a repo takes the version (§ 3
 // PLX-Updates): a hotfix is cut as a patch (`--to`), routine work as the next
 // minor (the default), a changed contract as a major. ship checks nothing
-// about the step.
+// about the step, but refuses a version below the latest (version.ts).
 //
 // The wait is what lets phase two pin the Plexus version: the compendium's
 // commit hook installs plx at that pin, and the templates hand it to every

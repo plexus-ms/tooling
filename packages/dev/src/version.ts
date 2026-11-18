@@ -112,11 +112,18 @@ export async function preflightRelease(ctx: Context, versioned: Versioned): Prom
 
 /**
  * The version a run releases: the explicit one, or the next minor, refusing to
- * derive one while the repos' tags disagree.
+ * derive one while the repos' tags disagree. An explicit version below the
+ * latest is refused: the step from the latest is what tells a repo how urgent
+ * a version is (need.ts in @plexus-ms/lib). One equal to it finishes a
+ * half-tagged version.
  */
 export function resolveVersion(versioned: Versioned, explicit: string | undefined): string {
   if (explicit !== undefined && !isPlexusVersion(explicit))
     throw new UsageError(`'${explicit}' is not plain semver (X.Y.Z, no v)`);
+  if (explicit && versioned.last && compareVersions(explicit, versioned.last) < 0)
+    throw new UsageError(
+      `${explicit} is below the latest version, ${versioned.last}: a version is cut above it (or --to ${versioned.last} finishes a half-tagged one)`,
+    );
   if (explicit) return explicit;
   if (versioned.skew) {
     const report = versioned.repos.map((r) => `  ${r.name}: ${r.latest ?? 'none'}`).join('\n');

@@ -56,6 +56,10 @@ test('readVersioned reads tags and pending commits and detects skew', async () =
     /latest tags disagree:\n {2}tooling: 0.2.0\n {2}template-repo-turbo: 0.1.0[\s\S]*--to 0.2.0/,
   );
   assert.equal(resolveVersion(skewed, '0.2.0'), '0.2.0');
+  // Below the latest is refused, the step from it being what tells a repo how urgent a version is.
+  assert.throws(() => resolveVersion(skewed, '0.1.1'), /0\.1\.1 is below the latest version, 0\.2\.0/);
+  assert.throws(() => resolveVersion(version, '0.0.9'), UsageError);
+  assert.equal(resolveVersion(version, '0.1.1'), '0.1.1', 'a patch above the latest');
   assert.throws(() => resolveVersion(skewed, '1.2'), UsageError);
 });
 
