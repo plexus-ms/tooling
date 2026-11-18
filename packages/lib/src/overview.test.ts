@@ -4,20 +4,20 @@ import { Context } from './context.ts';
 import { overview } from './overview.ts';
 import { fakeIo, type Tree } from './testing/fakeIo.ts';
 
-const marker = (modules: string) => `---\nplexus: 0.62.0\nmodules: [${modules}]\n---\n\n- A repo.\n`;
+const marker = (frontmatter = '') => `---\n${frontmatter}\n---\n\n- A unit.\n`;
 const answers = (src: string) => `_commit: 0.62.0\n_src_path: ${src}\ntenant: plexus\n`;
 
 const workspace: Tree = {
   tenant: {
     web: {
       '.git': {},
-      'PLEXUS.md': marker('PLX-Repo, PLX-JS'),
+      'PLEXUS.md': marker(),
       '.copier-answers.yml': answers('gh:plexus-ms/preset-repo-web'),
       'mise.toml': '[tools]\n"npm:@plexus-ms/cli" = { version = "0.63.0", allow_low_downloads = true }\n',
       node_modules: { junk: { '.git': {} } },
       apps: {
         website: {
-          'PLEXUS.md': marker('PLX-App, PLX-AppStateless'),
+          'PLEXUS.md': marker('profile: stateless'),
           '.copier-answers.yml': answers('gh:plexus-ms/template-app-nextjs'),
         },
       },
@@ -70,7 +70,7 @@ test('overview maps the facets of a workspace and prunes what carries none', asy
   const web = tenant?.children[0];
   assert.equal(web?.name, 'web');
   assert.deepEqual(web?.git, { branch: 'develop', dirty: true, remote: 'gh:plexus-ms-tenant/web' });
-  assert.deepEqual(web?.declaration?.modules, ['PLX-Repo', 'PLX-JS']);
+  assert.deepEqual(web?.declaration, { deviations: [], body: '\n- A unit.\n' });
   assert.equal(web?.copier?.src, 'gh:plexus-ms/preset-repo-web');
   assert.deepEqual(web?.copier?.answers, { tenant: 'plexus' });
   assert.deepEqual(
@@ -78,7 +78,7 @@ test('overview maps the facets of a workspace and prunes what carries none', asy
     ['apps'],
   );
   assert.equal(web?.pin, '0.63.0', 'the plx pin of its mise.toml');
-  assert.equal(web?.children[0]?.children[0]?.declaration?.plexus, '0.62.0');
+  assert.equal(web?.children[0]?.children[0]?.declaration?.profile, 'stateless');
   assert.equal(web?.children[0]?.children[0]?.pin, undefined, 'an app pins nothing');
 });
 

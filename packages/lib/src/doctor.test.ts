@@ -1,118 +1,469 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { parseModule, readCatalog } from './catalog.ts';
+import { type Compose, type Mapping, parseCompose } from './compose.ts';
 import { Context } from './context.ts';
-import { compareVersions, diagnose } from './doctor.ts';
-import { overview } from './overview.ts';
+import { type AppFacts, CHECKS, diagnose, examine, type Facts, type RepoFacts } from './doctor.ts';
+import { REQUIREMENT_NAME } from './lints.ts';
 import { fakeIo, type Tree } from './testing/fakeIo.ts';
 
-// The toolbox's offline harness, as a tree: a four-module compendium and one
-// tenant whose markers exercise every finding and every way a dependency is
-// satisfied (self, enclosing, contained, consumed).
-const page = (code: string, binds: string, depends = '', consumes = '') =>
-  `---\ncode: ${code}\nmaturity: standard\nbinds: ${binds}\n${consumes ? `consumes: [${consumes}]\n` : ''}depends: [${depends}]\n---\n\nProse.\n`;
-const marker = (plexus: string, modules: string) => `---\nplexus: ${plexus}\nmodules: [${modules}]\n---\n`;
+// --- the list of checks is the compendium's ------------------------------------
 
-const compendium: Tree = {
-  contracts: {
-    'index.md': '---\ntitle: x\n---\n',
-    'repo.md': page('PLX-Repo', 'repo'),
-    'app.md': page('PLX-App', 'app', 'PLX-Repo'),
-    'tenancy.md': page('PLX-Tenancy', 'organisation'),
-    'host.md': page('PLX-Host', 'host'),
-  },
-  approaches: {
-    'platform.md': page('PLX-Platform', 'host', 'PLX-Tenancy', 'PLX-Host, PLX-App'),
-    'ci.md': page('PLX-CI', 'repo', 'PLX-Repo, PLX-Deploy'),
-    'deploy.md': page('PLX-Deploy', 'app', '', 'PLX-App, PLX-Host'),
-    'note.md': '---\ntitle: a note\nmaturity: note\nbinds: host\ndepends: []\n---\n',
-  },
-};
-
-const tenant: Tree = {
-  platform: {
-    'PLEXUS.md': marker('0.1.0', 'PLX-Repo, PLX-Tenancy, PLX-Platform'), // Platform's deps: Tenancy (self), consumes ignored
-    'mise.toml': '[tools]\n"npm:@plexus-ms/cli" = { version = "0.3.0", allow_low_downloads = true }\n', // the version it is on
-    apps: { third: { 'PLEXUS.md': marker('0.2.0', 'PLX-App, PLX-Deploy') } }, // App depends on Repo → the platform repo encloses it
-  },
-  web: {
-    'PLEXUS.md': marker('0.2.0', 'PLX-Repo, PLX-CI'), // CI depends on Deploy → contained in apps/x
-    apps: {
-      x: { 'PLEXUS.md': marker('0.2.0', 'PLX-App, PLX-Deploy') },
-      y: { 'PLEXUS.md': marker('0.2.0', 'PLX-App, PLX-Nope') }, // unknown module
-    },
-  },
-  legacy: { 'PLEXUS.md': '# no frontmatter\n' }, // unreadable
-};
-
-async function run(tree: Tree) {
-  const ctx = new Context({}, fakeIo({ ws: tree }));
-  const catalog = await readCatalog(ctx, '/ws/plexus-ms/compendium');
-  return diagnose(await overview(ctx, '/ws', { git: false }), catalog);
+/** The requirement names the "`plx doctor` checks …" sentences of a text name. */
+function namesChecked(text: string): string[] {
+  const name = new RegExp(`\`(${REQUIREMENT_NAME})\``, 'g');
+  return text
+    .split('\n')
+    .filter((line) => line.startsWith('`plx doctor` checks'))
+    .flatMap((line) => [...line.matchAll(name)].map((m) => m[1] ?? ''));
 }
 
-test('doctor reports every finding of the harness and nothing else', async () => {
-  const report = await run({ 'plexus-ms': { compendium }, t: tenant });
-  const by = Object.fromEntries(report.declarations.map((d) => [d.path, d]));
-  assert.deepEqual(Object.keys(by).sort(), [
-    't/legacy',
-    't/platform',
-    't/platform/apps/third',
-    't/web',
-    't/web/apps/x',
-    't/web/apps/y',
+test('the checks are exactly the requirements the contract pages say doctor checks', () => {
+  // Hermetic by default: a verbatim copy of the sentences. PLX_COMPENDIUM=<checkout> reads the pages.
+  const compendium = process.env.PLX_COMPENDIUM;
+  const text = compendium
+    ? ['contracts/repo.md', 'contracts/app.md'].map((p) => readFileSync(join(compendium, p), 'utf8')).join('\n')
+    : readFileSync(new URL('./testing/doctor-checks.md', import.meta.url), 'utf8');
+  assert.deepEqual(Object.keys(CHECKS), namesChecked(text));
+});
+
+// --- fixtures: a repo and its apps that pass every check -------------------------
+
+const reasoned = (names: string[]) => names.map((n) => `- \`${n}\`: the reason.`).join('\n');
+
+const repo = (over: Partial<RepoFacts> = {}): RepoFacts => ({
+  kind: 'repo',
+  path: 'r',
+  marker: { declaration: { deviations: [], body: '' } },
+  tasks: { names: ['dev', 'build', 'verify', 'lint', 'check', 'test', 'install'] },
+  tracked: ['mise.toml', 'apps/a/docker/compose.yaml'],
+  ...over,
+});
+
+const IMAGE = '${PLEXUS_DEPLOYMENT_IMAGE:?rendered by the deploy verb}';
+const tenant = { 'plexus.tenant': 't' };
+const web = (over: Mapping = {}): Mapping => ({
+  image: IMAGE,
+  env_file: [
+    { path: '.env', required: false },
+    { path: '.env.secret', required: false },
+  ],
+  ports: ['127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000'],
+  labels: tenant,
+  healthcheck: { test: ['CMD', 'true'] },
+  ...over,
+});
+const STATELESS: Compose = { services: { web: web() } };
+const STATEFUL: Compose = {
+  services: {
+    web: web(),
+    migrate: { image: IMAGE, profiles: ['migrate'], command: 'migrate', labels: tenant },
+    db: { image: 'postgres:18', labels: { ...tenant, 'plexus.backup': 'postgres' } },
+  },
+};
+
+const app = (profile: string | undefined, over: Partial<AppFacts> = {}, deviations: string[] = []): AppFacts => ({
+  kind: 'app',
+  path: 'r/apps/a',
+  repo: repo(),
+  thirdParty: false,
+  marker: { declaration: { ...(profile ? { profile } : {}), deviations, body: reasoned(deviations) } },
+  compose: profile === 'stateful' ? STATEFUL : STATELESS,
+  dockerfile: true,
+  packageJson: { scripts: { seed: 'tsx seed.ts' } },
+  ...over,
+});
+
+const findings = (unit: Facts) => diagnose([unit]).units[0]?.findings ?? [];
+const named = (unit: Facts, name: string) => findings(unit).filter((f) => f.requirement === name);
+
+test('a repo and an app of either profile that meet their contracts pass', () => {
+  for (const unit of [repo(), app('stateless'), app('stateful')]) assert.deepEqual(findings(unit), [], unit.kind);
+});
+
+// --- one failing unit per check ---------------------------------------------------
+
+const without = (services: Compose['services'], name: string) => ({
+  services: Object.fromEntries(Object.entries(services).filter(([n]) => n !== name)),
+});
+
+/** For every check: a unit that fails it and nothing else, and what it says. */
+const FAILING: Record<string, { unit: (deviations?: string[]) => Facts; problem: RegExp }> = {
+  'PLX-Repo/Marker': {
+    unit: () => repo({ marker: { problem: 'PLEXUS.md: no frontmatter: expected a `---` block at the top' } }),
+    problem: /^PLEXUS\.md: no frontmatter/,
+  },
+  'PLX-Repo/Verbs': {
+    unit: (deviations = []) =>
+      repo({
+        tasks: { names: ['dev', 'verify', 'lint', 'check', 'test'] },
+        marker: { declaration: { deviations, body: reasoned(deviations) } },
+      }),
+    problem: /^no root mise task `build`$/,
+  },
+  'PLX-Repo/SubVerbs': {
+    unit: (deviations = []) =>
+      repo({
+        tasks: { names: ['dev', 'build', 'verify', 'check', 'test'] },
+        marker: { declaration: { deviations, body: reasoned(deviations) } },
+      }),
+    problem: /^no root mise task `lint`$/,
+  },
+  'PLX-App/Marker': {
+    unit: (d) => app(undefined, {}, d),
+    problem: /sets no `profile`/,
+  },
+  'PLX-App/Compose': {
+    unit: (d) => app('stateless', { compose: undefined }, d),
+    problem: /^no docker\/compose\.yaml$/,
+  },
+  'PLX-App/TenantLabel': {
+    unit: (d) => app('stateless', { compose: { services: { web: web({ labels: {} }) } } }, d),
+    problem: /^service `web` carries no `plexus.tenant` label$/,
+  },
+  'PLX-App/EnvFileLoad': {
+    unit: (d) => app('stateless', { compose: { services: { web: web({ env_file: ['.env', '.env.secret'] }) } } }, d),
+    problem: /^\.env\.secret is loaded, but not marked `required: false`$/,
+  },
+  'PLX-App/ImageRef': {
+    unit: (d) => app('stateless', { compose: { services: { web: web({ image: 'ghcr.io/t/a:1' }) } } }, d),
+    problem: /image is `ghcr.io\/t\/a:1`, not/,
+  },
+  'PLX-App/NoCommittedValues': {
+    unit: (d) => app('stateless', { repo: repo({ tracked: ['apps/a/docker/.env.secret'] }) }, d),
+    problem: /^the source repo tracks `apps\/a\/docker\/\.env\.secret`$/,
+  },
+  'PLX-App/SinglePort': {
+    unit: (d) =>
+      app(
+        'stateless',
+        {
+          compose: {
+            services: {
+              web: web({ ports: ['127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000', '127.0.0.1:${PLEXUS_LOOPBACK_PORT}:9229'] }),
+            },
+          },
+        },
+        d,
+      ),
+    problem: /publishes 2 ports, not one/,
+  },
+  'PLX-App/LoopbackPort': {
+    unit: (d) => app('stateless', { compose: { services: { web: web({ ports: ['3000:3000'] }) } } }, d),
+    problem: /publishes `3000:3000`, not 127\.0\.0\.1/,
+  },
+  'PLX-App/Healthcheck': {
+    unit: (d) => app('stateless', { compose: { services: { web: web({ healthcheck: { test: ['NONE'] } }) } } }, d),
+    problem: /declares no healthcheck with a test of its own/,
+  },
+  'PLX-App/Dockerfile': {
+    unit: (d) => app('stateless', { dockerfile: false }, d),
+    problem: /^no docker\/Dockerfile$/,
+  },
+  'PLX-App/Stateless/NoState': {
+    unit: (d) => app('stateless', { compose: STATEFUL }, d),
+    problem: /declares a `migrate` service|carries a `plexus.backup` label/,
+  },
+  'PLX-App/Stateful/MigrateService': {
+    unit: (d) => app('stateful', { compose: without(STATEFUL.services, 'migrate') }, d),
+    problem: /^declares no `migrate` service$/,
+  },
+  'PLX-App/Stateful/Seed': {
+    unit: (d) => app('stateful', { packageJson: { scripts: { dev: 'next dev' } } }, d),
+    problem: /^package\.json has no `seed` script$/,
+  },
+};
+
+test('every check has a failing unit here', () => {
+  assert.deepEqual(Object.keys(FAILING), Object.keys(CHECKS));
+});
+
+for (const [name, { unit, problem }] of Object.entries(FAILING)) {
+  test(`${name}: a failing unit fails it and nothing else`, () => {
+    const found = findings(unit());
+    assert.ok(found.length > 0, 'a finding');
+    for (const f of found) {
+      assert.equal(f.requirement, name);
+      assert.match(f.problem, problem);
+    }
+  });
+
+  // A marker that cannot be read lists no deviation.
+  if (name === 'PLX-Repo/Marker') continue;
+
+  test(`${name}: a listed deviation with a reason silences it`, () => {
+    const report = diagnose([unit([name])]).units[0];
+    assert.deepEqual(report?.findings, []);
+    assert.deepEqual(report?.deviations, [name]);
+  });
+
+  test(`${name}: a listed deviation without a reason fails`, () => {
+    const u = unit([name]);
+    if (u.marker?.declaration) u.marker.declaration.body = 'Prose that gives no reason.\n';
+    assert.deepEqual(findings(u), [
+      {
+        requirement: name,
+        problem: "listed under `deviations`, but no bullet of the marker's body names it with a reason",
+      },
+    ]);
+  });
+}
+
+test('a deviation that names no requirement fails, whether a reason is given or not', () => {
+  // Joined at run time: written out, plx requirements would read them as citations of nothing.
+  const [noName, noModule] = [['PLX-App', 'Nope'].join('/'), ['PLX-Nope', 'X'].join('/')];
+  for (const unit of [
+    app('stateless', {}, [noName]),
+    repo({ marker: { declaration: { deviations: [noModule], body: '' } } }),
+  ])
+    assert.deepEqual(findings(unit), [
+      {
+        requirement: unit.marker?.declaration?.deviations[0] ?? '',
+        problem: 'listed under `deviations`, but no requirement has this name',
+      },
+    ]);
+  assert.deepEqual(
+    findings(app('stateless', {}, ['PLX-App/Stateful/MigrateIdempotent'])),
+    [],
+    'a requirement without a check',
+  );
+});
+
+// --- what follows from the unit ------------------------------------------------------
+
+test('a third-party app is not held to the image ref and the Dockerfile; a built one is', () => {
+  const pinned = {
+    compose: { services: { web: web({ image: 'ghcr.io/pocket-id/pocket-id:v2' }) } },
+    dockerfile: false,
+  };
+  assert.deepEqual(findings(app('stateless', { ...pinned, thirdParty: true })), []);
+  assert.deepEqual(
+    findings(app('stateless', pinned)).map((f) => f.requirement),
+    ['PLX-App/ImageRef', 'PLX-App/Dockerfile'],
+  );
+});
+
+test("each profile's checks bind only its own apps", () => {
+  assert.deepEqual(findings(app('stateful')), [], 'a stateful app may migrate and back up');
+  assert.deepEqual(findings(app('stateless', { packageJson: {} })), [], 'a stateless app needs no seed');
+  assert.deepEqual(
+    findings(app('stateful', { compose: STATELESS, packageJson: {} })).map((f) => f.requirement),
+    ['PLX-App/Stateful/MigrateService', 'PLX-App/Stateful/Seed'],
+  );
+  const unknown = findings(app('stateful-app', { compose: STATEFUL }));
+  assert.deepEqual(
+    unknown.map((f) => f.problem),
+    ['`profile` is `stateful-app`, not stateless or stateful'],
+    'no profile check runs while the profile is unknown',
+  );
+});
+
+test('a repo check never binds an app, nor an app check a repo', () => {
+  assert.deepEqual(findings(app('stateless', { repo: repo({ tasks: { names: [] } }) })), []);
+  assert.deepEqual(findings(repo({ kind: 'operations' })), []);
+});
+
+test('the compose checks wait for the file and the app service, which PLX-App/Compose reports', () => {
+  const broken = app('stateless', { compose: undefined, composeProblem: 'docker/compose.yaml: not valid YAML: x' });
+  assert.deepEqual(findings(broken), [
+    { requirement: 'PLX-App/Compose', problem: 'docker/compose.yaml: not valid YAML: x' },
   ]);
-  assert.deepEqual(by['t/platform']?.findings, [], 'a marker behind the version is no finding');
-  assert.equal(by['t/platform']?.plexus, '0.3.0', "the version is the repo's plx pin");
-  assert.equal(by['t/web/apps/x']?.plexus, '0.2.0', "else the marker's");
-  assert.deepEqual(by['t/web/apps/y']?.findings, ['declares PLX-Nope, which no module carries']);
-  assert.deepEqual(by['t/legacy']?.findings, ['no frontmatter: expected a `---` block at the top']);
-  assert.deepEqual(by['t/platform/apps/third']?.findings, [], 'an enclosing declaration satisfies an app');
-  assert.deepEqual(by['t/web']?.findings, [], 'a contained declaration satisfies a repo');
-  assert.deepEqual(by['t/web/apps/x']?.findings, []);
-  assert.equal(report.incomplete, 2);
+  const noWeb = app('stateless', { compose: { services: { api: { labels: tenant } } } });
+  assert.deepEqual(
+    findings(noWeb).map((f) => f.requirement),
+    ['PLX-App/Compose'],
+  );
 });
 
-test('doctor is clean once every declaration is complete', async () => {
-  const fixed: Tree = structuredClone(tenant);
-  ((fixed.web as Tree).apps as Tree).y = { 'PLEXUS.md': marker('0.2.0', 'PLX-App, PLX-Deploy') };
-  delete fixed.legacy;
-  const report = await run({ 'plexus-ms': { compendium }, t: fixed });
-  assert.equal(report.incomplete, 0);
-  assert.equal(report.declarations.length, 5);
+test('mise could not list the tasks: PLX-Repo/Verbs says why, once', () => {
+  assert.deepEqual(findings(repo({ tasks: { problem: 'Config files in /r/mise.toml are not trusted.' } })), [
+    {
+      requirement: 'PLX-Repo/Verbs',
+      problem: 'mise could not list the tasks: Config files in /r/mise.toml are not trusted.',
+    },
+  ]);
 });
 
-test('the tenant declaration satisfies its repos, and its repos satisfy it', async () => {
-  const report = await run({
-    'plexus-ms': { compendium },
-    t: {
-      platform: { 'PLEXUS.md': marker('0.2.0', 'PLX-Tenancy, PLX-CI') }, // CI depends on Repo and Deploy, declared by the sibling repo and its app
-      web: {
-        'PLEXUS.md': marker('0.2.0', 'PLX-Repo'),
-        apps: { x: { 'PLEXUS.md': marker('0.2.0', 'PLX-App, PLX-Deploy') } },
+// --- compose's spellings -----------------------------------------------------------
+
+const appOf = (text: string, profile = 'stateless') => app(profile, { compose: parseCompose(text, 'c') });
+
+test('the compose checks read either spelling compose accepts', () => {
+  const longForm = `services:
+  web:
+    image: \${PLEXUS_DEPLOYMENT_IMAGE}
+    env_file: [{ path: ./.env }, { path: .env.secret, required: "false" }]
+    ports:
+      - { target: 3000, host_ip: 127.0.0.1, published: "\${PLEXUS_LOOPBACK_PORT}" }
+    labels: [plexus.tenant=t]
+    healthcheck: { test: curl -f localhost:3000 }
+`;
+  assert.deepEqual(findings(appOf(longForm)), []);
+});
+
+test('PLX-App/LoopbackPort: a data service may publish no fixed host port, the app service only the loopback binding', () => {
+  const text = `services:
+  web:
+    image: \${PLEXUS_DEPLOYMENT_IMAGE}
+    env_file: [{ path: .env, required: false }, { path: .env.secret, required: false }]
+    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT:-3000}:3000"]
+    labels: { plexus.tenant: t }
+    healthcheck: { test: [CMD, "true"] }
+  cache:
+    image: valkey
+    labels: { plexus.tenant: t }
+    ports: ["127.0.0.1:6379:6379", "6380", "127.0.0.1::6381"]
+`;
+  assert.deepEqual(
+    named(appOf(text), 'PLX-App/LoopbackPort').map((f) => f.problem),
+    [
+      'the web service publishes `127.0.0.1:${PLEXUS_LOOPBACK_PORT:-3000}:3000`, not 127.0.0.1:${PLEXUS_LOOPBACK_PORT}:<container-port>',
+      'service `cache` fixes host port `6379` (`127.0.0.1:6379:6379`)',
+    ],
+  );
+});
+
+test('PLX-App/ImageRef takes the bare form and the :? form, nothing else', () => {
+  const imaged = (image: string) => app('stateless', { compose: { services: { web: web({ image }) } } });
+  assert.deepEqual(named(imaged('${PLEXUS_DEPLOYMENT_IMAGE}'), 'PLX-App/ImageRef'), []);
+  assert.deepEqual(named(imaged('${PLEXUS_DEPLOYMENT_IMAGE:?unrendered}'), 'PLX-App/ImageRef'), []);
+  assert.equal(named(imaged('${PLEXUS_DEPLOYMENT_IMAGE:-nginx}'), 'PLX-App/ImageRef').length, 1);
+});
+
+test('PLX-App/Stateful/MigrateService: under its profile, on the app service image', () => {
+  const migrate = (m: Mapping) =>
+    named(
+      app('stateful', { compose: { services: { ...STATEFUL.services, migrate: m } } }),
+      'PLX-App/Stateful/MigrateService',
+    ).map((f) => f.problem);
+  assert.deepEqual(migrate({ image: IMAGE, labels: tenant }), [
+    'the `migrate` service is not under `profiles: ["migrate"]`, so a plain `up` starts it',
+  ]);
+  assert.deepEqual(migrate({ image: 'node:24', profiles: ['migrate'], labels: tenant }), [
+    `the \`migrate\` service runs \`node:24\`, not the app's own image \`${IMAGE}\``,
+  ]);
+});
+
+test('PLX-App/Stateful/Seed: an app without a package.json has no finding', () => {
+  assert.deepEqual(findings(app('stateful', { packageJson: undefined })), []);
+  assert.deepEqual(
+    findings(app('stateful', { packageJson: undefined, packageJsonProblem: 'package.json is not JSON' })).map(
+      (f) => f.problem,
+    ),
+    ['package.json is not JSON'],
+  );
+});
+
+// --- the reads ---------------------------------------------------------------------------
+
+const MARKER = '---\n---\n\n- A repo.\n';
+const COMPOSE = `services:
+  web:
+    image: \${PLEXUS_DEPLOYMENT_IMAGE:?rendered by the deploy verb}
+    env_file: [{ path: .env, required: false }, { path: .env.secret, required: false }]
+    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT}:3000"]
+    labels: { plexus.tenant: t }
+    healthcheck: { test: [CMD, "true"] }
+`;
+const OPS_ANSWERS = '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\n';
+
+/** `mise tasks ls --json --hidden` in a repo: its own tasks, a parent's, a sub-project's. */
+const miseTasks =
+  (own: Record<string, string[]>) =>
+  (cwd: string): string | undefined => {
+    const names = own[cwd];
+    if (!names) return undefined;
+    return JSON.stringify([
+      ...names.map((n) => ({ name: `//:${n}`, source: `${cwd}/mise.toml`, global: false })),
+      { name: 'pull', source: '/ws/mise.toml', global: false },
+      { name: 'fmt', source: '/home/.config/mise/config.toml', global: true },
+    ]);
+  };
+
+const ws = (): Tree => ({
+  'mise.toml': '',
+  web: {
+    '.git': {},
+    'PLEXUS.md': MARKER,
+    'mise.toml': '',
+    apps: {
+      site: {
+        'PLEXUS.md': '---\nprofile: stateless\n---\n',
+        docker: { 'compose.yaml': COMPOSE, Dockerfile: 'FROM node' },
+        'package.json': '{"scripts":{}}',
+      },
+      notes: { 'readme.md': 'not an app: no marker' },
+    },
+  },
+  ops: {
+    '.git': {},
+    'PLEXUS.md':
+      '---\ndeviations: [PLX-Repo/SubVerbs]\n---\n\n- `PLX-Repo/SubVerbs`: the playbooks are checked by `check`.\n',
+    '.copier-answers.yml': OPS_ANSWERS,
+    apps: {
+      id: {
+        'PLEXUS.md': '---\nprofile: stateful\n---\n',
+        docker: {
+          'compose.yaml': COMPOSE.replace('${PLEXUS_DEPLOYMENT_IMAGE:?rendered by the deploy verb}', 'ghcr.io/x/id:2'),
+        },
       },
     },
-  });
-  const platform = report.declarations.find((d) => d.path === 't/platform');
-  assert.deepEqual(platform?.findings, [
-    'PLX-CI depends on PLX-Deploy, declared neither here nor by an enclosing or contained declaration',
-  ]);
+  },
 });
 
-test('parseModule skips notes and reads every field', () => {
-  assert.equal(parseModule('---\ntitle: n\nmaturity: note\n---\n', 'approach'), undefined);
-  assert.deepEqual(parseModule(page('PLX-Platform', 'host', 'PLX-Tenancy', 'PLX-Host, PLX-App'), 'approach'), {
-    code: 'PLX-Platform',
-    kind: 'approach',
-    maturity: 'standard',
-    binds: 'host',
-    depends: ['PLX-Tenancy'],
-    consumes: ['PLX-Host', 'PLX-App'],
-  });
+async function doctorOver(tree: Tree, root: string, webTasks: string[]) {
+  const git = (cwd: string, args: string[]) =>
+    args[0] === 'ls-files' && cwd === '/ws/web' ? 'PLEXUS.md\0apps/site/docker/compose.yaml\0' : undefined;
+  const mise = miseTasks({ '/ws/web': webTasks, '/ws/ops': ['dev', 'build', 'verify', 'check', 'test'] });
+  const ctx = new Context({}, fakeIo({ ws: tree }, git, { mise: (cwd) => mise(cwd) }));
+  return diagnose(await examine(ctx, root));
+}
+
+test('doctor in a repo fails on a missing build task and passes once it exists', async () => {
+  const verbs = ['dev', 'verify', 'lint', 'check', 'test'];
+  const before = await doctorOver(ws(), '/ws/web', verbs);
+  assert.deepEqual(
+    before.units.map((u) => [u.path, u.kind, u.findings]),
+    [
+      ['.', 'repo', [{ requirement: 'PLX-Repo/Verbs', problem: 'no root mise task `build`' }]],
+      ['apps/site', 'app', []],
+    ],
+  );
+  const after = await doctorOver(ws(), '/ws/web', [...verbs, 'build']);
+  assert.equal(after.failed, 0);
 });
 
-test('compareVersions compares numerically and ignores suffixes', () => {
-  assert.equal(compareVersions('0.10.0', '0.9.0'), 1);
-  assert.equal(compareVersions('0.62.0', '0.62.0'), 0);
-  assert.equal(compareVersions('0.62.0-rc1', '0.62.1'), -1);
+test('doctor over a workspace checks every unit with a marker beneath, apps by their repo', async () => {
+  const verbs = ['dev', 'build', 'verify', 'lint', 'check', 'test'];
+  const report = await doctorOver(ws(), '/ws', verbs);
+  assert.deepEqual(
+    report.units.map((u) => [u.path, u.kind, u.profile, u.deviations, u.findings]),
+    [
+      ['ops', 'operations', undefined, ['PLX-Repo/SubVerbs'], []],
+      [
+        'ops/apps/id',
+        'app',
+        'stateful',
+        [],
+        [{ requirement: 'PLX-App/Stateful/MigrateService', problem: 'declares no `migrate` service' }],
+      ],
+      ['web', 'repo', undefined, [], []],
+      ['web/apps/site', 'app', 'stateless', [], []],
+    ],
+  );
+});
+
+test('a repo without a marker, run in, fails PLX-Repo/Marker and still has its apps checked', async () => {
+  const verbs = ['dev', 'build', 'verify', 'lint', 'check', 'test'];
+  const tree = ws();
+  delete (tree.web as Tree)['PLEXUS.md'];
+  const report = await doctorOver(tree, '/ws/web', verbs);
+  assert.deepEqual(
+    report.units.map((u) => [u.path, u.findings.map((f) => f.requirement)]),
+    [
+      ['.', ['PLX-Repo/Marker']],
+      ['apps/site', []],
+    ],
+  );
 });

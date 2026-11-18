@@ -1,59 +1,50 @@
-// plx doctor [dir]: the declarations' check (§ 13.4 PLX).
+// plx doctor [dir]: the repo's checks (§ 13.4 PLX).
 //
-// lib's `diagnose` does the work; this file finds the compendium, maps the
-// arguments and renders the report: one line per declaration, `✓` with the
-// version the unit is on when complete, `✗` with its findings otherwise, and a
-// summary. Exit code 1 when anything is incomplete. -q keeps the findings and
-// the summary only.
-import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { diagnose, overview, type Report, readCatalog } from '@plexus-ms/lib';
+// lib's `examine` reads, `diagnose` checks; this file maps the argument and
+// renders the report: a failing check is one line, `✗ <requirement> <unit>:
+// <what is wrong>`; a unit with none is `✓ <unit>`, with its profile and the
+// deviations its marker lists; then a summary. Exit code 1 when a check fails
+// or no unit is found. -q keeps the failures and the summary only.
+import { resolve } from 'node:path';
+import { diagnose, examine, type Report } from '@plexus-ms/lib';
 import type { Command } from 'commander';
 import { contextOf } from '../program.ts';
 import { colorByDefault, type Style, style } from '../style.ts';
 
-/** Where the compendium sits in the maintainers' workspace, relative to the scanned directory. */
-const WORKSPACE_COMPENDIUM = 'plexus-ms/compendium';
-
 export function register(program: Command): void {
   program
     .command('doctor')
-    .description('check every PLEXUS.md under a directory for modules no page carries and dependencies not declared')
-    .argument('[dir]', 'directory to check', '.')
-    .option(
-      '--compendium <path>',
-      `compendium checkout to read the modules from (default: <dir>/${WORKSPACE_COMPENDIUM})`,
+    .description(
+      'run the checks of the contracts over this repo and its apps, or every unit with a marker under a directory',
     )
+    .argument('[dir]', 'a repo, or a directory of repos', '.')
     .option('--color', 'colour the report even when piped')
     .option('--no-color', 'never colour the report')
-    .action(async (dir: string, opts: { compendium?: string; color?: boolean }, command: Command) => {
+    .action(async (dir: string, opts: { color?: boolean }, command: Command) => {
       const ctx = contextOf(command);
-      const root = resolve(dir);
-      const compendium = resolve(opts.compendium ?? join(root, WORKSPACE_COMPENDIUM));
-      if (!existsSync(join(compendium, 'contracts')))
-        throw new Error(
-          `no compendium at ${compendium}; pass --compendium <path to a checkout of plexus-ms/compendium>`,
-        );
-      const catalog = await readCatalog(ctx, compendium);
-      const report = diagnose(await overview(ctx, root, { git: false }), catalog);
+      const report = diagnose(await examine(ctx, resolve(dir)));
       const s = style(opts.color ?? colorByDefault());
       ctx.result(report, (r) => renderReport(r, s, !ctx.quiet));
-      if (report.incomplete > 0 || report.declarations.length === 0) process.exitCode = 1;
+      if (report.failed > 0 || report.units.length === 0) process.exitCode = 1;
     });
 }
 
-export function renderReport(report: Report, s: Style, showCurrent: boolean): string {
+export function renderReport(report: Report, s: Style, showPassing: boolean): string {
   const lines: string[] = [];
-  for (const d of report.declarations) {
-    if (d.findings.length === 0) {
-      if (showCurrent) lines.push(`${s.ok('✓')} ${d.path}: ${d.plexus} ${s.dim(`[${d.modules.join(', ')}]`)}`);
+  for (const u of report.units) {
+    if (u.findings.length === 0) {
+      const notes = [u.kind === 'repo' ? '' : u.kind, u.profile ?? '', ...u.deviations.map((d) => `deviates: ${d}`)];
+      const note = notes.filter(Boolean).join(', ');
+      if (showPassing) lines.push(`${s.ok('✓')} ${u.path}${note ? ` ${s.dim(`[${note}]`)}` : ''}`);
       continue;
     }
-    for (const f of d.findings) lines.push(`${s.warn('✗')} ${d.path}: ${f}`);
+    for (const f of u.findings) lines.push(`${s.warn('✗')} ${f.requirement} ${u.path}: ${f.problem}`);
   }
-  const n = report.declarations.length;
+  const n = report.units.length;
+  const units = `${n} unit${n === 1 ? '' : 's'}`;
   if (n === 0) lines.push(s.warn('✗ no PLEXUS.md marker found'));
-  else if (report.incomplete > 0) lines.push(s.warn(`✗ ${report.incomplete} of ${n} declarations incomplete`));
-  else lines.push(s.ok(`✓ ${n} declarations complete`));
+  else if (report.failed > 0)
+    lines.push(s.warn(`✗ ${report.failed} of ${units} ${report.failed === 1 ? 'fails' : 'fail'} a check`));
+  else lines.push(s.ok(`✓ ${units} pass${n === 1 ? 'es' : ''} every check`));
   return lines.join('\n');
 }

@@ -1,15 +1,14 @@
 // The consumers of the templates: every copier-managed site under a directory
 // (tenant repo roots and their apps/*) and the repo each belongs to. A
 // consumer is updated in a scratch checkout of its origin's branch, never in
-// its own checkout, on the branch the version lands on: a platform repo (declares
-// PLX-Platform) rides main, an app repo (declares PLX-Repo) rides develop
-// (§ 3 PLX-Delivery), and a package repo (its root answers say
-// `publishes_packages`) is trunk-based on main (§ 5 PLX-Delivery). A repo
-// whose marker says neither is taken on the branch its checkout is on.
+// its own checkout, on the branch the version lands on: the operations repo
+// rides main, an app repo rides develop (§ 3 PLX-Delivery), and a package
+// repo (its root answers say `publishes_packages`) is trunk-based on main
+// (§ 5 PLX-Delivery). A repo without a marker is taken on the branch its
+// checkout is on.
 import { relative } from 'node:path';
 import type { Context } from './context.ts';
-import type { Declaration } from './marker.ts';
-import type { Directory } from './model.ts';
+import { type Directory, isOperations } from './model.ts';
 import { VERSIONED_REPOS } from './version.ts';
 
 /** The versioned repos that are templates: what a repo can be generated from. */
@@ -37,12 +36,11 @@ export interface Consumer {
   sites: Site[];
 }
 
-/** The branch a consumer is updated on; undefined when the marker says neither. */
-export function expectedBranch(declaration?: Declaration, answers: Record<string, unknown> = {}): Consumer['expected'] {
-  if (!declaration) return undefined;
-  if (declaration.modules.includes('PLX-Platform')) return 'main';
-  if (declaration.modules.includes('PLX-Repo')) return answers.publishes_packages === true ? 'main' : 'develop';
-  return undefined;
+/** The branch a consumer is updated on; undefined for a repo without a marker. */
+export function expectedBranch(repo: Directory): Consumer['expected'] {
+  if (!repo.declaration) return undefined;
+  if (isOperations(repo)) return 'main';
+  return repo.copier?.answers.publishes_packages === true ? 'main' : 'develop';
 }
 
 /** The template source copier records for a template of the upstream organisation. */
@@ -91,7 +89,7 @@ export async function findConsumers(ctx: Context, root: Directory, templates: re
       else {
         let consumer = consumers.get(here.path);
         if (!consumer) {
-          const expected = expectedBranch(here.declaration, here.copier?.answers);
+          const expected = expectedBranch(here);
           consumer = {
             path: here.path,
             rel: relative(root.path, here.path) || '.',

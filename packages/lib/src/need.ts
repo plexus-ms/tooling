@@ -18,8 +18,7 @@
 // While nothing is taken the repo rests on the version it has, which its
 // immutable pins make safe (§ 1.6 PLX). Pure: the caller reads the releases,
 // the answers and the clock.
-import { compareVersions } from './doctor.ts';
-import { isPlexusVersion } from './version.ts';
+import { compareVersions, isPlexusVersion } from './version.ts';
 
 /** The interval, in days, of a repo whose answers do not set one. */
 export const DEFAULT_MAX_AGE = 7;

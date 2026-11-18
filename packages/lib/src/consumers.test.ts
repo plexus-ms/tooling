@@ -12,17 +12,19 @@ const dir = (path: string, facets: Partial<Directory> = {}, children: Directory[
   ...facets,
 });
 const copier = (template: string) => ({ copier: { src: `gh:plexus-ms/${template}`, answers: {} } });
-const marker = (...modules: string[]) => ({ declaration: { plexus: '0.1.0', modules, body: '' } });
+const marker = () => ({ declaration: { deviations: [], body: '' } });
 
-test('expectedBranch follows the marker, and the answers for a package repo', () => {
-  assert.equal(expectedBranch({ plexus: '0', modules: ['PLX-Repo', 'PLX-Tenancy', 'PLX-Platform'], body: '' }), 'main');
-  assert.equal(expectedBranch({ plexus: '0', modules: ['PLX-Repo', 'PLX-JS'], body: '' }), 'develop');
+test('expectedBranch follows what the repo is, and the answers for a package repo', () => {
+  assert.equal(expectedBranch(dir('/o', { ...copier('template-repo-operations'), ...marker() })), 'main');
   assert.equal(
-    expectedBranch({ plexus: '0', modules: ['PLX-Repo', 'PLX-JS'], body: '' }, { publishes_packages: true }),
+    expectedBranch(dir('/o', { ...copier('preset-repo-platform'), ...marker() })),
     'main',
+    'an earlier name',
   );
-  assert.equal(expectedBranch({ plexus: '0', modules: ['PLX-App'], body: '' }), undefined);
-  assert.equal(expectedBranch(undefined), undefined);
+  assert.equal(expectedBranch(dir('/w', { ...copier('template-repo-turbo'), ...marker() })), 'develop');
+  const packages = { copier: { src: 'gh:plexus-ms/template-repo-turbo', answers: { publishes_packages: true } } };
+  assert.equal(expectedBranch(dir('/l', { ...packages, ...marker() })), 'main');
+  assert.equal(expectedBranch(dir('/x', copier('template-repo-operations'))), undefined, 'no marker');
 });
 
 test('findConsumers groups sites by repo with the branch the version lands on, and skips the templates', async () => {
@@ -34,19 +36,17 @@ test('findConsumers groups sites by repo with the branch the version lands on, a
       dir('/ws/plexus-ms/libraries', {
         git: { branch: 'main', dirty: false },
         copier: { src: 'gh:plexus-ms/preset-repo-web', answers: { publishes_packages: true } },
-        ...marker('PLX-Repo', 'PLX-Delivery'),
+        ...marker(),
       }),
     ]),
     dir('/ws/acme', {}, [
-      dir(
-        '/ws/acme/web',
-        { git: { branch: 'feature/x', dirty: true }, ...copier('preset-repo-web'), ...marker('PLX-Repo') },
-        [dir('/ws/acme/web/apps', {}, [dir('/ws/acme/web/apps/site', copier('template-app-nextjs'))])],
-      ),
+      dir('/ws/acme/web', { git: { branch: 'feature/x', dirty: true }, ...copier('preset-repo-web'), ...marker() }, [
+        dir('/ws/acme/web/apps', {}, [dir('/ws/acme/web/apps/site', copier('template-app-nextjs'))]),
+      ]),
       dir('/ws/acme/platform', {
         git: { branch: 'main', dirty: false },
         ...copier('preset-repo-platform'),
-        ...marker('PLX-Platform'),
+        ...marker(),
       }),
       dir('/ws/acme/other', { git: { branch: 'trunk', dirty: false }, ...copier('preset-repo-platform') }),
       dir('/ws/acme/local', { git: { branch: 'main', dirty: false }, ...copier('preset-repo-platform') }),

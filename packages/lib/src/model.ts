@@ -1,9 +1,10 @@
 // The Plexus vocabulary (§ 1.2 PLX) as far as a verb needs it today: a
 // directory and the facets it carries. A facet is present exactly when its
-// marker file is. What a directory *is* (an app, a platform repo, a repo) is
-// derived from what it declares, never stored.
+// marker file is. What a directory *is* (an app, the operations repo, a repo)
+// is derived from where it sits and what it carries, never stored.
+import { templateOf } from './consumers.ts';
 import type { Answers } from './copier.ts';
-import type { Declaration } from './marker.ts';
+import { type Declaration, MARKER_FILE } from './marker.ts';
 
 export interface Directory {
   name: string;
@@ -39,23 +40,57 @@ export interface TemplateFacet {
   tag?: string;
 }
 
-export type Kind = 'app' | 'platform' | 'repo';
+/** What a unit is: an app, the operations repo, or any other repo (§ 1.2 PLX). */
+export type Kind = 'app' | 'operations' | 'repo';
 
-/** What a declaration makes a directory, by the modules it follows. */
-export function kindOf(declaration: Declaration): Kind | undefined {
-  const has = (code: string) => declaration.modules.includes(code);
-  if (has('PLX-App')) return 'app';
-  if (has('PLX-Platform')) return 'platform';
-  if (has('PLX-Repo')) return 'repo';
-  return undefined;
+/** A directory with a marker, readable or not, and what it is. */
+export interface Unit {
+  dir: Directory;
+  kind: Kind;
+  /** An app's source repo, the repo whose `apps/` holds it. */
+  repo?: Directory;
 }
 
+/** The template the operations repo is rendered from (§ 1.6 PLX). */
+const OPERATIONS_TEMPLATE = 'template-repo-operations';
+
+const hasMarker = (dir: Directory): boolean =>
+  Boolean(dir.declaration || dir.problems?.some((p) => p.startsWith(MARKER_FILE)));
+
 /**
- * The Plexus version a unit is on: its `plx` pin, else what its marker says.
- * The marker's `plexus` is the fallback for a directory without a pin, an app
- * among them, until markers no longer carry the field.
+ * The operations repo is the one rendered from the operations template: its
+ * root answers file names it, under its current or an earlier name.
  */
-export const versionOf = (dir: Directory): string | undefined => dir.pin ?? dir.declaration?.plexus;
+export const isOperations = (dir: Directory): boolean =>
+  dir.copier?.src !== undefined && templateOf(dir.copier.src, [OPERATIONS_TEMPLATE]) !== undefined;
+
+/**
+ * Every unit of a scanned tree, in tree order. What a unit is follows from
+ * where it is (§ 1.3 PLX), never from what its marker says: a marker at
+ * `apps/<name>/` of a repo makes an app of that repo, any other marker a repo,
+ * the operations repo when its answers file says so. With `rootIsRepo`, the
+ * root is a repo whether it carries a marker or not.
+ */
+export function unitsOf(root: Directory, options: { rootIsRepo?: boolean } = {}): Unit[] {
+  const units: Unit[] = [];
+  /** `appsOf` is the repo when `dir` sits directly in that repo's `apps/`. */
+  const visit = (dir: Directory, repo: Directory | undefined, appsOf: Directory | undefined) => {
+    let here = repo;
+    if (hasMarker(dir) || (dir === root && options.rootIsRepo)) {
+      if (repo && appsOf === repo) units.push({ dir, kind: 'app', repo });
+      else {
+        units.push({ dir, kind: isOperations(dir) ? 'operations' : 'repo' });
+        here = dir;
+      }
+    }
+    for (const child of dir.children) {
+      if (child.name === 'apps' && here === dir) for (const app of child.children) visit(app, here, here);
+      else visit(child, here, undefined);
+    }
+  };
+  visit(root, undefined, undefined);
+  return units;
+}
 
 /** A git remote URL as a short handle: `gh:org/repo` for GitHub, the URL otherwise. */
 export function shortRemote(url: string): string {

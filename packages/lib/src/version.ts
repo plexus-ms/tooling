@@ -22,6 +22,18 @@ export const VERSIONED_REPOS = [
 /** A Plexus version is plain semver, no `v` prefix (§ 1.5 PLX). */
 export const isPlexusVersion = (v: string): boolean => /^\d+\.\d+\.\d+$/.test(v);
 
+/** Numeric comparison of two Plexus versions; suffixes ignored. */
+export function compareVersions(a: string, b: string): number {
+  const nums = (v: string) =>
+    v
+      .split('.')
+      .slice(0, 3)
+      .map((p) => Number.parseInt(p, 10) || 0);
+  const [x, y] = [nums(a), nums(b)];
+  for (let i = 0; i < 3; i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0) ? 1 : -1;
+  return 0;
+}
+
 /** The tool whose pin in a repo's `mise.toml` names the version the repo is on (§ 1.5 PLX). */
 export const PLX_PIN = 'npm:@plexus-ms/cli';
 

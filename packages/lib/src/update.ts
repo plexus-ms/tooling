@@ -19,7 +19,7 @@
 // worktree of origin's branch, never in the checkout: a developer's branch and
 // edits stay as they are, and in CI the worktree shares the checkout's
 // credentials, so the push and the pull request need no second token. Then
-// `takeVersion` (propagate.ts): copier update at every site, marker, lockfile,
+// `takeVersion` (propagate.ts): copier update at every site, lockfile,
 // workflow refs, one commit on `plexus/<version>`, one pull request.
 //
 // The version is pulled once per repo: a `plexus/<version>` branch already on
@@ -36,12 +36,11 @@ import { basename, join, relative } from 'node:path';
 import { findConsumers, TEMPLATES, templateSource } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers } from './copier.ts';
-import { compareVersions } from './doctor.ts';
 import { run } from './effects.ts';
 import { maxAgeOf, type Need, needOf, type Release } from './need.ts';
 import { overview } from './overview.ts';
 import { CLEAN_BODY, detail, emptySummary, openPullUrl, type Summary, takeVersion, versionBranch } from './take.ts';
-import { COMPENDIUM, isPlexusVersion, preflightForge, UsageError } from './version.ts';
+import { COMPENDIUM, compareVersions, isPlexusVersion, preflightForge, UsageError } from './version.ts';
 
 export interface UpdateOptions {
   /** The repo to update: a checkout whose root is a site of a repo template. */

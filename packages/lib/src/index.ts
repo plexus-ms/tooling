@@ -11,8 +11,7 @@
 // file shapes (marker.ts, copier.ts) live here, once, for every verb.
 // Conventions: compendium/miscellaneous/cli-design.md.
 export { BASELINE_FILE, type Compared, compareBaseline, parseBaseline, renderBaseline } from './baseline.ts';
-export { bumpWorkflowRefs, hasConflictMarkers, hasUnmergedEntries, syncMarker, WORKFLOW_REF } from './bookkeeping.ts';
-export { CATALOG_DIRS, type Catalog, type Module, parseModule, readCatalog } from './catalog.ts';
+export { bumpWorkflowRefs, hasConflictMarkers, hasUnmergedEntries, WORKFLOW_REF } from './bookkeeping.ts';
 export {
   CHANGESET_DIR,
   type Changeset,
@@ -25,6 +24,14 @@ export {
   readChangeset,
   workspaceGlobs,
 } from './changeset.ts';
+export {
+  APP_SERVICE,
+  type Compose,
+  declaresHealthcheck,
+  healthcheckOf,
+  type Mapping,
+  parseCompose,
+} from './compose.ts';
 export {
   type Consumer,
   expectedBranch,
@@ -52,7 +59,20 @@ export {
   selectDeployTargets,
   targetsIn,
 } from './deployTargets.ts';
-export { compareVersions, type Diagnosis, diagnose, type Report } from './doctor.ts';
+export {
+  type AppFacts,
+  CHECKS,
+  diagnose,
+  examine,
+  type Facts,
+  type Finding,
+  knownRequirements,
+  type MarkerRead,
+  type Profile,
+  type RepoFacts,
+  type Report,
+  type UnitReport,
+} from './doctor.ts';
 export { body, describe, type Plan, run, type Step, write } from './effects.ts';
 export { frontmatterField, setFrontmatterField } from './frontmatter.ts';
 export { type DirEntry, ExecError, type ExecOptions, type Io, orAbsent, realIo, render } from './io.ts';
@@ -69,16 +89,17 @@ export {
   renderViolation,
   type Violation,
 } from './lints.ts';
-export { type Declaration, MARKER_FILE, parseMarker, splitFrontmatter } from './marker.ts';
+export { type Declaration, MARKER_FILE, parseMarker, reasonGiven, splitFrontmatter } from './marker.ts';
 export {
   type Directory,
   type GitFacet,
   isNotable,
+  isOperations,
   type Kind,
-  kindOf,
   shortRemote,
   type TemplateFacet,
-  versionOf,
+  type Unit,
+  unitsOf,
 } from './model.ts';
 export {
   DEFAULT_MAX_AGE,
@@ -125,6 +146,7 @@ export { detail, emptySummary, isClean, type Summary, type Take, takeVersion } f
 export { type UpdateOptions, update } from './update.ts';
 export {
   COMPENDIUM,
+  compareVersions,
   isPlexusVersion,
   PLX_PIN,
   plxPinOf,

@@ -1,8 +1,7 @@
 // take: one repo takes a version (§ 3 PLX-Updates), in a scratch checkout of the
 // branch the version lands on (consumers.ts). `copier update` runs at the
 // version plx pins (copier.ts) at every site (the repo root, then its apps/*),
-// the marker is synced to the answers file, the lockfile refreshed where
-// manifests moved, the hand-owned workflows pinned to the version; then one
+// the lockfile refreshed where manifests moved, the hand-owned workflows pinned to the version; then one
 // commit, pushed as `plexus/<version>`, and a pull request against the branch.
 // A conflict is committed with its markers and reported, and the pull request
 // is opened all the same: that is where it gets resolved. Nothing here aborts
@@ -14,12 +13,11 @@
 // many repos. The maintainers' preview of an unreleased version (preview.ts of
 // @plexus-ms/dev) uses the same steps against the local template checkouts, and opens nothing.
 import { join, relative } from 'node:path';
-import { bumpWorkflowRefs, hasConflictMarkers, hasUnmergedEntries, syncMarker, WORKFLOW_REF } from './bookkeeping.ts';
+import { bumpWorkflowRefs, hasConflictMarkers, hasUnmergedEntries, WORKFLOW_REF } from './bookkeeping.ts';
 import { type Consumer, RENAMED_TEMPLATES, type Site, templateSource } from './consumers.ts';
 import type { Context } from './context.ts';
-import { ANSWERS_FILE, copierVia, parseAnswers } from './copier.ts';
+import { ANSWERS_FILE, copierVia } from './copier.ts';
 import { run, write } from './effects.ts';
-import { MARKER_FILE } from './marker.ts';
 
 export interface Summary {
   version: string;
@@ -225,8 +223,6 @@ async function updateSite(
     if (hasConflictMarkers(text)) conflict = true;
   }
 
-  await syncSiteMarker(ctx, site, target);
-
   if (conflict) {
     ctx.say('  ✗ CONFLICTS — committed with their <<<<<<< markers, to resolve in the pull request:');
     summary.conflicted.push(site.rel);
@@ -242,18 +238,6 @@ async function updateSite(
   // fail; staged, the markers are in the tree and the index is whole.
   if (take.previewFrom) await previewCommit(ctx, dir, `plx preview: ${site.rel} updated`);
   else await ctx.stage(run('git', ['add', '-A'], { cwd: dir }));
-}
-
-/** The marker's `plexus` follows the answers file's `_commit` after an update (bookkeeping.ts). */
-async function syncSiteMarker(ctx: Context, site: Site, target: string): Promise<void> {
-  const marker = await ctx.readFile(join(target, MARKER_FILE)).catch(() => undefined);
-  if (marker === undefined) return;
-  const { commit } = parseAnswers(await ctx.readFile(join(target, ANSWERS_FILE)));
-  if (!commit) return;
-  const synced = syncMarker(marker, commit);
-  if (synced === marker) return;
-  ctx.say(`  marker: plexus → ${commit} in ${site.rel}/${MARKER_FILE}`);
-  await ctx.stage(write(join(target, MARKER_FILE), synced));
 }
 
 /**
@@ -358,7 +342,7 @@ async function openPull(ctx: Context, consumer: Consumer, dir: string, take: Tak
   }
   const sites = consumer.sites.map((s) => s.rel);
   const body = [
-    `Plexus ${version} (§ 1.5 PLX): \`copier update\` at ${sites.join(', ')}, the marker, the lockfile where manifests moved, and the workflow refs.`,
+    `Plexus ${version} (§ 1.5 PLX): \`copier update\` at ${sites.join(', ')}, the lockfile where manifests moved, and the workflow refs.`,
     ...(conflicted.length > 0 ? [`Conflicts to resolve, committed with their markers: ${conflicted.join(', ')}.`] : []),
     ...(failed.length > 0 ? [`Failed, and left as it was: ${failed.join(', ')}.`] : []),
     ...(clean ? [CLEAN_BODY] : []),

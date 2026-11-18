@@ -46,7 +46,6 @@
 //   plx requirements --extract contracts/app.md
 import { join } from 'node:path';
 import { BASELINE_FILE, compareBaseline, parseBaseline, renderBaseline } from './baseline.ts';
-import { CATALOG_DIRS } from './catalog.ts';
 import type { Context } from './context.ts';
 import { type Plan, write } from './effects.ts';
 import {
@@ -211,10 +210,13 @@ export interface CompendiumCheck {
   approaches: number;
 }
 
+/** The directories of a compendium that hold module pages, the folder being the kind (§ 1.3 PLX). */
+const MODULE_DIRS = ['contracts', 'approaches'];
+
 /** Every module page of a compendium checkout: `<dir>/<file>`, sorted, index pages left out. */
 export async function modulePages(ctx: Context, compendium: string): Promise<string[]> {
   const pages: string[] = [];
-  for (const dir of Object.keys(CATALOG_DIRS)) {
+  for (const dir of MODULE_DIRS) {
     const entries = await ctx.readDir(join(compendium, dir));
     for (const e of entries.filter((e) => !e.directory && e.name.endsWith('.md') && e.name !== 'index.md').sort())
       pages.push(`${dir}/${e.name}`);

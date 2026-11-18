@@ -164,6 +164,8 @@ const commit = (repo: string, message: string) => {
   git(repo, 'commit', '--quiet', '-m', message);
 };
 const TOOLING_REF = 'plexus-ms/tooling/.github/workflows/';
+/** A tenant repo's marker: nothing to state, so an empty frontmatter (§ 1.4 PLX). */
+const MARKER = '---\n---\n\n- A tenant repo.\n';
 
 let WS = '';
 const FAKE_LOG = () => join(WS, 'fake.log');
@@ -276,7 +278,7 @@ function fixture(name: string): void {
   const tplat = join(WS, 'acme/platform');
   git(WS, 'init', '--quiet', tweb);
   git(tweb, 'checkout', '--quiet', '-b', 'develop');
-  put(join(tweb, 'PLEXUS.md'), '---\nplexus: 0.1.0\nmodules: [PLX-Repo, PLX-JS, PLX-Delivery, PLX-Updates]\n---\n');
+  put(join(tweb, 'PLEXUS.md'), MARKER.trimEnd());
   put(join(tweb, '.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-turbo\n');
   put(join(tweb, 'apps/site/.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-app-nextjs\n');
   put(
@@ -291,10 +293,7 @@ function fixture(name: string): void {
   withOrigin(tweb, 'acme-web');
 
   git(WS, 'init', '--quiet', tplat);
-  put(
-    join(tplat, 'PLEXUS.md'),
-    '---\nplexus: 0.1.0\nmodules: [PLX-Repo, PLX-Tenancy, PLX-Platform, PLX-Updates]\n---\n',
-  );
+  put(join(tplat, 'PLEXUS.md'), MARKER);
   put(join(tplat, '.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\n');
   put(join(tplat, '.github/workflows/apps.yml'), `jobs:\n  apps:\n    uses: ${TOOLING_REF}deploy.yml@0.1.0\n`);
   put(join(tplat, 'template-owned.txt'), 'generated\n');
@@ -481,7 +480,7 @@ test('dry run previews both phases and the propagation in scratch clones, and ch
     has(out, /\[dry-run\] \$ \(cd \S+\/acme\/web && mise exec -- pnpm install/),
     'preview announces the lockfile refresh in the clone',
   );
-  assert.ok(has(out, 'marker: plexus → next in acme/web/PLEXUS.md'), 'preview announces the marker sync');
+  assert.ok(!has(out, 'marker:'), 'the marker carries no version, so nothing syncs it');
   assert.ok(has(out, 'acme/platform: apps.yml workflow refs → @0.2.0'), 'preview lists the ref bumps');
   assert.ok(has(out, '(preview) acme/web: would commit, push plexus/0.2.0 and open a pull request against develop'));
   assert.ok(has(out, '(preview) acme/platform: would commit, push plexus/0.2.0 and open a pull request against main'));
@@ -637,8 +636,8 @@ test('propagate: every repo under the directory takes the version in a worktree 
     ['acme-platform', 'template-owned.txt'],
   ] as const)
     assert.match(onVersion(r, '0.2.0', f), /updated from 0\.2\.0/, `${r}:${f}`);
-  assert.match(onVersion('acme-web', '0.2.0', 'PLEXUS.md'), /^plexus: next$/m, 'marker follows the answers file');
-  assert.match(onVersion('acme-platform', '0.2.0', 'PLEXUS.md'), /^plexus: next$/m);
+  assert.equal(onVersion('acme-web', '0.2.0', 'PLEXUS.md'), MARKER.trimEnd(), 'the marker is not written');
+  assert.equal(onVersion('acme-platform', '0.2.0', 'PLEXUS.md'), MARKER.trimEnd());
   const ci = onVersion('acme-web', '0.2.0', '.github/workflows/ci.yml');
   assert.match(ci, /changes\.yml@0\.2\.0/);
   assert.match(ci, /pipeline\.yml@0\.2\.0/);
@@ -1140,7 +1139,7 @@ test('update: a repo takes the newest version itself, in a worktree, and leaves 
   );
   assert.match(onVersion('acme-web', '0.2.0', 'template-owned.txt'), /updated from 0\.2\.0/);
   assert.match(onVersion('acme-web', '0.2.0', 'apps/site/template-owned.txt'), /updated from 0\.2\.0/);
-  assert.match(onVersion('acme-web', '0.2.0', 'PLEXUS.md'), /^plexus: next$/m, 'marker synced');
+  assert.equal(onVersion('acme-web', '0.2.0', 'PLEXUS.md'), MARKER.trimEnd(), 'the marker is not written');
   assert.match(onVersion('acme-web', '0.2.0', '.github/workflows/ci.yml'), /pipeline\.yml@0\.2\.0/, 'refs bumped');
   assert.equal(git(remote('acme-web'), 'rev-list', '--count', 'develop..plexus/0.2.0'), '1', 'one commit');
   assert.equal(pull('acme-web', '0.2.0', '.base'), 'develop');
