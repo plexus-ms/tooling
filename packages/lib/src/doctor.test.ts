@@ -38,6 +38,7 @@ const repo = (over: Partial<RepoFacts> = {}): RepoFacts => ({
   marker: { declaration: { deviations: [], body: '' } },
   tasks: { names: ['dev', 'build', 'verify', 'lint', 'check', 'test', 'install'] },
   tracked: ['mise.toml', 'apps/a/docker/compose.yaml'],
+  apps: ['apps/a'],
   ...over,
 });
 
@@ -67,6 +68,7 @@ const app = (profile: string | undefined, over: Partial<AppFacts> = {}, deviatio
   kind: 'app',
   path: 'r/apps/a',
   repo: repo(),
+  dir: 'apps/a',
   thirdParty: false,
   marker: { declaration: { ...(profile ? { profile } : {}), deviations, body: reasoned(deviations) } },
   compose: profile === 'stateful' ? STATEFUL : STATELESS,
@@ -721,4 +723,23 @@ test('a task list without `source` fails with one clear message, not every task 
         "mise could not list the tasks: `mise tasks ls --json` gives no task's `source`, which tells the repo's own tasks apart",
     },
   ]);
+});
+
+test('PLX-App/NoCommittedValues: a tracked .env is one finding, on the app that holds it, else on the repo', () => {
+  const tracked = ['.env', 'apps/a/.env.secret', 'apps/b/docker/.env', 'apps/bb/.env.example', 'docs/.envrc'];
+  const source = repo({ tracked, apps: ['apps/a', 'apps/b'] });
+  const report = diagnose([
+    source,
+    app('stateless', { repo: source }),
+    app('stateless', { repo: source, path: 'r/apps/b', dir: 'apps/b' }),
+  ]);
+  assert.deepEqual(
+    report.units.map((u) => [u.path, u.findings.map((f) => `${f.requirement}: ${f.problem}`)]),
+    [
+      ['r', ['PLX-App/NoCommittedValues: the source repo tracks `.env`']],
+      ['r/apps/a', ['PLX-App/NoCommittedValues: the source repo tracks `apps/a/.env.secret`']],
+      ['r/apps/b', ['PLX-App/NoCommittedValues: the source repo tracks `apps/b/docker/.env`']],
+    ],
+  );
+  assert.deepEqual(findings(repo({ tracked: ['.env'], apps: [] })), [], 'a repo with no app is no source repo');
 });

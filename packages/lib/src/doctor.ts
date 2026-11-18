@@ -60,6 +60,8 @@ export interface RepoFacts {
   tasks: { names: string[] } | { problem: string };
   /** The files git tracks, relative to the repo; undefined outside a git checkout. */
   tracked?: string[];
+  /** Its apps' directories, relative to the repo (`apps/<name>`). */
+  apps: string[];
 }
 
 /** What doctor read of an app. */
@@ -68,6 +70,8 @@ export interface AppFacts {
   path: string;
   /** The app's source repo. */
   repo: RepoFacts;
+  /** The app's directory, relative to the repo (`apps/<name>`). */
+  dir: string;
   thirdParty: boolean;
   marker: MarkerRead;
   /** `docker/compose.yaml`; neither field set when there is none. */
@@ -156,9 +160,19 @@ function imageRef(compose: Compose): string[] {
   ];
 }
 
-function noCommittedValues(app: AppFacts): string[] {
-  return (app.repo.tracked ?? [])
-    .filter((f) => /(^|\/)\.env(\.secret)?$/.test(f))
+/**
+ * A tracked `.env` or `.env.secret` is reported once, on the unit that holds
+ * it: the app whose directory it is in, else the repo, when the repo is the
+ * source repo of any app.
+ */
+function noCommittedValues(unit: Facts): string[] {
+  const repo = unit.kind === 'app' ? unit.repo : unit;
+  if (repo.apps.length === 0) return [];
+  const within = (file: string, dir: string) => file.startsWith(`${dir}/`);
+  const held = (file: string) =>
+    unit.kind === 'app' ? within(file, unit.dir) : !repo.apps.some((dir) => within(file, dir));
+  return (repo.tracked ?? [])
+    .filter((f) => /(^|\/)\.env(\.secret)?$/.test(f) && held(f))
     .map((f) => `the source repo tracks \`${f}\``);
 }
 
@@ -267,6 +281,12 @@ interface RepoCheck {
   check: (repo: RepoFacts) => string[];
 }
 
+/** A check of whichever unit holds what it finds, a repo or an app. */
+interface UnitCheck {
+  binds: 'unit';
+  check: (unit: Facts) => string[];
+}
+
 interface AppCheck {
   binds: 'app';
   /** Only an app of this profile. */
@@ -277,7 +297,7 @@ interface AppCheck {
 }
 
 /** Every requirement doctor checks, by name: what the contract pages list, in their order. */
-export const CHECKS: Readonly<Record<string, RepoCheck | AppCheck>> = {
+export const CHECKS: Readonly<Record<string, RepoCheck | AppCheck | UnitCheck>> = {
   'PLX-Repo/Marker': { binds: 'repo', check: repoMarker },
   'PLX-Repo/Verbs': { binds: 'repo', check: verbs },
   'PLX-Repo/SubVerbs': { binds: 'repo', check: subVerbs },
@@ -286,7 +306,7 @@ export const CHECKS: Readonly<Record<string, RepoCheck | AppCheck>> = {
   'PLX-App/TenantLabel': { binds: 'app', check: onCompose(tenantLabel) },
   'PLX-App/EnvFileLoad': { binds: 'app', check: onAppService(envFileLoad) },
   'PLX-App/ImageRef': { binds: 'app', built: true, check: onAppService(imageRef) },
-  'PLX-App/NoCommittedValues': { binds: 'app', check: noCommittedValues },
+  'PLX-App/NoCommittedValues': { binds: 'unit', check: noCommittedValues },
   'PLX-App/SinglePort': { binds: 'app', check: onAppService(singlePort) },
   'PLX-App/LoopbackPort': { binds: 'app', check: onAppService(loopbackPort) },
   'PLX-App/Healthcheck': { binds: 'app', check: onAppService(healthcheck) },
@@ -367,7 +387,8 @@ function diagnoseUnit(unit: Facts, known: Set<string>): UnitReport {
 }
 
 /** A check's problems with a unit, or none where it does not bind the unit: another kind, profile, or a third-party app. */
-function run(c: RepoCheck | AppCheck, unit: Facts, profile: Profile | undefined): string[] {
+function run(c: RepoCheck | AppCheck | UnitCheck, unit: Facts, profile: Profile | undefined): string[] {
+  if (c.binds === 'unit') return c.check(unit);
   if (c.binds === 'repo') return unit.kind === 'app' ? [] : c.check(unit);
   if (unit.kind !== 'app') return [];
   if (c.profile && c.profile !== profile) return [];
@@ -441,8 +462,10 @@ async function appsOf(ctx: Context, repo: Directory): Promise<string[]> {
 /** A repo and its apps, with paths relative to `base`. */
 async function readUnits(ctx: Context, dir: Directory, apps: string[], base: string): Promise<Facts[]> {
   const repo = await readRepo(ctx, dir, relative(base, dir.path) || '.', isOperations(dir) ? 'operations' : 'repo');
+  repo.apps = apps.map((path) => relative(dir.path, path));
   const facts: Facts[] = [repo];
-  for (const path of apps) facts.push(await readApp(ctx, await directoryAt(ctx, path), relative(base, path), repo));
+  for (const path of apps)
+    facts.push(await readApp(ctx, await directoryAt(ctx, path), relative(base, path), relative(dir.path, path), repo));
   return facts;
 }
 
@@ -461,7 +484,7 @@ async function readRepo(ctx: Context, dir: Directory, path: string, kind: RepoFa
       if (error instanceof ExecError) return undefined;
       throw error;
     });
-  return { kind, path, ...(marker ? { marker } : {}), tasks: await rootTasks(ctx, dir.path), tracked };
+  return { kind, path, ...(marker ? { marker } : {}), tasks: await rootTasks(ctx, dir.path), tracked, apps: [] };
 }
 
 /**
@@ -513,11 +536,12 @@ async function rootTasks(ctx: Context, repo: string): Promise<RepoFacts['tasks']
   return { names };
 }
 
-async function readApp(ctx: Context, dir: Directory, path: string, repo: RepoFacts): Promise<AppFacts> {
+async function readApp(ctx: Context, dir: Directory, path: string, inRepo: string, repo: RepoFacts): Promise<AppFacts> {
   const app: AppFacts = {
     kind: 'app',
     path,
     repo,
+    dir: inRepo,
     thirdParty: repo.kind === 'operations',
     marker: markerOf(dir) ?? {},
     dockerfile: (await ctx.readDir(join(dir.path, 'docker')).catch(() => [])).some(
