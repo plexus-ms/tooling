@@ -305,6 +305,8 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
     D,
     dc,
     dci: `${dc} --project-directory . -f ${INCOMING}/compose.yaml`,
+    // One `web` container is assumed, hence `head -1`: the app contract binds
+    // one fixed loopback port (§ 4 PLX-App), which a second replica could not.
     liveImage: `${dc} ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{.Config.Image}}' 2>/dev/null || true`,
     image,
     result: { host, appDir, compose, image, healthy: false, rolledBack: false },
@@ -421,6 +423,8 @@ async function swapAndUp(s: Session): Promise<boolean | undefined> {
  * (undefined under --dry-run, where `show` prints the line).
  */
 function awaitHealthy(s: Session, attempts: number, show = false): Promise<boolean | undefined> {
+  // One `web` container is assumed, hence `head -1`: the app contract binds
+  // one fixed loopback port (§ 4 PLX-App), which a second replica could not.
   const status = `docker compose ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' 2>/dev/null`;
   return s.remote.test(
     `cd ${s.D} && for _ in $(seq 1 ${attempts}); do [ "$(${status})" = healthy ] && exit 0; sleep 2; done; exit 1`,
