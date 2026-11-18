@@ -14,10 +14,14 @@
 // under `KEEP=1` it leaves the rendered repos in place and prints `kept: <dir>`,
 // either one repo (the app template's, with the apps inside) or a directory
 // of repos, one per shape. The test runs with TMPDIR pointing into a scratch
-// directory this run owns, so that whatever it leaves goes with that directory;
-// a script whose `mktemp -d` ignores TMPDIR (macOS's does, unless given a
-// template under it) leaves them in the system's temporary directory, where
-// the directory `mktemp` made is removed once the doctor has read it. The app
+// directory this run makes and owns, and every template makes its own under
+// TMPDIR, so whatever it leaves goes with that directory. Nothing outside
+// the scratch is examined or deleted: a `kept:` path elsewhere, or one that
+// is not an existing directory, leaves the template unexamined and named, and
+// whatever is there is left alone. The scratch goes on every way out: a
+// normal end, an error, and SIGINT or SIGTERM. The test may run for
+// VERIFY_LIMIT; a test still running then is killed with everything it
+// started, and the template refused with the last lines of its log. The app
 // template renders around the Turborepo template: `TURBO_TEMPLATE` names the
 // checkout being cut, at HEAD, so the two are tested together.
 //
@@ -26,8 +30,9 @@
 // is meant to show everything that would stop the real one. It needs what the
 // templates' tests need, the network among it (a newborn installs its
 // packages); offline, ship has already stopped at its first fetch from origin.
-import { tmpdir } from 'node:os';
-import { basename, isAbsolute, join, relative, sep } from 'node:path';
+import { rmSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import {
   COMPENDIUM,
   type Context,
@@ -36,10 +41,12 @@ import {
   examine,
   type Finding,
   knownRequirements,
+  onInterrupt,
   REQUIREMENT_NAME,
   readCitable,
   run,
   TEMPLATES,
+  TimeoutError,
 } from '@plexus-ms/lib';
 import type { Versioned, VersionedRepo } from './version.ts';
 
@@ -50,6 +57,14 @@ const APP = 'template-app-nextjs';
 
 /** How many lines of a failing test's output the refusal quotes. */
 const QUOTED = 12;
+
+/**
+ * How long a template's newborn test may run, in milliseconds. Generous, well
+ * beyond what a working test takes: one still running then has hung (a
+ * prompt nobody answers, a server that never exits), and ship would hang
+ * silently with it.
+ */
+export const VERIFY_LIMIT = 10 * 60 * 1000;
 
 /** What the newborn test's output says: where it stopped, why, and where it left the newborns. */
 export interface VerifyLog {
@@ -63,6 +78,8 @@ export interface VerifyLog {
    * failed`; the last lines of the output when none does.
    */
   cause: string[];
+  /** The time limit it ran past, in milliseconds, when it was killed for it; `cause` is then the log's last lines. */
+  killedAfter?: number;
 }
 
 const ERROR = /\berror\b|\bfail(ed|s)?\b|✗|couldn't|cannot|refus/i;
@@ -116,14 +133,19 @@ const failed = (o: TemplateOutcome): boolean => o.verify !== undefined || o.doct
  * written, naming the template, the shape and what fails. A template already
  * tagged with the version is no longer being cut (a re-run) and is skipped.
  */
-export async function preflightNewborns(ctx: Context, versioned: Versioned, next: string): Promise<void> {
+export async function preflightNewborns(
+  ctx: Context,
+  versioned: Versioned,
+  next: string,
+  limit = VERIFY_LIMIT,
+): Promise<void> {
   const templates = versioned.repos.filter((r) => TEMPLATES.includes(r.name) && r.latest !== next);
   if (templates.length === 0) return;
   const known = await requirementsBeingCut(ctx, versioned);
   const turbo = versioned.repos.find((r) => r.name === TURBO);
   ctx.say(`→ the templates as newborns: ${templates.map((t) => t.name).join(', ')}`);
   const outcomes: TemplateOutcome[] = [];
-  for (const template of templates) outcomes.push(await newborns(ctx, template, turbo, known));
+  for (const template of templates) outcomes.push(await newborns(ctx, template, turbo, known, limit));
   const failing = outcomes.filter(failed);
   if (failing.length === 0) return;
   throw new Error(
@@ -148,6 +170,7 @@ async function newborns(
   template: VersionedRepo,
   turbo: VersionedRepo | undefined,
   known: Set<string>,
+  limit: number,
 ): Promise<TemplateOutcome> {
   const env: NodeJS.ProcessEnv = { KEEP: '1' };
   if (template.name === APP && turbo) Object.assign(env, { TURBO_TEMPLATE: turbo.path, TURBO_REF: 'HEAD' });
@@ -155,44 +178,89 @@ async function newborns(
     .map(([k, v]) => `${k}=${v}`)
     .join(' ')} mise run verify)`;
   const outcome: TemplateOutcome = { template: template.name, examined: [], doctor: [], reproduce };
-  const scratch = (await ctx.stage(run('mktemp', ['-d'])))?.trim() ?? '';
+  const scratch = await makeScratch(ctx);
+  const release = onInterrupt(() => rmSync(scratch, { recursive: true, force: true }));
   try {
     const log = join(scratch, 'verify.log');
     ctx.say(
       `  ${template.name}: mise run verify${env.TURBO_TEMPLATE ? ` (around ${TURBO} at ${env.TURBO_TEMPLATE})` : ''}`,
     );
+    ctx.say(`    its output, while it runs: ${log}`);
     // The output goes to a file whatever the verbosity: it is read for where
     // the newborns were left, and quoted when the test fails.
-    const passed = await ctx
-      .stage(
+    let passed = true;
+    let killed = false;
+    try {
+      await ctx.stage(
         run('sh', ['-c', 'mise run verify >"$0" 2>&1', log], {
           cwd: template.path,
           env: { ...env, TMPDIR: scratch },
+          timeout: limit,
         }),
-      )
-      .then(() => true)
-      .catch((error) => {
-        if (error instanceof ExecError) return false;
-        throw error;
-      });
-    const read = parseVerifyLog(await ctx.readFile(log).catch(() => ''));
-    if (!passed) outcome.verify = read;
-    if (!read.kept) {
+      );
+    } catch (error) {
+      if (!(error instanceof ExecError)) throw error;
+      passed = false;
+      killed = error instanceof TimeoutError;
+    }
+    const text = await ctx.readFile(log).catch(() => '');
+    const read = parseVerifyLog(text);
+    if (killed)
+      outcome.verify = { ...read, cause: text.split('\n').filter(Boolean).slice(-QUOTED), killedAfter: limit };
+    else if (!passed) outcome.verify = read;
+    const kept = read.kept === undefined ? undefined : resolve(template.path, read.kept);
+    const unusable = kept === undefined ? undefined : await outsideOrMissing(ctx, kept, scratch);
+    if (kept === undefined) {
       outcome.unexamined = passed
         ? 'the newborn test passed but named no directory it left them in (`kept: <dir>` under KEEP=1)'
         : 'the newborn test stopped before it named where it left them';
+    } else if (unusable) {
+      outcome.unexamined = unusable;
     } else {
       try {
-        await examineNewborns(ctx, read.kept, known, outcome);
-      } finally {
-        await removeOutside(ctx, read.kept, scratch);
+        await examineNewborns(ctx, kept, known, outcome);
+      } catch (error) {
+        outcome.unexamined = `plx doctor could not examine ${kept}: ${error instanceof Error ? error.message : String(error)}`;
       }
     }
     if (!failed(outcome)) ctx.say(`  ✓ ${template.name}: ${outcome.examined.join(', ')}`);
     return outcome;
   } finally {
-    if (scratch) await ctx.stage(run('rm', ['-rf', scratch]));
+    await ctx.stage(run('rm', ['-rf', scratch]));
+    release();
   }
+}
+
+/** A scratch directory of this run's own; refuses to go on without one, since its path is where the test writes. */
+async function makeScratch(ctx: Context): Promise<string> {
+  const made = (await ctx.stage(run('mktemp', ['-d'])))?.trim() ?? '';
+  const exists =
+    isAbsolute(made) &&
+    (await ctx.readDir(made).then(
+      () => true,
+      () => false,
+    ));
+  if (!exists)
+    throw new Error(
+      `mktemp -d gave ${made ? `\`${made}\`, not an existing directory` : 'no path'}; the newborn test is not run without a scratch directory of its own`,
+    );
+  return made;
+}
+
+/**
+ * Why the newborns cannot be examined where the test said it left them, if
+ * they cannot: only an existing directory inside this run's scratch is read.
+ * Whatever is elsewhere was not made by this run, and is left alone.
+ */
+async function outsideOrMissing(ctx: Context, kept: string, scratch: string): Promise<string | undefined> {
+  const real = async (path: string) => realpath(path).catch(() => path);
+  if (!isWithin(kept, scratch) && !isWithin(await real(kept), await real(scratch)))
+    return `the newborn test left them outside its scratch directory, in ${kept}, which is left alone`;
+  const readable = await ctx.readDir(kept).then(
+    () => true,
+    () => false,
+  );
+  return readable ? undefined : `the newborn test named ${kept}, which is not a directory that can be read`;
 }
 
 /** The doctor over what the test left: one repo with its apps, or a directory of repos, one per shape. */
@@ -211,22 +279,6 @@ async function examineNewborns(ctx: Context, kept: string, known: Set<string>, o
   }
 }
 
-/**
- * Newborns left outside the scratch directory, by a script whose `mktemp -d`
- * ignored TMPDIR: the directory it made in the system's temporary directory
- * goes, and anything elsewhere is left alone and named.
- */
-async function removeOutside(ctx: Context, kept: string, scratch: string): Promise<void> {
-  if (scratch && isWithin(kept, scratch)) return;
-  const temp = tmpdir();
-  const made = relative(temp, kept).split(sep)[0];
-  if (!isWithin(kept, temp) || !made) {
-    ctx.say(`  • the newborns are left in place: ${kept}`);
-    return;
-  }
-  await ctx.stage(run('rm', ['-rf', join(temp, made)]));
-}
-
 const isWithin = (path: string, dir: string): boolean => {
   const rel = relative(dir, path);
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
@@ -236,7 +288,11 @@ function renderOutcome(o: TemplateOutcome): string[] {
   const lines = [`  ${o.template}:`];
   if (o.verify) {
     const at = o.verify.step ? ` at ${o.verify.step.shape}: ${o.verify.step.what}` : '';
-    lines.push(`    ✗ its newborn test fails${at}`, ...o.verify.cause.map((l) => `      │ ${l}`));
+    const what =
+      o.verify.killedAfter === undefined
+        ? `fails${at}`
+        : `did not finish within ${minutes(o.verify.killedAfter)} and was killed${at}; the last lines of its output:`;
+    lines.push(`    ✗ its newborn test ${what}`, ...o.verify.cause.map((l) => `      │ ${l}`));
   }
   for (const n of o.doctor) {
     lines.push(`    ✗ newborn ${n.newborn} fails plx doctor: ${count(n.findings.length, 'finding')}`);
@@ -250,3 +306,6 @@ function renderOutcome(o: TemplateOutcome): string[] {
 }
 
 const count = (n: number, what: string): string => `${n} ${what}${n === 1 ? '' : 's'}`;
+
+const minutes = (ms: number): string =>
+  ms >= 60_000 && ms % 60_000 === 0 ? count(ms / 60_000, 'minute') : `${ms / 1000} seconds`;

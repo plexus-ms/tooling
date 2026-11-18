@@ -116,6 +116,8 @@ export interface ShipOptions {
   today?: string;
   /** The publish wait's pacing; the defaults suit a real registry, tests shorten them. */
   wait?: Partial<PublishWait>;
+  /** How long each template's newborn test may run, in milliseconds; default VERIFY_LIMIT, tests shorten it. */
+  newbornLimit?: number;
 }
 
 /** The version cut, and under a dry run what the preview found in the consumers; a real run's lists are empty. */
@@ -134,7 +136,7 @@ export async function ship(ctx: Context, options: ShipOptions): Promise<ShipResu
   await preflightIndex(ctx, versioned, next);
   const today = options.today ?? todayOf();
   await preflightAfterTag(ctx, versioned, next, today);
-  await preflightNewborns(ctx, versioned, next);
+  await preflightNewborns(ctx, versioned, next, options.newbornLimit);
   await release(ctx, versioned, next, today, { ...DEFAULT_WAIT, ...options.wait });
   if (ctx.dryRun) return { ...(await previewConsumers(ctx, options.workspace, next)), released: true };
   ctx.say(`• Plexus ${next} is cut; every repo takes it itself, by its step and a schedule (plx update)`);

@@ -104,6 +104,11 @@ sed -i.bak 's/^_commit: .*/_commit: next/' .copier-answers.yml && rm -f .copier-
 // mise.toml. Knobs:
 //   FAKE_NEWBORN_CHECK_FAIL=<template>   its newborn's check fails, in shape two
 //   FAKE_NEWBORN_DOCTOR_FAIL=<template>  its newborn one has no `verify` task
+//   FAKE_NEWBORN_KEPT=<template>=<path>  it says it kept them at <path> instead,
+//                                        a literal $TMPDIR in it expanded
+//   FAKE_NEWBORN_HANG=<template>         it hangs in shape one's check, in a
+//                                        background sleep whose pid goes to
+//                                        FAKE_NEWBORN_HANG_PID
 // Anything else it only logs.
 script(
   'mise',
@@ -113,7 +118,9 @@ if [ "$1 $2" = "run verify" ]; then
   t="$(basename "$PWD")"
   echo "verify[$t] KEEP=\${KEEP:-} TURBO_TEMPLATE=\${TURBO_TEMPLATE:-} TURBO_REF=\${TURBO_REF:-} TMPDIR=\${TMPDIR:-}" >> "$FAKE_LOG"
   tmp="$(mktemp -d "\${TMPDIR:-/tmp}/newborn.XXXXXX")"
-  [ -z "\${KEEP:-}" ] || trap 'echo "kept: $tmp"' EXIT
+  kept="$tmp"
+  case "\${FAKE_NEWBORN_KEPT:-}" in "$t="*) kept="\${FAKE_NEWBORN_KEPT#*=}"; kept="\${kept/'$TMPDIR'/$TMPDIR}" ;; esac
+  [ -z "\${KEEP:-}" ] || trap 'echo "kept: $kept"' EXIT
   for shape in one two; do
     echo "→ $shape: render"
     git init --quiet "$tmp/$shape"
@@ -122,6 +129,9 @@ if [ "$1 $2" = "run verify" ]; then
     [ "\${FAKE_NEWBORN_DOCTOR_FAIL:-}" != "$t" ] || [ "$shape" != one ] || tasks="dev build lint check test"
     echo "$tasks" > "$tmp/$shape/mise.toml"
     echo "→ $shape: check"
+    if [ "\${FAKE_NEWBORN_HANG:-}" = "$t" ]; then
+      echo "waiting for a server that never answers"; sleep 60 & echo $! > "$FAKE_NEWBORN_HANG_PID"; wait
+    fi
     if [ "\${FAKE_NEWBORN_CHECK_FAIL:-}" = "$t" ] && [ "$shape" = two ]; then
       echo "Error: the newborn's check fails on purpose" >&2; echo "[check] ERROR task failed" >&2; exit 1
     fi
@@ -991,6 +1001,109 @@ test('a newborn that fails a doctor check stops the version and names the requir
   assert.ok(!has(error ?? '', 'its newborn test fails'), 'the test itself passed');
   assert.ok(noneTagged('0.2.0'));
   assert.equal(git(up('tooling'), 'log', '-1', '--format=%s'), 'initial', 'no bookkeeping');
+  newbornsRemoved();
+});
+
+test('under -vv the newborn tests get a scratch directory, and write nothing into a template checkout', async () => {
+  fixture('newborn-debug');
+  const { error, out } = await run({ dryRun: true, yes: true, verbose: 2 });
+  assert.equal(error, undefined, out);
+  assert.equal(verifies().length, 3);
+  for (const v of verifies()) assert.match(v, /TMPDIR=\/\S+$/, `${v}: an absolute scratch path, not ''`);
+  for (const t of ['template-repo-turbo', 'template-app-nextjs', 'template-repo-operations'])
+    assert.ok(!existsSync(join(up(t), 'verify.log')), `no log written into ${t}`);
+  newbornsRemoved();
+});
+
+test("a `kept:` path outside the test's scratch is named, examined by nothing, and left alone", async () => {
+  fixture('newborn-kept-outside');
+  // In the system's temporary directory, spelled as it names itself, as anything else there would be.
+  const elsewhere = mkdtempSync(join(tmpdir(), 'not-made-by-this-run-'));
+  put(join(elsewhere, 'precious.txt'), 'keep me\n');
+  process.env.FAKE_NEWBORN_KEPT = `template-repo-operations=${elsewhere}`;
+  const { error } = await run({ yes: true });
+  delete process.env.FAKE_NEWBORN_KEPT;
+  assert.ok(existsSync(join(elsewhere, 'precious.txt')), 'nothing outside the scratch is deleted');
+  assert.ok(existsSync(WS), 'nor the directory around it');
+  assert.ok(
+    has(
+      error ?? '',
+      `    ✗ plx doctor examined no newborn: the newborn test left them outside its scratch directory, in ${elsewhere}, which is left alone`,
+    ),
+    error,
+  );
+  assert.ok(noneTagged('0.2.0'));
+  newbornsRemoved();
+  rmSync(elsewhere, { recursive: true, force: true });
+});
+
+test("a `kept:` path that is not there is resolved in the template's checkout and named; the other templates are still examined", async () => {
+  fixture('newborn-kept-missing');
+  process.env.FAKE_NEWBORN_KEPT = 'template-repo-turbo=gone';
+  const { error, out } = await run({ yes: true });
+  delete process.env.FAKE_NEWBORN_KEPT;
+  assert.match(error ?? '', /^1 template fails as a newborn repo:$/m);
+  // Relative, it is read from the template's checkout, which is not the scratch.
+  assert.ok(
+    has(
+      error ?? '',
+      `    ✗ plx doctor examined no newborn: the newborn test left them outside its scratch directory, in ${join(up('template-repo-turbo'), 'gone')}, which is left alone`,
+    ),
+    error,
+  );
+  assert.ok(!has(error ?? '', 'ENOENT'), error);
+  assert.ok(has(out, '✓ template-app-nextjs: one, two') && has(out, '✓ template-repo-operations: one, two'), out);
+  newbornsRemoved();
+});
+
+test('a `kept:` path inside the scratch that is no directory is named; the template is not examined', async () => {
+  fixture('newborn-kept-file');
+  process.env.FAKE_NEWBORN_KEPT = 'template-repo-operations=$TMPDIR/verify.log';
+  const { error } = await run({ yes: true });
+  delete process.env.FAKE_NEWBORN_KEPT;
+  assert.match(
+    error ?? '',
+    /✗ plx doctor examined no newborn: the newborn test named \/\S+\/verify\.log, which is not a directory that can be read/,
+  );
+  newbornsRemoved();
+});
+
+test('a newborn test that hangs is killed after the time limit, with all it started, and refused with its last lines', async () => {
+  fixture('newborn-hang');
+  const pidFile = join(WS, 'hang.pid');
+  process.env.FAKE_NEWBORN_HANG = 'template-repo-operations';
+  process.env.FAKE_NEWBORN_HANG_PID = pidFile;
+  const started = Date.now();
+  const { error, out } = await run({ yes: true }, { newbornLimit: 1500 });
+  delete process.env.FAKE_NEWBORN_HANG;
+  delete process.env.FAKE_NEWBORN_HANG_PID;
+  assert.ok(Date.now() - started < 30_000, 'ship did not wait for the hung test');
+  assert.match(out, /^ {4}its output, while it runs: \/\S+\/verify\.log$/m, 'where the log is, while it runs');
+  assert.ok(
+    has(
+      error ?? '',
+      [
+        '  template-repo-operations:',
+        '    ✗ its newborn test did not finish within 1.5 seconds and was killed at one: check; the last lines of its output:',
+        '      │ → one: render',
+        '      │ → one: check',
+        '      │ waiting for a server that never answers',
+      ].join('\n'),
+    ),
+    error,
+  );
+  const sleeper = Number(read(pidFile));
+  let alive = true;
+  for (let i = 0; i < 40 && alive; i++) {
+    try {
+      process.kill(sleeper, 0);
+      await new Promise((r) => setTimeout(r, 50));
+    } catch {
+      alive = false;
+    }
+  }
+  assert.ok(!alive, 'what the test started is killed with it');
+  assert.ok(noneTagged('0.2.0'));
   newbornsRemoved();
 });
 
