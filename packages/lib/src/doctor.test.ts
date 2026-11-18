@@ -6,7 +6,9 @@ import { type Compose, type Mapping, parseCompose } from './compose.ts';
 import { Context } from './context.ts';
 import { type AppFacts, CHECKS, diagnose, examine, type Facts, type RepoFacts } from './doctor.ts';
 import { REQUIREMENT_NAME } from './lints.ts';
-import { type FakeExec, fakeIo, type Tree } from './testing/fakeIo.ts';
+import { unitsOf } from './model.ts';
+import { overview } from './overview.ts';
+import { type FakeExec, fakeIo, link, type Tree, UNREADABLE } from './testing/fakeIo.ts';
 
 // --- the list of checks is the compendium's ------------------------------------
 
@@ -521,12 +523,13 @@ async function doctorOver(
   root: string,
   webTasks: string[] = VERBS,
   tracked: Record<string, string[]> = {},
+  around: Tree = {},
 ) {
   const files: Record<string, string[]> = { '/ws/web': ['PLEXUS.md', 'apps/site/docker/compose.yaml'], ...tracked };
   const git = (cwd: string, args: string[]) =>
     args[0] === 'ls-files' && files[cwd] ? files[cwd].map((f) => `${f}\0`).join('') : undefined;
   const mise = miseTasks({ '/ws/web': webTasks, '/ws/ops': ['dev', 'build', 'verify', 'check', 'test'] });
-  const ctx = new Context({}, fakeIo({ ws: tree }, git, { mise: (cwd) => mise(cwd) }));
+  const ctx = new Context({}, fakeIo({ ...around, ws: tree }, git, { mise: (cwd) => mise(cwd) }));
   const { facts, ...examined } = await examine(ctx, root);
   return { ...examined, ...diagnose(facts) };
 }
@@ -653,6 +656,90 @@ test('a workspace scan names the git roots it did not check because they are not
   assert.deepEqual(report.skipped, ['compendium', 'empty']);
   assert.equal(report.inRepo, false);
   assert.ok(!report.units.some((u) => u.path === 'loose'), 'a marker outside any git root is no unit');
+});
+
+test('(e) git roots beneath make a workspace, whatever lies above; with none beneath, the nearest git root above is the repo', async () => {
+  // A git repo at the top, as a home directory under version control (dotfiles) is.
+  const around: Tree = { '.git': {} };
+  const tree = ws();
+  tree.notes = { 'todo.md': '- write it down\n' };
+  const workspace = await doctorOver(tree, '/ws', VERBS, {}, around);
+  assert.equal(workspace.inRepo, false);
+  assert.equal(workspace.root, '/ws');
+  assert.deepEqual(
+    workspace.units.map((u) => u.path),
+    ['ops', 'ops/apps/id', 'web', 'web/apps/site'],
+  );
+  const inside = await doctorOver(tree, '/ws/notes', VERBS, {}, around);
+  assert.equal(inside.inRepo, true, 'nothing beneath: the directory is part of the repo above');
+  assert.equal(inside.root, '/');
+});
+
+/** The apps overview and doctor each find, as paths under the workspace. */
+async function appsBoth(tree: Tree): Promise<{ overview: string[]; doctor: string[] }> {
+  const ctx = new Context(
+    {},
+    fakeIo({ ws: tree }, () => '', { mise: () => '[]' }),
+  );
+  const units = unitsOf(await overview(ctx, '/ws', { git: false }));
+  return {
+    overview: units.filter((u) => u.kind === 'app').map((u) => u.dir.path.replace('/ws/', '')),
+    doctor: (await examine(ctx, '/ws')).facts.filter((f) => f.kind === 'app').map((f) => f.path),
+  };
+}
+
+test('(f) overview and doctor find the same apps: one named like a pruned directory, one without a marker or other facet', async () => {
+  const tree = ws();
+  const apps = webOf(tree).apps as Tree;
+  apps.build = { 'PLEXUS.md': '---\nprofile: stateless\n---\n' };
+  apps.plain = { 'README.md': 'an app without a marker\n' };
+  const found = await appsBoth(tree);
+  assert.deepEqual(found.doctor, ['ops/apps/id', 'web/apps/build', 'web/apps/plain', 'web/apps/site']);
+  assert.deepEqual(found.overview, found.doctor);
+});
+
+test('(g) a directory that cannot be read is named with why, in both verbs, and does not abort either', async () => {
+  const tree = ws();
+  tree.locked = UNREADABLE;
+  (webOf(tree).apps as Tree).secret = UNREADABLE;
+  const workspace = await doctorOver(tree, '/ws');
+  assert.deepEqual(workspace.unreadable, [
+    { path: 'locked', why: 'EACCES' },
+    { path: 'web/apps/secret', why: 'EACCES' },
+  ]);
+  assert.deepEqual(
+    workspace.units.map((u) => u.path),
+    ['ops', 'ops/apps/id', 'web', 'web/apps/site'],
+  );
+  const repo = await doctorOver(tree, '/ws/web');
+  assert.deepEqual(repo.unreadable, [{ path: 'apps/secret', why: 'EACCES' }]);
+  const ctx = new Context({}, fakeIo({ ws: tree }));
+  const map = await overview(ctx, '/ws', { git: false });
+  assert.equal(map.children.find((c) => c.name === 'locked')?.unreadable, 'EACCES');
+  const unreadableRoot = await overview(new Context({}, fakeIo({ ws: UNREADABLE })), '/ws', { git: false });
+  assert.equal(unreadableRoot.unreadable, 'EACCES');
+});
+
+test('(h) a symlinked directory in apps/ and a symlinked repo are not followed, and are named as not checked', async () => {
+  const around: Tree = {
+    elsewhere: {
+      repo: { '.git': {}, 'PLEXUS.md': MARKER },
+      app: { 'PLEXUS.md': '---\nprofile: stateless\n---\n' },
+      plain: { 'notes.md': 'x' },
+      'file.txt': 'x',
+    },
+  };
+  const tree = ws();
+  tree.mirror = link('/elsewhere/repo');
+  tree.docs = link('/elsewhere/plain');
+  const apps = webOf(tree).apps as Tree;
+  apps.shared = link('/elsewhere/app');
+  apps['notes.txt'] = link('/elsewhere/file.txt');
+  const workspace = await doctorOver(tree, '/ws', VERBS, {}, around);
+  assert.deepEqual(workspace.links, ['mirror', 'web/apps/shared'], 'a link to a plain directory or a file is no unit');
+  assert.ok(!workspace.units.some((u) => u.path.startsWith('mirror') || u.path === 'web/apps/shared'));
+  const repo = await doctorOver(tree, '/ws/web', VERBS, {}, around);
+  assert.deepEqual(repo.links, ['apps/shared']);
 });
 
 test('a marker that still carries plexus or modules gets a hint, not a finding', () => {

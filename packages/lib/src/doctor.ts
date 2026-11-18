@@ -37,8 +37,8 @@ import type { Context } from './context.ts';
 import { ExecError } from './io.ts';
 import { REQUIREMENT_NAME } from './lints.ts';
 import { type Declaration, MARKER_FILE, reasonGiven } from './marker.ts';
-import { APPS_DIR, type Directory, hasMarker, holdsApp, isOperations, type Kind } from './model.ts';
-import { directoryAt, overview } from './overview.ts';
+import { type Directory, hasMarker, isOperations, type Kind } from './model.ts';
+import { appsOf, directoryAt, overview } from './overview.ts';
 import { bundledIndex } from './standardIndex.ts';
 
 export type Profile = 'stateless' | 'stateful';
@@ -408,36 +408,61 @@ export interface Examination {
   facts: Facts[];
   /** In a workspace, the git roots that are not Plexus repos and were not checked, relative to `root`. */
   skipped: string[];
+  /** Symbolic links not followed, so not checked: a directory in a repo's `apps/`, or a repo in a workspace; relative to `root`. */
+  links: string[];
+  /** Directories that could not be read, so nothing beneath them was checked, with why; relative to `root`. */
+  unreadable: { path: string; why: string }[];
 }
 
 /**
  * Read the units (§ 1.2 PLX) under `dir`. A repo is a git root; its apps are
- * the directories directly in its `apps/` that hold anything (model.ts,
- * `holdsApp`), with a marker or without. In a repo, or anywhere inside one,
- * that repo is read, from its root, and no git root nested in it: that is
- * another repo, and none of its files are this repo's. Outside any repo,
- * `dir` is a workspace: every git root beneath it is read that is a Plexus
- * repo, which carries a marker or has an app, and the others are named.
+ * what `appsOf` finds in its `apps/` (overview.ts; overview reads them by it
+ * too), with a marker or without. `dir` is a workspace when git roots lie
+ * beneath it, whatever lies above: every git root beneath it is read that is
+ * a Plexus repo, which carries a marker or has an app, and the others are
+ * named. Otherwise `dir` is in a repo, the nearest git root at or above it,
+ * and that repo is read from its root, with no git root nested in it: that
+ * is another repo, and none of its files are this repo's. A directory that
+ * cannot be read, and a symbolic link to an app or a repo, are named, never
+ * fatal.
  */
 export async function examine(ctx: Context, dir: string): Promise<Examination> {
-  const top = await enclosingGitRoot(ctx, dir);
+  const given = resolve(dir);
+  const own = await ctx.readDir(given).catch(() => []);
+  let top = own.some((e) => e.name === '.git') ? given : undefined;
+  const tree = top ? undefined : await overview(ctx, given, { git: false });
+  if (tree && !holdsGitRoot(tree)) top = await enclosingGitRoot(ctx, dirname(given));
   if (top) {
     const repo = await directoryAt(ctx, top);
-    return { root: top, inRepo: true, facts: await readUnits(ctx, repo, await appsOf(ctx, repo), top), skipped: [] };
+    const found = await appsOf(ctx, top);
+    const rel = (path: string) => relative(top, path);
+    return {
+      root: top,
+      inRepo: true,
+      facts: await readUnits(ctx, repo, found.apps, top),
+      skipped: [],
+      links: found.links.map(rel),
+      unreadable: found.unreadable.map(({ path, why }) => ({ path: rel(path), why })),
+    };
   }
-  const facts: Facts[] = [];
-  const skipped: string[] = [];
+  const examination: Examination = { root: given, inRepo: false, facts: [], skipped: [], links: [], unreadable: [] };
+  const rel = (path: string) => relative(given, path) || '.';
   const visit = async (d: Directory) => {
+    if (d.unreadable) examination.unreadable.push({ path: rel(d.path), why: d.unreadable });
+    if (d.symlink) examination.links.push(rel(d.path));
     if (d.gitRoot) {
-      const apps = await appsOf(ctx, d);
-      if (hasMarker(d) || apps.length > 0) facts.push(...(await readUnits(ctx, d, apps, dir)));
-      else skipped.push(relative(dir, d.path) || '.');
+      const apps = d.apps ?? [];
+      if (hasMarker(d) || apps.length > 0) examination.facts.push(...(await readUnits(ctx, d, apps, given)));
+      else examination.skipped.push(rel(d.path));
     }
     for (const child of d.children) await visit(child);
   };
-  await visit(await overview(ctx, dir, { git: false }));
-  return { root: dir, inRepo: false, facts, skipped };
+  if (tree) await visit(tree);
+  return examination;
 }
+
+/** Whether a git root lies anywhere in the walked tree, the directory itself included. */
+const holdsGitRoot = (d: Directory): boolean => Boolean(d.gitRoot) || d.children.some(holdsGitRoot);
 
 /** The nearest directory at or above `dir` that holds `.git`, if any. */
 async function enclosingGitRoot(ctx: Context, dir: string): Promise<string | undefined> {
@@ -446,17 +471,6 @@ async function enclosingGitRoot(ctx: Context, dir: string): Promise<string | und
     if (entries.some((e) => e.name === '.git')) return at;
     if (dirname(at) === at) return undefined;
   }
-}
-
-/** The apps of a repo: the directories directly in its `apps/` that hold one, in name order. */
-async function appsOf(ctx: Context, repo: Directory): Promise<string[]> {
-  const appsDir = join(repo.path, APPS_DIR);
-  const apps: string[] = [];
-  for (const entry of await ctx.readDir(appsDir).catch(() => [])) {
-    const path = join(appsDir, entry.name);
-    if (entry.directory && holdsApp(await ctx.readDir(path).catch(() => []))) apps.push(path);
-  }
-  return apps.sort();
 }
 
 /** A repo and its apps, with paths relative to `base`. */

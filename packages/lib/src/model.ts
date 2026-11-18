@@ -19,6 +19,12 @@ export interface Directory {
   pin?: string;
   /** Marker files that could not be read; shown, never fatal. */
   problems?: string[];
+  /** A git root's apps (§ 2 PLX-App), by path, as `appsOf` (overview.ts) finds them; set by the walk on every git root. */
+  apps?: string[];
+  /** Why the directory's entries could not be read (an errno code such as EACCES); nothing beneath it is known. */
+  unreadable?: string;
+  /** A symbolic link to a directory, not followed: one in a repo's `apps/`, or one to a git repo. */
+  symlink?: true;
   children: Directory[];
 }
 
@@ -80,14 +86,13 @@ export const isOperations = (dir: Directory): boolean =>
   dir.copier?.src !== undefined && templateOf(dir.copier.src, [OPERATIONS_TEMPLATE]) !== undefined;
 
 /**
- * Every unit of a scanned tree that carries a marker, in tree order, as
- * overview labels them. What a unit is follows from where it is (§ 1.3 PLX),
- * never from what its marker says: a repo is a git root, the operations repo
- * when its answers file says so; an app is a directory directly in the
- * `apps/` of its nearest enclosing git root. A git root is a Plexus repo when
- * it carries a marker or its `apps/` holds an app. doctor finds its units by
- * the same rules, reading each repo's `apps/` itself (doctor.ts), so that an
- * app without a marker is found too.
+ * Every unit of a scanned tree, in tree order, as overview labels them. What
+ * a unit is follows from where it is (§ 1.3 PLX), never from what its marker
+ * says: a repo is a git root, the operations repo when its answers file says
+ * so; an app is one of the apps the walk found for its nearest enclosing git
+ * root (`apps`, read by `appsOf`, which doctor reads them by too), with a
+ * marker or without. A git root is a Plexus repo when it carries a marker or
+ * has an app.
  */
 export function unitsOf(root: Directory): Unit[] {
   const units: Unit[] = [];
@@ -96,10 +101,9 @@ export function unitsOf(root: Directory): Unit[] {
     let here = repo;
     if (dir.gitRoot) {
       here = dir;
-      const apps = dir.children.find((c) => c.name === APPS_DIR)?.children ?? [];
-      if (hasMarker(dir) || apps.some((a) => !a.gitRoot))
+      if (hasMarker(dir) || (dir.apps?.length ?? 0) > 0)
         units.push({ dir, kind: isOperations(dir) ? 'operations' : 'repo' });
-    } else if (inApps && repo && hasMarker(dir)) units.push({ dir, kind: 'app', repo });
+    } else if (inApps && repo?.apps?.includes(dir.path)) units.push({ dir, kind: 'app', repo });
     for (const child of dir.children) {
       if (child.name === APPS_DIR && here === dir) for (const app of child.children) visit(app, here, true);
       else visit(child, here, false);
@@ -118,5 +122,14 @@ export function shortRemote(url: string): string {
 
 /** Whether a directory, or anything below it, carries a facet worth showing. */
 export function isNotable(dir: Directory): boolean {
-  return Boolean(dir.gitRoot || dir.git || dir.template || dir.copier || dir.declaration || dir.problems?.length);
+  return Boolean(
+    dir.gitRoot ||
+      dir.git ||
+      dir.template ||
+      dir.copier ||
+      dir.declaration ||
+      dir.problems?.length ||
+      dir.unreadable ||
+      dir.symlink,
+  );
 }

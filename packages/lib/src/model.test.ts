@@ -11,15 +11,17 @@ const dir = (path: string, facets: Partial<Directory> = {}, children: Directory[
 const marker = { declaration: { deviations: [], body: '' } };
 const git = { gitRoot: true as const };
 
-test('a repo is a git root, an app a directory in the apps/ of its nearest git root', () => {
+test('a repo is a git root, an app one of the apps the walk found for its nearest git root', () => {
   const tree = dir('/ws', {}, [
     // A repo without a marker, whose app has one: the repo is still the repo.
-    dir('/ws/web', git, [dir('/ws/web/apps', {}, [dir('/ws/web/apps/site', marker)])]),
+    dir('/ws/web', { ...git, apps: ['/ws/web/apps/site'] }, [
+      dir('/ws/web/apps', {}, [dir('/ws/web/apps/site', marker)]),
+    ]),
     // A checkout nested in a repo is a repo of its own, with its own apps.
     dir('/ws/ops', { ...git, ...marker }, [
       dir('/ws/ops/.claude', {}, [
         dir('/ws/ops/.claude/worktrees', {}, [
-          dir('/ws/ops/.claude/worktrees/x', { ...git, ...marker }, [
+          dir('/ws/ops/.claude/worktrees/x', { ...git, ...marker, apps: ['/ws/ops/.claude/worktrees/x/apps/id'] }, [
             dir('/ws/ops/.claude/worktrees/x/apps', {}, [dir('/ws/ops/.claude/worktrees/x/apps/id', marker)]),
           ]),
         ]),
@@ -44,8 +46,10 @@ test('a repo is a git root, an app a directory in the apps/ of its nearest git r
 test('what a unit is follows from where it sits, never from what a marker says', () => {
   const ops = { copier: { src: 'gh:plexus-ms/template-repo-operations', answers: {} } };
   const tree = dir('/ws', {}, [
-    dir('/ws/ops', { ...git, ...marker, ...ops }, [dir('/ws/ops/apps', {}, [dir('/ws/ops/apps/id', marker)])]),
-    dir('/ws/web', { ...git, ...marker }, [
+    dir('/ws/ops', { ...git, ...marker, ...ops, apps: ['/ws/ops/apps/id'] }, [
+      dir('/ws/ops/apps', {}, [dir('/ws/ops/apps/id', marker)]),
+    ]),
+    dir('/ws/web', { ...git, ...marker, apps: ['/ws/web/apps/site'] }, [
       dir('/ws/web/apps', {}, [
         dir('/ws/web/apps/site', marker, [
           dir('/ws/web/apps/site/apps', {}, [dir('/ws/web/apps/site/apps/x', marker)]),

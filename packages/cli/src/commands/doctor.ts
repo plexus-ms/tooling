@@ -6,7 +6,9 @@
 // wrong>`; a unit with none is `✓ <unit>`, with its profile and the
 // deviations its marker lists; a hint, which fails nothing, as `• <unit>:
 // <hint>`; in a workspace, one line naming the git roots
-// that are not Plexus repos; then a summary. Exit code 1 when a check fails
+// that are not Plexus repos; one naming the symbolic links not followed (an
+// app or a repo behind one is not checked); one naming the directories that
+// could not be read; then a summary. Exit code 1 when a check fails
 // or no unit is found. -q keeps the failures and the summary only.
 import { resolve } from 'node:path';
 import { diagnose, type Examination, examine, type Report } from '@plexus-ms/lib';
@@ -51,6 +53,14 @@ export function renderReport(report: DoctorReport, s: Style, showPassing: boolea
   }
   if (report.skipped.length > 0)
     lines.push(s.dim(`• not Plexus repos (no PLEXUS.md, no app in apps/), not checked: ${report.skipped.join(', ')}`));
+  if (report.links.length > 0)
+    lines.push(s.dim(`• symbolic links, not followed, not checked: ${report.links.join(', ')}`));
+  if (report.unreadable.length > 0)
+    lines.push(
+      s.warn(
+        `! could not be read, not checked: ${report.unreadable.map(({ path, why }) => `${path} (${why})`).join(', ')}`,
+      ),
+    );
   const n = report.units.length;
   const units = `${n} unit${n === 1 ? '' : 's'}`;
   if (n === 0) lines.push(s.warn(report.inRepo ? '✗ no unit found' : '✗ no Plexus repo found'));

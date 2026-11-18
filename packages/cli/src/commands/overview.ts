@@ -7,11 +7,14 @@
 //                                             --sync fetches first and adds ↓<behind> ↑<ahead>
 //   [template <tag>]                          a copier template
 //   [copier <commit> ← <src>]                 a copier-managed project
-//   [repo <plexus version>]                   a repo (PLEXUS.md), on the version its plx pin
-//   [operations <plexus version>]             names; the operations repo by its answers file
-//   [app <profile>]                           an app (PLEXUS.md under a repo's apps/), with
-//                                             the profile its marker states; it is on its
-//                                             repo's version
+//   [repo <plexus version>]                   a Plexus repo (a git root with PLEXUS.md or an
+//   [operations <plexus version>]             app), on the version its plx pin names; the
+//                                             operations repo by its answers file
+//   [app <profile>]                           an app (a directory in a repo's apps/ that holds
+//                                             one, as doctor finds it), with the profile its
+//                                             marker states; it is on its repo's version
+//   [symbolic link, not followed]             a link in a repo's apps/, or to a repo
+//   [! cannot be read: <why>]                 a directory whose entries could not be read
 import { resolve } from 'node:path';
 import { type Directory, type Kind, overview, shortRemote, unitsOf } from '@plexus-ms/lib';
 import type { Command } from 'commander';
@@ -65,10 +68,12 @@ function annotation(dir: Directory, kind: Kind | undefined, s: Style): string {
     const src = dir.copier.src === undefined ? '?' : shortRemote(dir.copier.src);
     tags.push(s.info(`[copier ${dir.copier.commit ?? '?'} ← ${src}]`));
   }
-  if (dir.declaration && kind) {
-    const detail = kind === 'app' ? dir.declaration.profile : dir.pin;
+  if (kind) {
+    const detail = kind === 'app' ? dir.declaration?.profile : dir.pin;
     tags.push(s.bold(`[${kind}${detail ? ` ${detail}` : ''}]`));
   }
+  if (dir.symlink) tags.push(s.dim('[symbolic link, not followed]'));
+  if (dir.unreadable) tags.push(s.warn(`[! cannot be read: ${dir.unreadable}]`));
   for (const p of dir.problems ?? []) tags.push(s.warn(`[! ${p}]`));
   return tags.length ? ` ${tags.join(' ')}` : '';
 }

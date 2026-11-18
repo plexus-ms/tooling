@@ -13,6 +13,7 @@ test('renderTree draws the tree with one annotation per facet', () => {
     copier: { commit: '0.62.0', src: 'https://github.com/plexus-ms/preset-repo-web.git', answers: {} },
     declaration: { deviations: [], body: '' },
     pin: '0.63.0',
+    apps: ['/ws/web/apps/shop', '/ws/web/apps/site'],
     children: [
       {
         name: 'apps',
@@ -25,6 +26,7 @@ test('renderTree draws the tree with one annotation per facet', () => {
             children: [],
           },
           { name: 'site', path: '/ws/web/apps/site', problems: ['PLEXUS.md: no frontmatter'], children: [] },
+          { name: 'z', path: '/ws/web/apps/z', symlink: true, children: [] },
         ],
       },
     ],
@@ -32,7 +34,11 @@ test('renderTree draws the tree with one annotation per facet', () => {
   const root: Directory = {
     name: 'ws',
     path: '/ws',
-    children: [web, { name: 'tpl', path: '/ws/tpl', template: {}, children: [] }],
+    children: [
+      web,
+      { name: 'locked', path: '/ws/locked', unreadable: 'EACCES', children: [] },
+      { name: 'tpl', path: '/ws/tpl', template: {}, children: [] },
+    ],
   };
   assert.equal(
     renderTree(root, style(false)),
@@ -41,7 +47,10 @@ test('renderTree draws the tree with one annotation per facet', () => {
       '├─ web/ [develop* → gh:t/web] [copier 0.62.0 ← gh:plexus-ms/preset-repo-web] [repo 0.63.0]',
       '│  └─ apps/',
       '│     ├─ shop/ [app stateful]',
-      '│     └─ site/ [! PLEXUS.md: no frontmatter]',
+      // An app without a readable marker is an app all the same, as doctor finds it.
+      '│     ├─ site/ [app] [! PLEXUS.md: no frontmatter]',
+      '│     └─ z/ [symbolic link, not followed]',
+      '├─ locked/ [! cannot be read: EACCES]',
       '└─ tpl/ [template untagged]',
     ].join('\n'),
   );

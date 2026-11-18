@@ -13,7 +13,15 @@ import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers, TEMPLATE_FILES } from './copier.ts';
 import type { DirEntry } from './io.ts';
 import { MARKER_FILE, parseMarker } from './marker.ts';
-import { type Directory, type GitFacet, isNotable, shortRemote, type TemplateFacet } from './model.ts';
+import {
+  APPS_DIR,
+  type Directory,
+  type GitFacet,
+  holdsApp,
+  isNotable,
+  shortRemote,
+  type TemplateFacet,
+} from './model.ts';
 import { plxPinOf } from './version.ts';
 
 /** Heavy or generated directories never descended into. `.git` is the repo marker and is handled apart. */
@@ -91,16 +99,108 @@ async function sync(ctx: Context, dir: Directory): Promise<void> {
   facet.behind = behind;
 }
 
-async function walk(ctx: Context, path: string, name: string, options: Required<ScanOptions>): Promise<Directory> {
-  const entries = await ctx.readDir(path);
+/** Why a directory could not be read: its errno code, else the message. */
+export const whyUnreadable = (error: unknown): string =>
+  (error as NodeJS.ErrnoException).code ?? (error instanceof Error ? error.message : String(error));
+
+/** A read that failed because nothing is there, as opposed to something that cannot be read. */
+const isMissing = (error: unknown): boolean =>
+  ['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '');
+
+/** What `appsOf` found in a repo's `apps/`. */
+export interface AppsRead {
+  /** The apps' directories, in name order. */
+  apps: string[];
+  /** Symbolic links to directories in `apps/`: not followed, so not apps, and named as not checked. */
+  links: string[];
+  /** Directories that could not be read, `apps/` itself or one in it, with why. */
+  unreadable: { path: string; why: string }[];
+}
+
+/**
+ * The apps of a repo (§ 2 PLX-App): the directories directly in its `apps/`
+ * that hold one (`holdsApp`), with a marker or without. The one reader of
+ * them: overview's walk records them on every git root, and doctor checks
+ * them, so the two verbs agree on what an app is. A pruned name (`build`,
+ * `dist`) does not hide an app, a symlinked directory is named and not
+ * followed, and a directory that cannot be read is named with why.
+ */
+export async function appsOf(ctx: Context, repo: string): Promise<AppsRead> {
+  const read: AppsRead = { apps: [], links: [], unreadable: [] };
+  const dir = join(repo, APPS_DIR);
+  let entries: DirEntry[];
+  try {
+    entries = await ctx.readDir(dir);
+  } catch (error) {
+    if (!isMissing(error)) read.unreadable.push({ path: dir, why: whyUnreadable(error) });
+    return read;
+  }
+  for (const entry of [...entries].sort(byName)) {
+    const path = join(dir, entry.name);
+    if (entry.symlink) {
+      if (await isDirectory(ctx, path)) read.links.push(path);
+      continue;
+    }
+    if (!entry.directory) continue;
+    try {
+      if (holdsApp(await ctx.readDir(path))) read.apps.push(path);
+    } catch (error) {
+      read.unreadable.push({ path, why: whyUnreadable(error) });
+    }
+  }
+  return read;
+}
+
+/** Entries in code-unit order of their names, as `Array.prototype.sort` orders strings. */
+const byName = (a: DirEntry, b: DirEntry): number => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+const isDirectory = (ctx: Context, path: string): Promise<boolean> =>
+  ctx.readDir(path).then(
+    () => true,
+    () => false,
+  );
+
+/** Whether a symbolic link leads to a git repo: its target holds `.git`. */
+const linksToRepo = (ctx: Context, path: string): Promise<boolean> =>
+  ctx.readDir(path).then(
+    (entries) => entries.some((e) => e.name === '.git'),
+    () => false,
+  );
+
+/**
+ * One directory and the notable ones beneath it. A directory that cannot be
+ * read is recorded with why, not fatal. Symbolic links are not followed; one
+ * to a directory in a repo's `apps/`, or to a git repo, is recorded as such.
+ * `apps`, when the directory is a repo's `apps/`, is what `appsOf` found
+ * there: those are walked and kept whatever their name.
+ */
+async function walk(
+  ctx: Context,
+  path: string,
+  name: string,
+  options: Required<ScanOptions>,
+  apps?: AppsRead,
+): Promise<Directory> {
+  let entries: DirEntry[];
+  try {
+    entries = await ctx.readDir(path);
+  } catch (error) {
+    return { name, path, children: [], unreadable: whyUnreadable(error) };
+  }
   const dir = await facetsOf(ctx, path, name, entries, options);
-  const subdirs = entries
-    .filter((e) => e.directory && e.name !== '.git' && !PRUNED.has(e.name))
-    .map((e) => e.name)
-    .sort();
-  for (const sub of subdirs) {
-    const child = await walk(ctx, join(path, sub), sub, options);
-    if (isNotable(child) || child.children.length > 0) dir.children.push(child);
+  const own = dir.gitRoot ? await appsOf(ctx, path) : undefined;
+  if (own) dir.apps = own.apps;
+  for (const entry of [...entries].sort(byName)) {
+    const sub = join(path, entry.name);
+    if (entry.symlink) {
+      if (apps?.links.includes(sub) || (await linksToRepo(ctx, sub)))
+        dir.children.push({ name: entry.name, path: sub, symlink: true, children: [] });
+      continue;
+    }
+    const app = apps?.apps.includes(sub) ?? false;
+    if (!entry.directory || entry.name === '.git' || (PRUNED.has(entry.name) && !app)) continue;
+    const child = await walk(ctx, sub, entry.name, options, own && entry.name === APPS_DIR ? own : undefined);
+    if (app || isNotable(child) || child.children.length > 0) dir.children.push(child);
   }
   return dir;
 }

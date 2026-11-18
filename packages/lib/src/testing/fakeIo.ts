@@ -1,10 +1,21 @@
 // A test Io over an in-memory tree: files map to their text, directories to
-// nested trees; `git` answers exec calls. Not shipped (excluded in tsconfig).
+// nested trees; `git` answers exec calls. Two kinds of entry stand for what a
+// tree of text cannot hold: UNREADABLE, a directory whose entries cannot be
+// read (EACCES), and `link(target)`, a symbolic link that reads as its
+// target. A missing path fails with ENOENT. Not shipped (excluded in tsconfig).
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { ExecError, type Io } from '../io.ts';
 
 export type Tree = { [name: string]: string | Tree };
+
+/** A directory whose entries cannot be read. */
+export const UNREADABLE = '\0unreadable';
+const LINK = '\0link:';
+/** A symbolic link to an absolute path of the tree. */
+export const link = (target: string): string => `${LINK}${target}`;
+
+const failure = (code: string, path: string) => Object.assign(new Error(`${code}: ${path}`), { code });
 
 export type FakeExec = (cwd: string, args: string[], input?: string) => string | undefined;
 
@@ -14,7 +25,10 @@ export function fakeIo(tree: Tree, git: FakeExec = () => undefined, other: Recor
     path
       .split('/')
       .filter((p) => p && p !== '.')
-      .reduce<Tree | string | undefined>((node, p) => (typeof node === 'object' ? node[p] : undefined), tree);
+      .reduce<Tree | string | undefined>((node, p) => {
+        const next = typeof node === 'object' ? node[p] : undefined;
+        return typeof next === 'string' && next.startsWith(LINK) ? at(next.slice(LINK.length)) : next;
+      }, tree);
   return {
     stdout: new PassThrough(),
     stderr: new PassThrough(),
@@ -28,14 +42,20 @@ export function fakeIo(tree: Tree, git: FakeExec = () => undefined, other: Recor
     },
     readFile: async (path) => {
       const node = at(path);
-      if (typeof node !== 'string') throw new Error(`no file ${path}`);
+      if (node === UNREADABLE) throw failure('EACCES', path);
+      if (typeof node !== 'string') throw failure(node === undefined ? 'ENOENT' : 'EISDIR', path);
       return node;
     },
     writeFile: async () => {},
     readDir: async (path) => {
       const node = at(path);
-      if (typeof node !== 'object') throw new Error(`no directory ${path}`);
-      return Object.entries(node).map(([name, v]) => ({ name, directory: typeof v === 'object' }));
+      if (node === UNREADABLE) throw failure('EACCES', path);
+      if (typeof node !== 'object') throw failure(node === undefined ? 'ENOENT' : 'ENOTDIR', path);
+      return Object.entries(node).map(([name, v]) =>
+        typeof v === 'string' && v.startsWith(LINK)
+          ? { name, directory: false, symlink: true }
+          : { name, directory: typeof v === 'object' || v === UNREADABLE },
+      );
     },
   };
 }

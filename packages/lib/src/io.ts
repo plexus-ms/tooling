@@ -50,7 +50,10 @@ export interface Io {
 
 export interface DirEntry {
   name: string;
+  /** A directory itself; a symlink to one is not (`symlink`). */
   directory: boolean;
+  /** A symbolic link, to whatever it points at. */
+  symlink?: boolean;
 }
 
 export class ExecError extends Error {
@@ -198,7 +201,11 @@ export function realIo(prompt?: Io['prompt']): Io {
     readFile: (path) => readFile(path, 'utf8'),
     writeFile: (path, content) => writeFile(path, content),
     readDir: async (path) =>
-      (await readdir(path, { withFileTypes: true })).map((e) => ({ name: e.name, directory: e.isDirectory() })),
+      (await readdir(path, { withFileTypes: true })).map((e) => ({
+        name: e.name,
+        directory: e.isDirectory(),
+        ...(e.isSymbolicLink() ? { symlink: true } : {}),
+      })),
   };
 }
 

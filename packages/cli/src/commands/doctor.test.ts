@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { style } from '../style.ts';
 import { type DoctorReport, renderReport } from './doctor.ts';
 
-const at = { root: '/ws', inRepo: false, skipped: [] };
+const at = { root: '/ws', inRepo: false, skipped: [], links: [], unreadable: [] };
 
 test('renderReport prints a failing check as one line: name, unit, what is wrong', () => {
   const report: DoctorReport = {
@@ -40,7 +40,7 @@ test('renderReport prints a failing check as one line: name, unit, what is wrong
 });
 
 test('renderReport says which repo it checked from inside one, and which git roots of a workspace it skipped', () => {
-  const repo = { root: '/ws/web', inRepo: true, skipped: [] };
+  const repo = { root: '/ws/web', inRepo: true, skipped: [], links: [], unreadable: [] };
   const passing = { units: [{ path: '.', kind: 'repo' as const, deviations: [], findings: [] }], failed: 0 };
   assert.equal(renderReport({ ...repo, ...passing }, style(false), true), '✓ .\n✓ 1 unit passes every check');
   assert.equal(
@@ -50,6 +50,23 @@ test('renderReport says which repo it checked from inside one, and which git roo
   assert.equal(
     renderReport({ ...at, skipped: ['notes', 'x/compendium'], ...passing }, style(false), true),
     '✓ .\n• not Plexus repos (no PLEXUS.md, no app in apps/), not checked: notes, x/compendium\n✓ 1 unit passes every check',
+  );
+});
+
+test('renderReport names the symbolic links it did not follow and the directories it could not read', () => {
+  const passing = { units: [{ path: 'web', kind: 'repo' as const, deviations: [], findings: [] }], failed: 0 };
+  assert.equal(
+    renderReport(
+      { ...at, links: ['web/apps/shop', 'mirror'], unreadable: [{ path: 'locked', why: 'EACCES' }], ...passing },
+      style(false),
+      true,
+    ),
+    [
+      '✓ web',
+      '• symbolic links, not followed, not checked: web/apps/shop, mirror',
+      '! could not be read, not checked: locked (EACCES)',
+      '✓ 1 unit passes every check',
+    ].join('\n'),
   );
 });
 
