@@ -42,7 +42,7 @@
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parse } from 'yaml';
+import { declaresHealthcheck, healthcheckOf, type Mapping, parseCompose } from './compose.ts';
 import type { Context } from './context.ts';
 import { DEFAULT_ENVIRONMENT, deploymentSlug } from './deployTargets.ts';
 import { run } from './effects.ts';
@@ -173,43 +173,6 @@ class Remote {
   }
 }
 
-/** A healthcheck as the compose file spells it; every key may be absent or of any type. */
-type Healthcheck = Record<string, unknown>;
-
-/**
- * The app service's healthcheck in the rendered file, as compose would read
- * it: anchors and merge keys resolve, `extends` and `include` do not. A file
- * that is not YAML compose could read (duplicate keys among them) is a usage
- * error naming the file, before anything reaches the host.
- */
-export function healthcheckOf(text: string, path: string): Healthcheck | undefined {
-  let doc: unknown;
-  try {
-    doc = parse(text, { merge: true });
-  } catch (error) {
-    throw new UsageError(`${path}: not valid YAML: ${(error as Error).message.split('\n')[0]?.replace(/:$/, '')}`);
-  }
-  const check = (doc as { services?: { web?: { healthcheck?: unknown } } } | null)?.services?.web?.healthcheck;
-  return check !== null && typeof check === 'object' && !Array.isArray(check) ? (check as Healthcheck) : undefined;
-}
-
-/** Compose's truthy spellings of a boolean, any case, quoted or not: `true`, `yes`, `y`, `on`. */
-const truthy = (value: unknown): boolean =>
-  value === true || (typeof value === 'string' && ['true', 'yes', 'y', 'on'].includes(value.toLowerCase()));
-
-/**
- * Whether the healthcheck can ever report healthy (`PLX-App/Healthcheck`):
- * a `test` of its own, a non-empty string or a non-empty list whose first
- * word is not NONE, and not disabled. The deploy waits on it, so anything
- * else cannot be deployed; one that inherits the image's test does not count.
- */
-export function declaresHealthcheck(check: Healthcheck | undefined): check is Healthcheck {
-  if (check === undefined || truthy(check.disable)) return false;
-  const { test } = check;
-  if (typeof test === 'string') return test.trim() !== '';
-  return Array.isArray(test) && test.length > 0 && test[0] !== 'NONE';
-}
-
 /** A compose duration (Go's syntax: `1m30s`, `500ms`) in seconds, or undefined when it is not one. */
 export function seconds(duration: unknown): number | undefined {
   if (typeof duration !== 'string' || !/^((\d+\.?\d*|\.\d+)(ns|us|µs|ms|s|m|h))+$/.test(duration)) return undefined;
@@ -226,7 +189,7 @@ export function seconds(duration: unknown): number | undefined {
  * `start_period` is over, Docker probes only every `interval`. Undefined when
  * the timing keys cover the wait; a value the verb cannot read is left to compose.
  */
-export function slowStart(check: Healthcheck, budget: number): string | undefined {
+export function slowStart(check: Mapping, budget: number): string | undefined {
   if (check.start_interval == null) return 'sets no start_interval';
   const period = check.start_period == null ? 0 : seconds(check.start_period);
   if (period !== undefined && period < budget)
@@ -275,7 +238,7 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
   const rendered = renderCompose(text, image, compose);
   // The wait's budget: `retries` looks, two seconds apart.
   const budget = retries * 2;
-  const check = healthcheckOf(rendered, compose);
+  const check = healthcheckOf(parseCompose(rendered, compose));
   if (!declaresHealthcheck(check))
     throw new UsageError(
       `${compose}: the web service declares no healthcheck with a test of its own, and the deploy waits for it to turn healthy (PLX-App/Healthcheck); ` +

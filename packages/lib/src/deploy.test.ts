@@ -1,17 +1,9 @@
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
+import { declaresHealthcheck, healthcheckOf, parseCompose } from './compose.ts';
 import { Context, type Options } from './context.ts';
-import {
-  declaresHealthcheck,
-  defaultAppDir,
-  deploy,
-  healthcheckOf,
-  q,
-  renderCompose,
-  seconds,
-  slowStart,
-} from './deploy.ts';
+import { defaultAppDir, deploy, q, renderCompose, seconds, slowStart } from './deploy.ts';
 import { fakeIo, type Tree } from './testing/fakeIo.ts';
 import { UsageError } from './version.ts';
 
@@ -279,7 +271,7 @@ test('a compose file that is not valid YAML is a usage error naming it, before a
 });
 
 test('declaresHealthcheck reads the app service, anchors and merge keys resolved; a test of its own, string or list, counts', () => {
-  const declares = (text: string) => declaresHealthcheck(healthcheckOf(text, 'c'));
+  const declares = (text: string) => declaresHealthcheck(healthcheckOf(parseCompose(text, 'c')));
   assert.equal(declares(COMPOSE + HEALTHCHECK), true);
   assert.equal(declares(`${COMPOSE}    healthcheck:\n      test: curl -f localhost\n`), true);
   assert.equal(declares(`${COMPOSE}    healthcheck:\n      test: [CMD-SHELL, "true"]\n      disable: false\n`), true);
