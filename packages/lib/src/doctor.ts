@@ -466,31 +466,49 @@ async function readRepo(ctx: Context, dir: Directory, path: string, kind: RepoFa
 
 /**
  * The repo's root mise tasks, hidden ones included, as mise lists them, so
- * that tasks from every file mise reads count. Tasks a parent directory's or
- * the global config contributes are not the repo's; mise names their files by
- * their canonical path, so the repo's is compared canonically.
+ * that tasks from every file mise reads count; a task counts under its name
+ * and each of its aliases, as `mise run` finds it by either. Tasks a parent
+ * directory's or the global config contributes are not the repo's; mise
+ * names their files by their canonical path, so the repo's is compared
+ * canonically. Whatever keeps the list from being read (no mise on PATH, an
+ * untrusted config, output without the `source` that tells the repo's tasks
+ * apart) is one problem, which PLX-Repo/Verbs reports.
  */
 async function rootTasks(ctx: Context, repo: string): Promise<RepoFacts['tasks']> {
   let out: string;
   try {
     out = await ctx.read('mise', ['tasks', 'ls', '--json', '--hidden'], { cwd: repo });
   } catch (error) {
-    if (!(error instanceof ExecError)) throw error;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { problem: 'mise is not on PATH' };
+    if (!(error instanceof ExecError)) return { problem: (error as Error).message };
     const lines = error.stderr
       .split('\n')
       .map((l) => l.replace(/^mise ERROR /, '').trim())
       .filter((l) => l && !/^(Version:|Run with )/.test(l));
     return { problem: lines.join(' ') || error.message };
   }
+  let tasks: unknown;
+  try {
+    tasks = JSON.parse(out);
+  } catch {
+    return { problem: '`mise tasks ls --json` printed no JSON' };
+  }
+  if (!Array.isArray(tasks)) return { problem: '`mise tasks ls --json` printed no list' };
+  const listed = tasks.filter((t) => isMapping(t) && typeof t.name === 'string');
+  if (listed.some((t) => typeof t.source !== 'string'))
+    return { problem: "`mise tasks ls --json` gives no task's `source`, which tells the repo's own tasks apart" };
   const own = `${await realpath(repo).catch(() => repo)}/`;
-  const tasks: unknown = JSON.parse(out);
   const names: string[] = [];
-  for (const task of Array.isArray(tasks) ? tasks : []) {
-    if (!isMapping(task) || typeof task.name !== 'string' || task.global === true) continue;
-    if (typeof task.source !== 'string' || !task.source.startsWith(own)) continue;
-    // A monorepo root names its own tasks `//:<task>`; `//<project>:<task>` is a sub-project's.
-    if (task.name.startsWith('//:')) names.push(task.name.slice(3));
-    else if (!task.name.startsWith('//')) names.push(task.name);
+  for (const task of listed) {
+    if (task.global === true || !String(task.source).startsWith(own)) continue;
+    const aliases = Array.isArray(task.aliases)
+      ? task.aliases.filter((a: unknown): a is string => typeof a === 'string')
+      : [];
+    for (const name of [task.name as string, ...aliases]) {
+      // A monorepo root names its own tasks `//:<task>`; `//<project>:<task>` is a sub-project's.
+      if (name.startsWith('//:')) names.push(name.slice(3));
+      else if (!name.startsWith('//')) names.push(name);
+    }
   }
   return { names };
 }

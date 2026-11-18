@@ -6,7 +6,7 @@ import { type Compose, type Mapping, parseCompose } from './compose.ts';
 import { Context } from './context.ts';
 import { type AppFacts, CHECKS, diagnose, examine, type Facts, type RepoFacts } from './doctor.ts';
 import { REQUIREMENT_NAME } from './lints.ts';
-import { fakeIo, type Tree } from './testing/fakeIo.ts';
+import { type FakeExec, fakeIo, type Tree } from './testing/fakeIo.ts';
 
 // --- the list of checks is the compendium's ------------------------------------
 
@@ -668,4 +668,57 @@ test('a marker that still carries plexus or modules gets a hint, not a finding',
       ["the marker's `modules` is no longer read and can go"],
     ],
   );
+});
+
+// --- mise's task list ------------------------------------------------------------------
+
+/** doctor in /ws/web, with `mise tasks ls` answered by `mise`. */
+async function withMise(mise: FakeExec) {
+  const git = (cwd: string, args: string[]) => (args[0] === 'ls-files' && cwd === '/ws/web' ? '' : undefined);
+  const ctx = new Context({}, fakeIo({ ws: ws() }, git, { mise }));
+  return diagnose((await examine(ctx, '/ws/web')).facts);
+}
+
+test('mise not on PATH is one PLX-Repo/Verbs finding, and every other check still runs', async () => {
+  const report = await withMise(() => {
+    throw Object.assign(new Error('spawn mise ENOENT'), { code: 'ENOENT' });
+  });
+  assert.deepEqual(
+    report.units.map((u) => [u.path, u.findings]),
+    [
+      ['.', [{ requirement: 'PLX-Repo/Verbs', problem: 'mise could not list the tasks: mise is not on PATH' }]],
+      ['apps/site', []],
+    ],
+  );
+});
+
+test("a task's alias counts as the task, as `mise run` finds it", async () => {
+  const task = (name: string, aliases: string[] = []) => ({
+    name,
+    aliases,
+    source: '/ws/web/mise.toml',
+    global: false,
+  });
+  const report = await withMise(() =>
+    JSON.stringify([
+      task('//:dev'),
+      task('//:build'),
+      task('//:verify'),
+      task('//:test'),
+      task('//:static', ['//:check']),
+      task('biome', ['lint']),
+    ]),
+  );
+  assert.deepEqual(report.units[0]?.findings, []);
+});
+
+test('a task list without `source` fails with one clear message, not every task missing', async () => {
+  const report = await withMise(() => JSON.stringify(VERBS.map((name) => ({ name, global: false }))));
+  assert.deepEqual(report.units[0]?.findings, [
+    {
+      requirement: 'PLX-Repo/Verbs',
+      problem:
+        "mise could not list the tasks: `mise tasks ls --json` gives no task's `source`, which tells the repo's own tasks apart",
+    },
+  ]);
 });
