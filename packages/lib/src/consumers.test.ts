@@ -21,6 +21,8 @@ test('expectedBranch follows what the repo is, and the answers for a package rep
     'main',
     'an earlier name',
   );
+  const https = { copier: { src: 'https://github.com/plexus-ms/template-repo-operations.git', answers: {} } };
+  assert.equal(expectedBranch(dir('/o', { ...https, ...marker() })), 'main', 'another spelling of the source');
   assert.equal(expectedBranch(dir('/w', { ...copier('template-repo-turbo'), ...marker() })), 'develop');
   const packages = { copier: { src: 'gh:plexus-ms/template-repo-turbo', answers: { publishes_packages: true } } };
   assert.equal(expectedBranch(dir('/l', { ...packages, ...marker() })), 'main');

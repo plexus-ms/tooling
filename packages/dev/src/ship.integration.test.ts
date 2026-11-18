@@ -1106,6 +1106,21 @@ test('propagate: a named version is validated, and asks every repo for it withou
   assert.equal(result?.pulls.length, 2);
 });
 
+test('propagate: a repo whose origin lacks the branch the version lands on is skipped, with the reason', async () => {
+  fixture('no-branch');
+  git(remote('acme-web'), 'update-ref', '-d', 'refs/heads/develop');
+  const { result, error, out } = await runPropagate({ yes: true }, { to: '0.2.0' });
+  assert.equal(error, undefined, out);
+  const reason = 'origin has no branch `develop`, the one the version lands on';
+  assert.ok(has(out, `⚠ acme/web: ${reason} — skipped`), out);
+  assert.deepEqual(result?.skipped, [{ path: 'acme/web', reason }]);
+  assert.deepEqual(result?.failed, []);
+  assert.equal(result?.pulls.length, 1, 'the other repo takes the version');
+  const alone = await runUpdate({ yes: true }, { repo: join(WS, 'acme/web'), to: '0.2.0' });
+  assert.equal(alone.error, undefined, alone.out);
+  assert.deepEqual(alone.result?.skipped, [{ path: 'web', reason }]);
+});
+
 test('the confirmation aborts cleanly without a terminal', async () => {
   fixture('prompt');
   const { error, out } = await run({});

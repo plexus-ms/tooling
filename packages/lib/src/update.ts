@@ -37,6 +37,7 @@ import { findConsumers } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers } from './copier.ts';
 import { run } from './effects.ts';
+import { ExecError } from './io.ts';
 import { maxAgeOf, type Need, needOf, type Release } from './need.ts';
 import { overview } from './overview.ts';
 import { CLEAN_BODY, detail, emptySummary, openPullUrl, type Summary, takeVersion, versionBranch } from './take.ts';
@@ -83,6 +84,14 @@ export async function update(ctx: Context, options: UpdateOptions): Promise<Summ
 
   // The repo is judged by what its origin has on the branch the version lands
   // on, not by the checkout, which may be behind it or on a branch of its own.
+  // Without that branch on origin there is nothing to take the version on.
+  if ((await onOrigin(ctx, repo, consumer.branch)) === false) {
+    const reason = `origin has no branch \`${consumer.branch}\`, the one the version lands on`;
+    ctx.say(`⚠ ${name}: ${reason} — skipped`);
+    const skipped = emptySummary(newest, ctx.dryRun);
+    skipped.skipped.push({ path: name, reason });
+    return skipped;
+  }
   await ctx.read('git', ['fetch', '--quiet', 'origin', consumer.branch], { cwd: repo }).catch(() => '');
   const answers = await Promise.all(
     consumer.sites.map(async (s) => {
@@ -117,11 +126,7 @@ export async function update(ctx: Context, options: UpdateOptions): Promise<Summ
   const summary = emptySummary(version, ctx.dryRun);
 
   const branch = versionBranch(version);
-  const onOrigin = await ctx
-    .read('git', ['ls-remote', '--exit-code', '--heads', 'origin', `refs/heads/${branch}`], { cwd: repo })
-    .then(() => true)
-    .catch(() => false);
-  if (onOrigin) {
+  if (await onOrigin(ctx, repo, branch)) {
     const url = await openPullUrl(ctx, consumer, repo, version);
     ctx.say(
       `• ${name}: ${branch} is already on origin${url ? ` (${url})` : ''} — nothing to do; delete the branch to pull the version again`,
@@ -164,6 +169,21 @@ export async function update(ctx: Context, options: UpdateOptions): Promise<Summ
     if (scratch) await ctx.stage(run('rm', ['-rf', scratch]));
   }
   return summary;
+}
+
+/**
+ * Whether origin has the branch: true or false as `git ls-remote` answers,
+ * undefined when it could not be asked (no network, no such remote), which
+ * the step that needs the branch then reports.
+ */
+async function onOrigin(ctx: Context, repo: string, branch: string): Promise<boolean | undefined> {
+  try {
+    await ctx.read('git', ['ls-remote', '--exit-code', '--heads', 'origin', `refs/heads/${branch}`], { cwd: repo });
+    return true;
+  } catch (error) {
+    // --exit-code: 2 is "no such ref"; anything else is a failure to ask.
+    return error instanceof ExecError && error.code === 2 ? false : undefined;
+  }
 }
 
 /** Where the versions are read from: the compendium's releases. */

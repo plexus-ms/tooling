@@ -18,7 +18,7 @@ import type { Consumer, Site } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, copierVia } from './copier.ts';
 import { run, write } from './effects.ts';
-import { RENAMED_TEMPLATES, templateSource } from './templates.ts';
+import { namesOldTemplate, templateSource } from './templates.ts';
 
 export interface Summary {
   version: string;
@@ -177,11 +177,7 @@ async function updateSite(
       const answers = await ctx.readFile(join(target, ANSWERS_FILE));
       const current = templateSource(site.template);
       const recorded = /^_src_path: (.*)$/m.exec(answers)?.[1];
-      if (
-        recorded &&
-        recorded !== current &&
-        Object.keys(RENAMED_TEMPLATES).some((old) => templateSource(old) === recorded)
-      ) {
+      if (recorded && namesOldTemplate(recorded)) {
         ctx.say(`  ${site.rel}: the template is ${current} now; the answers follow`);
         await ctx.stage(
           write(join(target, ANSWERS_FILE), answers.replace(/^_src_path: .*$/m, `_src_path: ${current}`)),

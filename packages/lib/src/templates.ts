@@ -25,10 +25,38 @@ export const RENAMED_TEMPLATES: Readonly<Record<string, string>> = {
   'preset-repo-operations': 'template-repo-operations',
 };
 
-/** The current template a recorded template source stands for, or undefined when it is none of the given templates. */
+/** The organisation the templates are published under. */
+const UPSTREAM = 'plexus-ms';
+
+/**
+ * A recorded source as owner and repo name, whichever way it spells a GitHub
+ * repo: copier's `gh:owner/repo`, `https://github.com/owner/repo`,
+ * `git@github.com:owner/repo` or `ssh://git@github.com/owner/repo`, each with
+ * or without `.git`. Undefined for anything else, a local path among them.
+ */
+function githubRepoOf(src: string): { owner: string; name: string } | undefined {
+  const m =
+    /^(?:gh:|https?:\/\/(?:www\.)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(
+      src.trim(),
+    );
+  return m?.[1] && m[2] ? { owner: m[1].toLowerCase(), name: m[2].toLowerCase() } : undefined;
+}
+
+/**
+ * The current template a recorded template source stands for, under its
+ * current or an earlier name, or undefined when it is none of the given
+ * templates. Owner and repo name are compared, not the spelling.
+ */
 export function templateOf(src: string, templates: readonly string[]): string | undefined {
-  for (const p of templates) if (templateSource(p) === src) return p;
-  for (const [old, current] of Object.entries(RENAMED_TEMPLATES))
-    if (templateSource(old) === src && templates.includes(current)) return current;
-  return undefined;
+  const repo = githubRepoOf(src);
+  if (repo?.owner !== UPSTREAM) return undefined;
+  if (templates.includes(repo.name)) return repo.name;
+  const current = Object.hasOwn(RENAMED_TEMPLATES, repo.name) ? RENAMED_TEMPLATES[repo.name] : undefined;
+  return current && templates.includes(current) ? current : undefined;
+}
+
+/** Whether a recorded source names a template by a name it had before a rename, in any spelling. */
+export function namesOldTemplate(src: string): boolean {
+  const repo = githubRepoOf(src);
+  return repo?.owner === UPSTREAM && Object.hasOwn(RENAMED_TEMPLATES, repo.name);
 }
