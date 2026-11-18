@@ -17,6 +17,12 @@ export interface ExecOptions {
    * verb's result and stays clean for `--json` and pipes.
    */
   inherit?: boolean;
+  /**
+   * Capture the process's output as usual, and pass both of its streams
+   * through to stderr as they come: for a step whose output the verb goes on
+   * with, shown when the verbosity asks for subprocess output.
+   */
+  echo?: boolean;
 }
 
 export interface Io {
@@ -96,10 +102,11 @@ export function realIo(prompt?: Io['prompt']): Io {
         let stderr = '';
         child.stdout?.on('data', (chunk: Buffer) => {
           stdout += chunk;
+          if (options.echo) process.stderr.write(chunk);
         });
         child.stderr?.on('data', (chunk: Buffer) => {
           stderr += chunk;
-          if (options.inherit) process.stderr.write(chunk);
+          if (options.inherit || options.echo) process.stderr.write(chunk);
         });
         child.on('error', reject);
         child.on('close', (code) => {

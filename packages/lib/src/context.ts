@@ -107,7 +107,7 @@ export class Context {
       this.say(`${this.dryRun ? '[dry-run] ' : ''}${describe(step)}`);
       const input = body(step);
       if (input !== undefined) this.say(indent(input), step.kind === 'write' ? 2 : 1);
-      if (!this.dryRun) await this.perform(step);
+      if (!this.dryRun) await this.perform(step, false);
     }
   }
 
@@ -121,7 +121,7 @@ export class Context {
     const input = body(step);
     if (input !== undefined) this.say(indent(input), step.kind === 'write' ? 2 : 1);
     if (this.dryRun) return undefined;
-    return this.perform(step);
+    return this.perform(step, true);
   }
 
   /**
@@ -133,17 +133,25 @@ export class Context {
     this.say(`? ${describe(step)}`, 1);
     const input = body(step);
     if (input !== undefined) this.say(indent(input), 2);
-    return this.perform(step);
+    return this.perform(step, true);
   }
 
-  private async perform(step: Step): Promise<string | undefined> {
-    const inherit = this.verbose >= 2 || (step.kind === 'run' && step.interactive === true);
+  /**
+   * A step's output goes to the terminal under -vv. When the caller goes on
+   * with it (`used`: a staged `mktemp -d`, a create call's answer), it is
+   * captured at every verbosity and only echoed, never passed through
+   * uncaptured: an empty answer would send the caller on with ''.
+   */
+  private async perform(step: Step, used: boolean): Promise<string | undefined> {
+    const shown = this.verbose >= 2;
+    const inherit = (shown && !used) || (step.kind === 'run' && step.interactive === true);
     switch (step.kind) {
       case 'run':
         return this.io.exec(step.command, step.args, {
           cwd: step.cwd,
           input: step.input,
           inherit,
+          echo: shown && !inherit,
           env: step.env === undefined ? undefined : { ...process.env, ...step.env },
         });
       case 'write':

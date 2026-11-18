@@ -126,3 +126,20 @@ test('effect narrates like apply, returns the output, and performs nothing under
   assert.equal(await new Context({ dryRun: true }, dry).effect(run('echo', ['x'])), undefined);
   assert.equal(ran, false);
 });
+
+test('under -vv a step whose output the caller goes on with is still captured, and echoed to stderr', async () => {
+  const echoed: string[] = [];
+  const write = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    echoed.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    const ctx = new Context({ verbose: 2 }, { ...realIo(), stderr: new PassThrough() });
+    assert.equal(await ctx.stage(run('echo', ['/tmp/scratch'])), '/tmp/scratch\n');
+    assert.equal(await ctx.effect(run('echo', ['created'])), 'created\n');
+  } finally {
+    process.stderr.write = write;
+  }
+  assert.deepEqual(echoed, ['/tmp/scratch\n', 'created\n']);
+});
