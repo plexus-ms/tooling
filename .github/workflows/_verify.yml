@@ -138,6 +138,20 @@ jobs:
       deploys: ${{ steps.plan.outputs.deploys }}
       environment: ${{ steps.plan.outputs.environment }}
     steps:
+      # How the job reads the vault (§ 8 PLX-Delivery): a slot of a runner host
+      # carries its Connect server's address and token (actions_runners), and
+      # every other runner gets the service account's. Never both: each read
+      # would warn, and a slot's job has no use for the service account.
+      - name: How the vault is read
+        env:
+          TOKEN: ${{ secrets.op-service-account-token }}
+        run: |
+          if [ -n "${OP_CONNECT_HOST:-}" ] && [ -n "${OP_CONNECT_TOKEN:-}" ]; then
+            echo "Through the runner's Connect server."
+          else
+            echo "OP_SERVICE_ACCOUNT_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "With the service account."
+          fi
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
         if: ${{ inputs.tooling-ref == '' }}
@@ -166,7 +180,6 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.op-service-account-token }}
           REGISTRY_ENDPOINT: op://${{ env.VAULT }}/bucket-registry/endpoint
           REGISTRY_REGION: op://${{ env.VAULT }}/bucket-registry/region
           REGISTRY_ACCESS_KEY: op://${{ env.VAULT }}/bucket-registry/access-key-id
@@ -177,7 +190,6 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.op-service-account-token }}
           APP_PRIVATE_KEY: op://${{ env.VAULT }}/github-app/private-key
           APP_CLIENT_ID: op://${{ env.VAULT }}/github-app/client-id
       - name: Load the cloud's keys and the relay from the vault
@@ -186,7 +198,6 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.op-service-account-token }}
           EXOSCALE_API_KEY: op://${{ env.VAULT }}/exoscale/ci-launch/key
           EXOSCALE_API_SECRET: op://${{ env.VAULT }}/exoscale/ci-launch/secret
           SELF_DELETE_KEY: op://${{ env.VAULT }}/exoscale/ci-selfdelete/key
@@ -203,8 +214,6 @@ jobs:
       # the step above; what it reads here is registered as no secret.
       - name: Read the relay's port from the vault
         if: ${{ inputs.strategy == 'hybrid' }}
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.op-service-account-token }}
         run: echo "SMTP_PORT=$(op read "op://${VAULT}/smtp-relay/port")" >> "$GITHUB_ENV"
       # Into the job's home, not /usr/local: a small or medium slot of a runner
       # host (actions_runners) runs with no-new-privileges, so sudo is no option.
@@ -292,6 +301,20 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     steps:
+      # How the job reads the vault (§ 8 PLX-Delivery): a slot of a runner host
+      # carries its Connect server's address and token (actions_runners), and
+      # every other runner gets the service account's. Never both: each read
+      # would warn, and a slot's job has no use for the service account.
+      - name: How the vault is read
+        env:
+          TOKEN: ${{ secrets.op-service-account-token }}
+        run: |
+          if [ -n "${OP_CONNECT_HOST:-}" ] && [ -n "${OP_CONNECT_TOKEN:-}" ]; then
+            echo "Through the runner's Connect server."
+          else
+            echo "OP_SERVICE_ACCOUNT_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "With the service account."
+          fi
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
         if: ${{ inputs.tooling-ref == '' }}
@@ -320,7 +343,6 @@ jobs:
         if: ${{ matrix.build }}
         uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.op-service-account-token }}
           NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: op://${{ env.VAULT }}/app_${{ matrix.app }}/server-actions-key
       - name: Load the registry's keys from the vault
         if: ${{ inputs.registry == 'own' && inputs.strategy != 'hybrid' }}
@@ -328,7 +350,6 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.op-service-account-token }}
           REGISTRY_ENDPOINT: op://${{ env.VAULT }}/bucket-registry/endpoint
           REGISTRY_REGION: op://${{ env.VAULT }}/bucket-registry/region
           REGISTRY_ACCESS_KEY: op://${{ env.VAULT }}/bucket-registry/access-key-id
@@ -396,6 +417,20 @@ jobs:
     continue-on-error: true
     runs-on: ${{ inputs.strategy == 'github' && 'ubuntu-latest' || 'ci-small' }}
     steps:
+      # How the job reads the vault (§ 8 PLX-Delivery): a slot of a runner host
+      # carries its Connect server's address and token (actions_runners), and
+      # every other runner gets the service account's. Never both: each read
+      # would warn, and a slot's job has no use for the service account.
+      - name: How the vault is read
+        env:
+          TOKEN: ${{ secrets.op-service-account-token }}
+        run: |
+          if [ -n "${OP_CONNECT_HOST:-}" ] && [ -n "${OP_CONNECT_TOKEN:-}" ]; then
+            echo "Through the runner's Connect server."
+          else
+            echo "OP_SERVICE_ACCOUNT_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "With the service account."
+          fi
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
         if: ${{ inputs.tooling-ref == '' }}
@@ -422,7 +457,6 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.op-service-account-token }}
           EXOSCALE_API_KEY: op://${{ env.VAULT }}/exoscale/ci-launch/key
           EXOSCALE_API_SECRET: op://${{ env.VAULT }}/exoscale/ci-launch/secret
           APP_PRIVATE_KEY: op://${{ env.VAULT }}/github-app/private-key

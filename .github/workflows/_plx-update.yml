@@ -1,0 +1,136 @@
+name: _plx-update
+
+# Mounts the update verb (§ 3 PLX-Updates): the repo takes a version itself, by
+# its step and a schedule, not whenever one is cut. `plx update` asks the forge
+# for the versions (the compendium's releases) and decides: a patch (a hotfix)
+# is taken at once; a minor (routine) once the oldest version the repo has not
+# taken is as old as its interval (the repo's answer `update_max_age`, 7 days
+# unless it says otherwise); a major (a changed contract) only when asked
+# (`now`, or a `version` named), which takes the newest version, or the one
+# named, whatever its step. Otherwise the repo rests, and the run says why in
+# one line and ends green. Taking a version is copier update at every
+# site in a worktree of the branch the version lands on, the marker, the
+# lockfile, the workflow refs, and the pull request on `plexus/<version>`. A
+# branch already on origin is never moved, so a scheduled run cannot overwrite
+# a conflict somebody is resolving. The caller pins plx in its mise.toml, so
+# the pull is made by the tool of the version the repo rests on; a change to the
+# pull itself therefore takes effect one pull late.
+#
+# The push and the pull request are made with a token minted for the tenant's
+# one GitHub App, the App its CI uses (§ 8 PLX-Delivery), scoped to this repo
+# with contents, pull requests and workflows write: the branch's tip then runs
+# the repo's checks and the pull request is opened by an identity the tenant
+# controls; a push with the workflow token starts no run and may not change a
+# workflow file, which every version does. The App's client ID and key come
+# from the forge (`gh-client-id`, `gh-private-key`) or, without them, from the
+# vault's item `github-app`; a repo that has neither fails here and says so.
+# A platform repo's own runner has no `gh`; mise brings it.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The version to take; empty for the template's newest release.
+        required: false
+        type: string
+        default: ''
+      now:
+        description: >-
+          Take the newest version whatever its step: somebody asks. The
+          callers pass true on their manual trigger and false on the schedule.
+        required: false
+        type: boolean
+        default: false
+      strategy:
+        description: >-
+          Where the job runs (§ 8 PLX-Delivery): `github`, the forge's runners;
+          `on-prem` or `hybrid`, a small slot of the tenant's runner host.
+        required: false
+        type: string
+        default: github
+      gh-client-id:
+        description: >-
+          The client ID of the tenant's GitHub App, with `gh-private-key`; the
+          callers pass the variable `GH_CLIENT_ID`. Empty: the App's
+          credentials are read from the vault's item `github-app`.
+        required: false
+        type: string
+        default: ''
+      vault:
+        description: The vault CI reads (§ 3 PLX-Secrets). Default <owner>-ci.
+        required: false
+        type: string
+        default: ''
+    secrets:
+      gh-private-key:
+        description: The private key of the App named by `gh-client-id`; the callers pass the secret `GH_PRIVATE_KEY`.
+        required: false
+      op-service-account-token:
+        description: >-
+          The vault's service account token, when the App's credentials are
+          in the vault; a slot with a Connect server needs none.
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  VAULT: ${{ inputs.vault || format('{0}-ci', github.repository_owner) }}
+
+jobs:
+  update:
+    runs-on: ${{ inputs.strategy == 'github' && 'ubuntu-latest' || 'ci-small' }}
+    steps:
+      # The App's credentials, from the forge or from the vault, and red when
+      # neither is there. The vault is read as every job reads it (§ 8
+      # PLX-Delivery): through the Connect server of a runner host's slot,
+      # with the service account everywhere else, never with both.
+      - name: Where the App's credentials come from
+        id: source
+        env:
+          CLIENT_ID: ${{ inputs.gh-client-id }}
+          PRIVATE_KEY: ${{ secrets.gh-private-key }}
+          TOKEN: ${{ secrets.op-service-account-token }}
+        run: |
+          if [ -n "$CLIENT_ID" ] && [ -n "$PRIVATE_KEY" ]; then
+            echo "source=forge" >> "$GITHUB_OUTPUT"
+            echo "From the variable GH_CLIENT_ID and the secret GH_PRIVATE_KEY."
+          elif [ -n "${OP_CONNECT_HOST:-}" ] && [ -n "${OP_CONNECT_TOKEN:-}" ]; then
+            echo "source=vault" >> "$GITHUB_OUTPUT"
+            echo "From the vault $VAULT, through the runner's Connect server."
+          elif [ -n "$TOKEN" ]; then
+            echo "source=vault" >> "$GITHUB_OUTPUT"
+            echo "OP_SERVICE_ACCOUNT_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "From the vault $VAULT, with the service account."
+          else
+            echo "::error::No credentials for the tenant's GitHub App: set the variable GH_CLIENT_ID and the secret GH_PRIVATE_KEY, or the secret OP_SERVICE_ACCOUNT_TOKEN of a vault that holds the item github-app (client-id, private-key)."
+            exit 1
+          fi
+      - name: Load the App's key from the vault
+        if: ${{ steps.source.outputs.source == 'vault' }}
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: true
+        env:
+          APP_CLIENT_ID: op://${{ env.VAULT }}/github-app/client-id
+          APP_PRIVATE_KEY: op://${{ env.VAULT }}/github-app/private-key
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ steps.source.outputs.source == 'forge' && inputs.gh-client-id || env.APP_CLIENT_ID }}
+          private-key: ${{ steps.source.outputs.source == 'forge' && secrets.gh-private-key || env.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+      - uses: jdx/mise-action@v5
+      - run: command -v gh >/dev/null || mise use --global gh@latest
+      - run: plx -y update ${{ inputs.version != '' && format('--to {0}', inputs.version) || '' }} ${{ inputs.now && '--now' || '' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GIT_AUTHOR_NAME: plx[bot]
+          GIT_AUTHOR_EMAIL: plx-bot@users.noreply.github.com
+          GIT_COMMITTER_NAME: plx[bot]
+          GIT_COMMITTER_EMAIL: plx-bot@users.noreply.github.com

@@ -96,9 +96,21 @@ jobs:
     concurrency:
       group: deploy-${{ inputs.app }}-${{ inputs.environment }}
       cancel-in-progress: false
-    env:
-      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.op-service-account-token }}
     steps:
+      # How the job reads the vault (§ 8 PLX-Delivery): a slot of a runner host
+      # carries its Connect server's address and token (actions_runners), and
+      # every other runner gets the service account's. Never both: each read
+      # would warn, and a slot's job has no use for the service account.
+      - name: How the vault is read
+        env:
+          TOKEN: ${{ secrets.op-service-account-token }}
+        run: |
+          if [ -n "${OP_CONNECT_HOST:-}" ] && [ -n "${OP_CONNECT_TOKEN:-}" ]; then
+            echo "Through the runner's Connect server."
+          else
+            echo "OP_SERVICE_ACCOUNT_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "With the service account."
+          fi
       # The caller's repo (the app's source repo) — cwd for the verb, which
       # reads apps/<app>/ relative here. Same SHA the image was built from.
       - uses: actions/checkout@v7

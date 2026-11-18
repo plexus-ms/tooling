@@ -98,6 +98,20 @@ jobs:
         include: ${{ fromJSON(inputs.apps) }}
     runs-on: ${{ inputs.strategy == 'github' && 'ubuntu-latest' || 'ci-small' }}
     steps:
+      # How the job reads the vault (§ 8 PLX-Delivery): a slot of a runner host
+      # carries its Connect server's address and token (actions_runners), and
+      # every other runner gets the service account's. Never both: each read
+      # would warn, and a slot's job has no use for the service account.
+      - name: How the vault is read
+        env:
+          TOKEN: ${{ secrets.op-service-account-token }}
+        run: |
+          if [ -n "${OP_CONNECT_HOST:-}" ] && [ -n "${OP_CONNECT_TOKEN:-}" ]; then
+            echo "Through the runner's Connect server."
+          else
+            echo "OP_SERVICE_ACCOUNT_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "With the service account."
+          fi
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
         if: ${{ inputs.tooling-ref == '' }}
@@ -125,7 +139,6 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.op-service-account-token }}
           REGISTRY_ENDPOINT: op://${{ env.VAULT }}/bucket-registry/endpoint
           REGISTRY_REGION: op://${{ env.VAULT }}/bucket-registry/region
           REGISTRY_ACCESS_KEY: op://${{ env.VAULT }}/bucket-registry/access-key-id
