@@ -1367,6 +1367,7 @@ test('update: a pending patch is taken at once; a pending major is named, and ta
     has(rest.out, '• platform: rests — 1.0.0 is a new major, taken only when asked (plx update --now takes 1.0.0)'),
     rest.out,
   );
+  assert.equal(rest.out.split('1.0.0 is a new major').length - 1, 1, `said once:\n${rest.out}`);
   assert.throws(() => onVersion('acme-platform', '1.0.0', 'template-owned.txt'));
   const asked = await runUpdate({ yes: true }, { repo: plat, now: true });
   assert.equal(asked.error, undefined, asked.out);

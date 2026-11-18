@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_MAX_AGE, maxAgeOf, needOf, parseMaxAge, type Release } from './need.ts';
+import { DEFAULT_MAX_AGE, maxAgeOf, type Need, needOf, parseMaxAge, type Release } from './need.ts';
 
 const releases: Release[] = [
   { version: '0.3.0', published: '2026-02-25T10:00:00Z' },
@@ -52,38 +52,84 @@ test('an interval of zero takes every version', () => {
   assert.equal(needOf({ ...base, maxAge: 0, recorded: ['0.3.0'] }).take, false, 'nothing newer, nothing to take');
 });
 
-test('a pending patch is taken at once, and with it the newest of the major', () => {
+test('a pending patch is taken at once, the newest pending one, and the newest of the major waits for the interval', () => {
+  // A hotfix of the minor line the repo is on, a day old, cut before a minor: the hotfix alone.
   const hotfix = [cut('0.1.0', '2026-01-01'), cut('0.1.1', '2026-02-28'), cut('0.2.0', '2026-02-28')];
-  // A hotfix of the minor line the repo is on, a day old: the newest of the major comes with it.
   assert.deepEqual(needOf({ ...base, releases: hotfix }), {
     take: true,
-    version: '0.2.0',
-    why: '0.1.1 is a hotfix, taken at once (2 newer versions)',
+    version: '0.1.1',
+    why: '0.1.1 is a hotfix, taken at once (1 newer version); 0.2.0 waits for the interval',
   });
-  // The newest of the major is a patch release: taken at once.
+  // Any pending patch within the major is a hotfix, whichever line it repairs: ship tags main, so it carries
+  // every version before it. The newest pending one is taken.
+  const later = [
+    cut('0.1.0', '2026-01-01'),
+    cut('0.2.0', '2026-02-27'),
+    cut('0.2.1', '2026-02-28'),
+    cut('0.3.0', '2026-02-28'),
+    cut('0.3.1', '2026-02-28'),
+    cut('0.4.0', '2026-02-28'),
+  ];
+  assert.deepEqual(needOf({ ...base, releases: later }), {
+    take: true,
+    version: '0.3.1',
+    why: '0.3.1 is a hotfix, taken at once (4 newer versions); 0.4.0 waits for the interval',
+  });
+  // The newest of the major is a patch release: it is the hotfix.
   const newest = [cut('0.1.0', '2026-01-01'), cut('0.2.0', '2026-02-28'), cut('0.2.1', '2026-02-28')];
   assert.deepEqual(needOf({ ...base, releases: newest }), {
     take: true,
     version: '0.2.1',
     why: '0.2.1 is a hotfix, taken at once (2 newer versions)',
   });
+  // Once the interval is due, or is zero, the newest of the major comes, over the hotfix.
+  const taken = (need: Need) => need.take && need.version;
+  assert.equal(taken(needOf({ ...base, releases: later, now: on('2026-03-29') })), '0.4.0', 'due');
+  assert.equal(taken(needOf({ ...base, releases: later, maxAge: 0 })), '0.4.0', 'zero');
 });
 
-test('a hotfix of a minor line the repo never had, under a newer minor, does not hurry it', () => {
-  const older = [
-    cut('0.1.0', '2026-01-01'),
-    cut('0.2.0', '2026-02-27'),
-    cut('0.2.1', '2026-02-28'),
-    cut('0.3.0', '2026-02-28'),
-  ];
-  assert.deepEqual(needOf({ ...base, releases: older }), {
-    take: false,
-    why: '3 newer versions, the oldest (0.2.0) cut 2 days ago; the interval is 30 days',
+test('simulation: a hotfix waits unmerged while a minor is cut every day; the daily run asks for the hotfix once, then the minors once due', () => {
+  // Day 0 cuts the hotfix 0.1.1, day n the minor 0.(n+1).0, each at 10:00; the run is at 12:00. Nothing is
+  // merged, so the repo stays on 0.1.0; a version whose branch is on origin is not asked for again.
+  const day = (n: number) => new Date(Date.parse('2026-03-01T00:00:00Z') + n * 86_400_000).toISOString().slice(0, 10);
+  const cuts = [cut('0.1.0', '2026-01-01'), cut('0.1.1', day(0))];
+  for (let n = 1; n < 14; n++) cuts.push(cut(`0.${n + 1}.0`, day(n)));
+  const branches = new Set<string>();
+  const asked: string[] = [];
+  for (let n = 0; n < 14; n++) {
+    const now = new Date(`${day(n)}T12:00:00Z`);
+    const releases = cuts.filter((r) => Date.parse(r.published) <= now.getTime());
+    const need = needOf({ recorded: ['0.1.0'], releases, maxAge: DEFAULT_MAX_AGE, now });
+    if (!need.take || branches.has(need.version)) continue;
+    branches.add(need.version);
+    asked.push(`day ${n}: ${need.version}`);
+  }
+  // The hotfix at once; nothing while it waits; from the day the hotfix, the oldest version not taken, is a week
+  // old, the newest of the major, which with nothing merged is a new version, and a new pull request, each day.
+  assert.deepEqual(asked, [
+    'day 0: 0.1.1',
+    'day 7: 0.8.0',
+    'day 8: 0.9.0',
+    'day 9: 0.10.0',
+    'day 10: 0.11.0',
+    'day 11: 0.12.0',
+    'day 12: 0.13.0',
+    'day 13: 0.14.0',
+  ]);
+});
+
+test('a release whose date does not parse counts as old enough', () => {
+  const odd = [cut('0.1.0', '2026-01-01'), { version: '0.2.0', published: 'soon' }, cut('0.3.0', '2026-02-28')];
+  assert.deepEqual(needOf({ ...base, releases: odd }), {
+    take: true,
+    version: '0.3.0',
+    why: "0.2.0 has no readable release date ('soon'), so it counts as old enough (2 newer versions)",
   });
 });
 
 test('a pending major is not taken unasked: it is named, and the repo goes on within its own major', () => {
   const major = [cut('0.1.0', '2026-01-01'), cut('1.0.0', '2026-01-10')];
+  // When the major is all that is pending it is the reason, and not named a second time beside it.
   assert.deepEqual(needOf({ ...base, releases: major }), {
     take: false,
     why: '1.0.0 is a new major, taken only when asked',
@@ -105,11 +151,22 @@ test('a pending major is not taken unasked: it is named, and the repo goes on wi
   });
 });
 
-test('a site that records no version is brought onto the newest one', () => {
-  assert.match(needOf({ ...base, recorded: ['0.3.0', 'a1b2c3d'] }).why, /a site records 'a1b2c3d', not a version/);
-  const none = needOf({ ...base, recorded: [undefined] });
-  assert.equal(none.take && none.version, '0.3.0');
-  assert.match(none.why, /a site records no version/);
+test('a site that records no version is brought onto the newest version of the major the others record', () => {
+  const major = [...releases, cut('1.0.0', '2026-02-28')];
+  assert.deepEqual(needOf({ ...base, releases: major, recorded: ['0.3.0', 'a1b2c3d'] }), {
+    take: true,
+    version: '0.3.0',
+    why: "a site records 'a1b2c3d', not a version",
+    held: '1.0.0 is a new major, taken only when asked',
+  });
+  const one = needOf({ ...base, recorded: ['0.1.0', undefined] });
+  assert.equal(one.take && one.version, '0.3.0');
+  // With no site to say which major, nothing is taken unasked; the caller names the newest to ask for.
+  assert.deepEqual(needOf({ ...base, releases: major, recorded: [undefined] }), {
+    take: false,
+    why: 'a site records no version, not a version, and no site records one',
+  });
+  assert.equal(needOf({ ...base, recorded: ['a1b2c3d'] }).take, false);
 });
 
 test('the interval of a repo is its answer, 7 days when the answers do not say', () => {
@@ -144,19 +201,19 @@ const NOVEMBER: Release[] = [
   ['0.115.0', '2026-11-10T17:31:32Z'],
 ].map(([version = '', published = '']) => ({ version, published }));
 
-test('replay: a quiet repo on 0.102.0 takes the versions of 2026-11-01 to 2026-11-10 in one pull, a week on', () => {
+test('replay: a quiet repo on 0.102.0 takes the hotfix of 2026-11-05 at once and the rest in one pull, a week on', () => {
   const daily = (from: string, days: number) =>
     Array.from({ length: days }, (_, i) => new Date(Date.parse(`${from}T06:23:00Z`) + i * 86_400_000));
   let current = '0.102.0';
   const pulls: string[] = [];
-  for (const now of daily('2026-11-01', 10)) {
+  for (const now of daily('2026-11-01', 14)) {
     const releases = NOVEMBER.filter((r) => Date.parse(r.published) <= now.getTime());
     const need = needOf({ recorded: [current], releases, maxAge: DEFAULT_MAX_AGE, now });
     if (!need.take) continue;
     current = need.version;
     pulls.push(`${now.toISOString().slice(0, 10)} ${need.version}`);
   }
-  // 0.103.0 was cut on 2026-11-01 in the evening: the scheduled run of 2026-11-09 is the first a week past it.
-  // 0.106.1 repaired a minor line the repo never had, and was not the newest for long: it hurried nothing.
-  assert.deepEqual(pulls, ['2026-11-09 0.112.0']);
+  // 0.106.1, cut on 2026-11-05, is a hotfix: the run of 2026-11-06 takes it, and with it 0.103.0 to 0.106.0,
+  // before 0.103.0 was a week old. 0.107.0 was cut that afternoon: the run of 2026-11-13 is the first a week past it.
+  assert.deepEqual(pulls, ['2026-11-06 0.106.1', '2026-11-13 0.115.0']);
 });
