@@ -95,11 +95,45 @@ sed -i.bak 's/^_commit: .*/_commit: next/' .copier-answers.yml && rm -f .copier-
 `,
 );
 // Fake mise: logs, and runs the pinned copier (`mise exec copier@X -- copier …`)
-// as the fake copier above; anything else it only logs.
+// as the fake copier above. `mise run verify` in a template is its newborn
+// test: two newborn repos (shapes `one` and `two`) rendered as copier
+// would, each a git repo with a marker, under a directory made in TMPDIR,
+// named by `kept: <dir>` under KEEP=1 as the real tests do, with each step
+// announced as `→ <shape>: <step>`; it logs the environment ship gives it.
+// `mise tasks ls --json` in a newborn lists the contract verbs from its own
+// mise.toml. Knobs:
+//   FAKE_NEWBORN_CHECK_FAIL=<template>   its newborn's check fails, in shape two
+//   FAKE_NEWBORN_DOCTOR_FAIL=<template>  its newborn one has no `verify` task
+// Anything else it only logs.
 script(
   'mise',
   `echo "mise $* ignored=\${MISE_IGNORED_CONFIG_PATHS:-}" >> "$FAKE_LOG"
 if [ "$1" = exec ] && [[ "$2" == copier@* ]] && [ "$3" = -- ]; then shift 3; exec "$@"; fi
+if [ "$1 $2" = "run verify" ]; then
+  t="$(basename "$PWD")"
+  echo "verify[$t] KEEP=\${KEEP:-} TURBO_TEMPLATE=\${TURBO_TEMPLATE:-} TURBO_REF=\${TURBO_REF:-} TMPDIR=\${TMPDIR:-}" >> "$FAKE_LOG"
+  tmp="$(mktemp -d "\${TMPDIR:-/tmp}/newborn.XXXXXX")"
+  [ -z "\${KEEP:-}" ] || trap 'echo "kept: $tmp"' EXIT
+  for shape in one two; do
+    echo "→ $shape: render"
+    git init --quiet "$tmp/$shape"
+    printf -- '---\\n---\\n\\n- A newborn.\\n' > "$tmp/$shape/PLEXUS.md"
+    tasks="dev build verify lint check test"
+    [ "\${FAKE_NEWBORN_DOCTOR_FAIL:-}" != "$t" ] || [ "$shape" != one ] || tasks="dev build lint check test"
+    echo "$tasks" > "$tmp/$shape/mise.toml"
+    echo "→ $shape: check"
+    if [ "\${FAKE_NEWBORN_CHECK_FAIL:-}" = "$t" ] && [ "$shape" = two ]; then
+      echo "Error: the newborn's check fails on purpose" >&2; echo "[check] ERROR task failed" >&2; exit 1
+    fi
+    echo "✓ $shape"
+  done
+  exit 0
+fi
+if [ "$1 $2" = "tasks ls" ]; then
+  src="$(pwd -P)/mise.toml"; sep=; printf '['
+  for task in $(cat mise.toml); do printf '%s{"name":"%s","source":"%s"}' "$sep" "$task" "$src"; sep=,; done
+  echo ']'
+fi
 `,
 );
 script(
@@ -418,6 +452,19 @@ const consumersUntouched = () => {
   }
 };
 
+/** The newborn tests ship ran, in order: `<template> KEEP=… TURBO_TEMPLATE=… TURBO_REF=… TMPDIR=…`. */
+const verifies = () =>
+  fakeLog()
+    .filter((l) => l.startsWith('verify['))
+    .map((l) => l.replace(/^verify\[([^\]]+)\]/, '$1'));
+/** Every newborn test's scratch directory is gone. */
+const newbornsRemoved = () => {
+  for (const v of verifies()) {
+    const dir = /TMPDIR=(\S+)$/.exec(v)?.[1] ?? '';
+    assert.ok(dir && !existsSync(dir), `scratch of ${v} removed`);
+  }
+};
+
 // ── scenarios ────────────────────────────────────────────────────────────────
 test('dry run previews both phases and the propagation in scratch clones, and changes nothing', async () => {
   fixture('dry');
@@ -482,6 +529,17 @@ test('dry run previews both phases and the propagation in scratch clones, and ch
   );
   assert.ok(!has(out, 'marker:'), 'the marker carries no version, so nothing syncs it');
   assert.ok(has(out, 'acme/platform: apps.yml workflow refs → @0.2.0'), 'preview lists the ref bumps');
+  assert.deepEqual(
+    verifies().map((v) => v.replace(/ TMPDIR=.*/, '')),
+    [
+      'template-repo-turbo KEEP=1 TURBO_TEMPLATE= TURBO_REF=',
+      `template-app-nextjs KEEP=1 TURBO_TEMPLATE=${up('template-repo-turbo')} TURBO_REF=HEAD`,
+      'template-repo-operations KEEP=1 TURBO_TEMPLATE= TURBO_REF=',
+    ],
+    'the dry run tries every template as a newborn, the app around the Turborepo template being cut',
+  );
+  assert.ok(has(out, '✓ template-app-nextjs: one, two'), 'and the doctor over each newborn');
+  newbornsRemoved();
   assert.ok(has(out, '(preview) acme/web: would commit, push plexus/0.2.0 and open a pull request against develop'));
   assert.ok(has(out, '(preview) acme/platform: would commit, push plexus/0.2.0 and open a pull request against main'));
   assert.ok(!fakeLog().some((l) => has(l, 'pr create')), 'no pull request opened');
@@ -507,6 +565,9 @@ test('happy path: tooling first, the npm wait, the rest, and no pull request in 
   assert.equal(error, undefined, out);
   assert.ok(allTagged('0.2.0'), 'all five repos tagged 0.2.0 locally and on origin');
   assert.ok(allReleased('0.2.0'), 'a release on every versioned repo');
+  assert.equal(verifies().length, 3, 'every template passed as a newborn first');
+  assert.ok(out.indexOf('✓ template-repo-operations: one, two') < out.indexOf('→ phase: tooling'), 'before phase one');
+  newbornsRemoved();
 
   // Phase one: tooling's bookkeeping, tag, release.
   const prim = up('tooling');
@@ -883,6 +944,56 @@ test('a versioned repo that fails plx requirements stops the version before anyt
   assert.match(dry.error ?? '', /plx requirements fails in 2 versioned repos/);
 });
 
+test('a template whose newborn test fails stops the version before anything is written or tagged', async () => {
+  fixture('newborn-check');
+  process.env.FAKE_NEWBORN_CHECK_FAIL = 'template-repo-operations';
+  const refused = await run({ yes: true });
+  const dry = await run({ dryRun: true });
+  delete process.env.FAKE_NEWBORN_CHECK_FAIL;
+  assert.match(refused.error ?? '', /^1 template fails as a newborn repo:$/m);
+  assert.match(refused.error ?? '', /^ {2}template-repo-operations:\n {4}✗ its newborn test fails at two: check$/m);
+  assert.ok(has(refused.error ?? '', "      │ Error: the newborn's check fails on purpose\n"), refused.error);
+  assert.ok(!has(refused.error ?? '', '[check] ERROR task failed'), "mise's chain of failed tasks is not quoted");
+  assert.ok(has(refused.error ?? '', '    ✓ plx doctor passes one, two'), 'what the test left is examined too');
+  assert.ok(
+    has(refused.error ?? '', `    to reproduce: (cd ${up('template-repo-operations')} && KEEP=1 mise run verify)`),
+    refused.error,
+  );
+  assert.ok(!has(refused.error ?? '', 'template-repo-turbo:'), 'the passing templates are not named');
+  assert.ok(has(refused.out, '✓ template-repo-turbo: one, two'));
+  assert.ok(noneTagged('0.2.0'), 'nothing tagged');
+  assert.equal(git(up('tooling'), 'log', '-1', '--format=%s'), 'initial', 'no bookkeeping');
+  assert.ok(!fakeLog().some((l) => has(l, 'release create')), 'no release');
+  newbornsRemoved();
+  // The dry run refuses the same way: it is meant to show everything that would stop the real run.
+  assert.match(dry.error ?? '', /template-repo-operations:\n {4}✗ its newborn test fails at two: check/);
+});
+
+test('a newborn that fails a doctor check stops the version and names the requirement', async () => {
+  fixture('newborn-doctor');
+  process.env.FAKE_NEWBORN_DOCTOR_FAIL = 'template-repo-turbo';
+  const { error } = await run({ yes: true });
+  delete process.env.FAKE_NEWBORN_DOCTOR_FAIL;
+  assert.match(error ?? '', /^1 template fails as a newborn repo:$/m);
+  assert.ok(
+    has(
+      error ?? '',
+      [
+        '  template-repo-turbo:',
+        '    ✗ newborn one fails plx doctor: 2 findings',
+        '      ✗ PLX-Repo/Verbs: no root mise task `verify`',
+        '      ✗ PLX-Repo/SubVerbs: no root mise task `verify`',
+        '    ✓ plx doctor passes two',
+      ].join('\n'),
+    ),
+    error,
+  );
+  assert.ok(!has(error ?? '', 'its newborn test fails'), 'the test itself passed');
+  assert.ok(noneTagged('0.2.0'));
+  assert.equal(git(up('tooling'), 'log', '-1', '--format=%s'), 'initial', 'no bookkeeping');
+  newbornsRemoved();
+});
+
 test("a run that stops at the compendium's release leaves the version unseen by any repo; the re-run releases it", async () => {
   fixture('last-release');
   process.env.FAKE_GH_CREATE_FAIL = 'compendium';
@@ -904,8 +1015,10 @@ test("a run that stops at the compendium's release leaves the version unseen by 
   git(comp, 'push', '--quiet', 'origin', 'main');
 
   // The re-run comes a few days later: the map keeps the date it was stamped with.
+  const tried = verifies().length;
   const second = await run({ yes: true }, { to: '0.2.0', today: '2026-01-05' });
   assert.equal(second.error, undefined, second.out);
+  assert.equal(verifies().length, tried, 'a template tagged with the version is not tried again');
   assert.match(read(join(comp, 'essentials/standard.md')), /^timestamp: 2026-01-02$/m);
   assert.equal(git(comp, 'log', '--format=%s', '0.2.0..main'), 'beta sharpens its requirement', 'no commit of its own');
   assert.ok(has(second.out, '• compendium: already tagged 0.2.0'));

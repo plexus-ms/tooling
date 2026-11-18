@@ -5,7 +5,9 @@
 //   tags in agreement; gh logged in; no mutable release on any versioned repo;
 //   `plx requirements` passing in every versioned repo, as this source checks
 //   it; on a re-run, the compendium still yielding the citable index tooling
-//   was tagged with, and no bookkeeping left to write in a repo already tagged)
+//   was tagged with, and no bookkeeping left to write in a repo already tagged;
+//   every template being cut passing its newborn test, and every newborn it
+//   renders passing the doctor as this source checks it, newborn.ts)
 //   → phase one: tooling's bookkeeping (galaxy versions, the Plexus-versioned
 //     packages' manifests, its own workflow refs, the citable index read from
 //     the compendium), commit, tag, push, GitHub
@@ -79,6 +81,7 @@ import {
   stampStandard,
   today as todayOf,
 } from './bookkeeping.ts';
+import { preflightNewborns } from './newborn.ts';
 import { previewConsumers } from './preview.ts';
 import {
   latestTag,
@@ -131,6 +134,7 @@ export async function ship(ctx: Context, options: ShipOptions): Promise<ShipResu
   await preflightIndex(ctx, versioned, next);
   const today = options.today ?? todayOf();
   await preflightAfterTag(ctx, versioned, next, today);
+  await preflightNewborns(ctx, versioned, next);
   await release(ctx, versioned, next, today, { ...DEFAULT_WAIT, ...options.wait });
   if (ctx.dryRun) return { ...(await previewConsumers(ctx, options.workspace, next)), released: true };
   ctx.say(`• Plexus ${next} is cut; every repo takes it itself, by its step and a schedule (plx update)`);
