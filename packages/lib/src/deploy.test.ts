@@ -180,6 +180,26 @@ test('an unhealthy app rolls back to the previous file and reports it', async ()
   assert.match(err(), /✓ rolled back to ghcr.io\/x\/web:old/);
 });
 
+test('the rollback waits as long as the deploy: --retries looks for both, one look for "already live"', async () => {
+  const h = host('ghcr.io/x/web:old');
+  const { ctx, commands } = harness(checkout, h);
+  const result = await deploy(ctx, {
+    host: 'deploy@h',
+    app: 'web',
+    image: 'ghcr.io/x/web:bad',
+    dir: '/repo',
+    retries: 7,
+  });
+  assert.equal(result.rolledBack, true);
+  const waits = commands.filter((c) => c.includes('.State.Health.Status')).map((c) => /seq 1 (\d+)/.exec(c)?.[1]);
+  assert.deepEqual(waits, ['7', '7']);
+
+  const same = harness(checkout, host('ghcr.io/x/web:same'));
+  await deploy(same.ctx, { host: 'deploy@h', app: 'web', image: 'ghcr.io/x/web:same', dir: '/repo', retries: 7 });
+  const looks = same.commands.filter((c) => c.includes('.State.Health.Status')).map((c) => /seq 1 (\d+)/.exec(c)?.[1]);
+  assert.deepEqual(looks, ['1']);
+});
+
 test('a first deploy that is unhealthy has nothing to roll back to', async () => {
   const h = host(undefined);
   const { ctx, commands, err } = harness(checkout, h);
