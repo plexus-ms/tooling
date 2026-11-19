@@ -15,6 +15,7 @@ config_roots = ["packages/*"]
 [tools]
 node = "24" # the runtime; actions/setup-node reads it from here too
 hk = "latest" # Git hooks
+python = "3.14" # mise's Python keeps the uv tools' environments inside the cached data directory
 uv = "latest" # required for ansible
 ansible = { version = "latest", uvx = true } # syntax check of the roles
 "pipx:ansible-lint" = { version = "latest", uvx = true } # the roles' static check
