@@ -16,13 +16,6 @@ hooks {
       }
     }
   }
-  ["commit-msg"] {
-    steps {
-      ["issue-id"] {
-        check = "pnpm plx requirements --commit-msg {{commit_msg_file}}"
-      }
-    }
-  }
   ["pre-push"] {
     steps {
       ["check"] {
