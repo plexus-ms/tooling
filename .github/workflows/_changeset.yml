@@ -13,10 +13,11 @@ name: _changeset
 #
 # A push with the workflow's own token starts no workflow run, so the branch's
 # new tip would carry no checks and a ruleset that requires them would block
-# the merge. The caller passes either a GitHub App of the tenant's own
-# (`app_id` and `app_private_key`, contents write on the repo; the key never
-# expires and the token is minted per job) or `token`, a fine-grained PAT,
-# which expires and then degrades silently to the workflow token.
+# the merge. The push is therefore made with a token minted for the tenant's
+# one GitHub App, the App its CI uses (§ 8 PLX-Delivery), scoped to this repo
+# with contents write. The App's client ID and key come from the forge
+# (`gh-client-id`, `gh-private-key`) or, without them, from the vault's item
+# `github-app`; a repo that has neither fails here and says so.
 
 on:
   workflow_call:
@@ -33,27 +34,34 @@ on:
         required: false
         type: string
         default: github
-      app_id:
+      gh-client-id:
         description: >-
-          The ID of a GitHub App installed on the repo with contents write;
-          with `app_private_key`, the push is made with a token minted for
-          this job. Empty: `token` or the workflow token is used.
+          The client ID of the tenant's GitHub App, with `gh-private-key`; the
+          callers pass the variable `GH_CLIENT_ID`. Empty: the App's
+          credentials are read from the vault's item `github-app`.
+        required: false
+        type: string
+        default: ''
+      vault:
+        description: The vault CI reads (§ 3 PLX-Secrets). Default <owner>-ci.
         required: false
         type: string
         default: ''
     secrets:
-      app_private_key:
-        description: The private key of the app named by `app_id`.
+      gh-private-key:
+        description: The private key of the App named by `gh-client-id`; the callers pass the secret `GH_PRIVATE_KEY`.
         required: false
-      token:
+      op-service-account-token:
         description: >-
-          A token whose push starts the caller's workflows (a fine-grained PAT
-          with contents write), when no app is passed. Without either the push
-          uses the workflow token and the branch's new tip carries no checks.
+          The vault's service account token, when the App's credentials are
+          in the vault; a slot with a Connect server needs none.
         required: false
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  VAULT: ${{ inputs.vault || format('{0}-ci', github.repository_owner) }}
 
 jobs:
   changeset:
@@ -63,17 +71,50 @@ jobs:
     env:
       HK_SKIP_HOOK: pre-commit,pre-push
     steps:
-      - id: app
-        if: ${{ inputs.app_id != '' }}
-        uses: actions/create-github-app-token@v3
+      # The App's credentials, from the forge or from the vault, and red when
+      # neither is there. The vault is read as every job reads it (§ 8
+      # PLX-Delivery): through the Connect server of a runner host's slot,
+      # with the service account everywhere else, never with both.
+      - name: Where the App's credentials come from
+        id: source
+        env:
+          CLIENT_ID: ${{ inputs.gh-client-id }}
+          PRIVATE_KEY: ${{ secrets.gh-private-key }}
+          TOKEN: ${{ secrets.op-service-account-token }}
+        run: |
+          if [ -n "$CLIENT_ID" ] && [ -n "$PRIVATE_KEY" ]; then
+            echo "source=forge" >> "$GITHUB_OUTPUT"
+            echo "From the variable GH_CLIENT_ID and the secret GH_PRIVATE_KEY."
+          elif [ -n "${OP_CONNECT_HOST:-}" ] && [ -n "${OP_CONNECT_TOKEN:-}" ]; then
+            echo "source=vault" >> "$GITHUB_OUTPUT"
+            echo "From the vault $VAULT, through the runner's Connect server."
+          elif [ -n "$TOKEN" ]; then
+            echo "source=vault" >> "$GITHUB_OUTPUT"
+            echo "OP_SERVICE_ACCOUNT_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "From the vault $VAULT, with the service account."
+          else
+            echo "::error::No credentials for the tenant's GitHub App: set the variable GH_CLIENT_ID and the secret GH_PRIVATE_KEY, or the secret OP_SERVICE_ACCOUNT_TOKEN of a vault that holds the item github-app (client-id, private-key)."
+            exit 1
+          fi
+      - name: Load the App's key from the vault
+        if: ${{ steps.source.outputs.source == 'vault' }}
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
         with:
-          app-id: ${{ inputs.app_id }}
-          private-key: ${{ secrets.app_private_key }}
+          export-env: true
+        env:
+          APP_CLIENT_ID: op://${{ env.VAULT }}/github-app/client-id
+          APP_PRIVATE_KEY: op://${{ env.VAULT }}/github-app/private-key
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ steps.source.outputs.source == 'forge' && inputs.gh-client-id || env.APP_CLIENT_ID }}
+          private-key: ${{ steps.source.outputs.source == 'forge' && secrets.gh-private-key || env.APP_PRIVATE_KEY }}
+          permission-contents: write
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
-          token: ${{ steps.app.outputs.token || secrets.token || github.token }}
+          token: ${{ steps.app.outputs.token }}
       - uses: jdx/mise-action@v5
       - run: plx -y changeset --base 'origin/${{ inputs.base }}'
       - run: |

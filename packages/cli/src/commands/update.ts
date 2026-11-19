@@ -4,7 +4,7 @@
 // taken at once, a minor (routine) once the oldest version not taken is as old
 // as the repo's interval, a major (a changed contract) only when asked (--now,
 // or --to); otherwise the repo rests and says why. Mounted by the templates'
-// update.yml on a schedule in the tenant's own CI, and run by hand from a
+// plx-update.yml on a schedule in the tenant's own CI, and run by hand from a
 // checkout otherwise; the checkout itself is never touched.
 //
 //   plx update                      # the version the schedule takes, if any
