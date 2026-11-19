@@ -18,10 +18,10 @@ test('the override’s x-plexus-ci.env is the specs’ environment, beside the p
 });
 
 test('every stack command names the project and both files', () => {
-  assert.deepEqual(composeArgs('ci-vernier-app'), [
+  assert.deepEqual(composeArgs('ci-my-app'), [
     'compose',
     '--project-name',
-    'ci-vernier-app',
+    'ci-my-app',
     '--file',
     'compose.yaml',
     '--file',

@@ -247,7 +247,7 @@ test('createInstances launches every leg and fails as one when a launch does', a
     [
       // The fake forge knows one runner, so both legs ask for its label.
       { label: 'exo-large-41-website-1', app: 'website' },
-      { label: 'exo-large-41-website-1', app: 'vernier-app' },
+      { label: 'exo-large-41-website-1', app: 'my-app' },
     ],
     shared,
   );

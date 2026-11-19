@@ -6,7 +6,7 @@
 // publishes the app on. Prints the tested digest, and writes it to
 // GITHUB_OUTPUT when that is set.
 //
-//   plx-ci test vernier-app d135e9416e1cf4e8 5b052598a4d84145
+//   plx-ci test my-app d135e9416e1cf4e8 5b052598a4d84145
 import { appendFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Command } from 'commander';

@@ -8,20 +8,20 @@ const dryRun = JSON.stringify({
   tasks: [
     { taskId: '@damage-ms/website#build', package: '@damage-ms/website', hash: '0f2a', command: 'next build' },
     { taskId: '@damage-ms/website#test', package: '@damage-ms/website', hash: 'dc97', command: '<NONEXISTENT>' },
-    { taskId: '@damage-ms/vernier-core#build', package: '@damage-ms/vernier-core', hash: '4b6a' },
-    { taskId: '@damage-ms/vernier-app#build', package: '@damage-ms/vernier-app', hash: 'c51b', command: 'next build' },
-    { taskId: '@damage-ms/vernier-app#test', package: '@damage-ms/vernier-app', hash: '5b05', command: 'pnpm test' },
+    { taskId: '@damage-ms/my-lib#build', package: '@damage-ms/my-lib', hash: '4b6a' },
+    { taskId: '@damage-ms/my-app#build', package: '@damage-ms/my-app', hash: 'c51b', command: 'next build' },
+    { taskId: '@damage-ms/my-app#test', package: '@damage-ms/my-app', hash: '5b05', command: 'pnpm test' },
     { taskId: '@other/x#build', package: '@other/x', hash: 'ffff', command: 'x' },
   ],
 });
-const packages = { website: '@damage-ms/website', 'vernier-app': '@damage-ms/vernier-app' };
+const packages = { website: '@damage-ms/website', 'my-app': '@damage-ms/my-app' };
 const hashes = hashesOf(dryRun, packages);
 const run = { runId: '41', attempt: '1' };
 
 test('hashesOf keeps the build hash of each app’s package, and the test hash where the script exists', () => {
   assert.deepEqual(hashes, [
     { app: 'website', hash: '0f2a' },
-    { app: 'vernier-app', hash: 'c51b', test: '5b05' },
+    { app: 'my-app', hash: 'c51b', test: '5b05' },
   ]);
   assert.deepEqual(hashesOf(dryRun, { nope: '@damage-ms/nope' }), []);
 });
@@ -52,8 +52,8 @@ test('a leg names its runner from the strategy: the forge’s, a large slot, or 
   assert.equal(legsOf(['website'], hashes, 'build', 'github', run)[0]?.runner, 'ubuntu-latest');
   assert.equal(legsOf(['website'], hashes, 'build', 'on-prem', run)[0]?.runner, 'ci-large');
   assert.deepEqual(
-    legsOf(['vernier-app'], hashes, 'repro', 'hybrid', { runId: '41', attempt: '2' }).map((l) => l.runner),
-    ['exo-large-41-vernier-app-2-1', 'exo-large-41-vernier-app-2-2'],
+    legsOf(['my-app'], hashes, 'repro', 'hybrid', { runId: '41', attempt: '2' }).map((l) => l.runner),
+    ['exo-large-41-my-app-2-1', 'exo-large-41-my-app-2-2'],
   );
   assert.throws(() => legsOf(['nope'], hashes, 'build', 'hybrid', run), /no build hash for nope/);
 });
@@ -73,22 +73,19 @@ test('the environment follows the branch on a push or a run by hand, and a given
 });
 
 test('deployLegsOf: an app with a target deploys the commit’s image there, one without is named', () => {
-  assert.deepEqual(
-    deployLegsOf(['website', 'vernier-app'], { website: 'ssh://plexus@vm101' }, 'ghcr.io/Damage-MS', 'abc'),
-    {
-      legs: [{ app: 'website', host: 'ssh://plexus@vm101', image: 'ghcr.io/damage-ms/website:abc' }],
-      without: ['vernier-app'],
-    },
-  );
+  assert.deepEqual(deployLegsOf(['website', 'my-app'], { website: 'ssh://plexus@vm101' }, 'ghcr.io/Damage-MS', 'abc'), {
+    legs: [{ app: 'website', host: 'ssh://plexus@vm101', image: 'ghcr.io/damage-ms/website:abc' }],
+    without: ['my-app'],
+  });
 });
 
 test('the plan skips what the registry holds, per build and per test, and plans the deploys of an environment', async () => {
-  // The pair holds website's build and nothing of vernier-app.
+  // The pair holds website's build and nothing of my-app.
   const io = fakeIo({}, undefined, {
     curl: (_cwd, args) => (args.at(-1)?.endsWith(':5000/v2/website/manifests/build-0f2a') ? '' : notThere('curl')),
   });
   const result = await plan(new Context({}, io), {
-    apps: ['website', 'vernier-app'],
+    apps: ['website', 'my-app'],
     mode: 'build',
     tests: true,
     hashes,
@@ -97,20 +94,20 @@ test('the plan skips what the registry holds, per build and per test, and plans 
     run,
     deploy: {
       environment: 'staging',
-      targets: { 'vernier-app': 'ssh://plexus@vm101' },
+      targets: { 'my-app': 'ssh://plexus@vm101' },
       prefix: 'ghcr.io/damage-ms',
       sha: 'abc',
     },
   });
-  // One leg, one instance: vernier-app's build and its test after it.
+  // One leg, one instance: my-app's build and its test after it.
   assert.deepEqual(result.legs, [
-    { app: 'vernier-app', hash: 'c51b', runner: 'exo-large-41-vernier-app-1', n: 1, build: true, test: '5b05' },
+    { app: 'my-app', hash: 'c51b', runner: 'exo-large-41-my-app-1', n: 1, build: true, test: '5b05' },
   ]);
   assert.deepEqual(result.skipped, [{ app: 'website', hash: '0f2a', ref: 'localhost:5000/website:build-0f2a' }]);
   assert.deepEqual(result.apps, hashes);
   assert.equal(result.environment, 'staging');
   assert.deepEqual(result.deploys, [
-    { app: 'vernier-app', host: 'ssh://plexus@vm101', image: 'ghcr.io/damage-ms/vernier-app:abc' },
+    { app: 'my-app', host: 'ssh://plexus@vm101', image: 'ghcr.io/damage-ms/my-app:abc' },
   ]);
 });
 
@@ -119,7 +116,7 @@ test('an app whose build the registry holds and whose test it does not gets a le
     curl: (_cwd, args) => (args.at(-1)?.includes('/manifests/build-') ? '' : notThere('curl')),
   });
   const result = await plan(new Context({}, io), {
-    apps: ['website', 'vernier-app'],
+    apps: ['website', 'my-app'],
     mode: 'build',
     tests: true,
     hashes,
@@ -128,12 +125,12 @@ test('an app whose build the registry holds and whose test it does not gets a le
     run,
   });
   assert.deepEqual(result.legs, [
-    { app: 'vernier-app', hash: 'c51b', runner: 'exo-large-41-vernier-app-1', n: 1, build: false, test: '5b05' },
+    { app: 'my-app', hash: 'c51b', runner: 'exo-large-41-my-app-1', n: 1, build: false, test: '5b05' },
   ]);
   assert.equal(result.skipped.length, 2);
   // Without --test and in repro mode no leg tests.
   const builds = await plan(new Context({}, io), {
-    apps: ['vernier-app'],
+    apps: ['my-app'],
     mode: 'repro',
     tests: true,
     hashes,

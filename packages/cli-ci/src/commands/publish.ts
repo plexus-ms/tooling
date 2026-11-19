@@ -8,7 +8,7 @@
 // GITHUB_OUTPUT when that is set.
 //
 //   plx-ci publish website 0f2a3f35123dfd73 "$GITHUB_SHA"
-//   plx-ci publish vernier-app d135e9416e1cf4e8 "$GITHUB_SHA" --test 5b052598a4d84145
+//   plx-ci publish my-app d135e9416e1cf4e8 "$GITHUB_SHA" --test 5b052598a4d84145
 import { appendFileSync } from 'node:fs';
 import type { Command } from 'commander';
 import { publish } from '../core/publish.ts';

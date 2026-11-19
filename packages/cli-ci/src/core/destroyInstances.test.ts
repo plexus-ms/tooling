@@ -31,7 +31,7 @@ test('selectRunInstances takes this run and attempt, spares kept instances, and 
 test('selectRunRegistrations matches every label shape of the run and leaves busy ones', () => {
   const runners = [
     { id: 1, name: 'exo-large-41836428433-website-1', status: 'offline', busy: false },
-    { id: 2, name: 'exo-large-41836428433-vernier-app-1-2', status: 'online', busy: false },
+    { id: 2, name: 'exo-large-41836428433-my-app-1-2', status: 'online', busy: false },
     { id: 3, name: 'exo-dummy-41836428433-1-orphan', status: 'offline', busy: false },
     { id: 4, name: 'exo-large-41836428433-website-1', status: 'online', busy: true },
     { id: 5, name: 'exo-large-99-website-1', status: 'offline', busy: false },
@@ -63,7 +63,7 @@ function fakeExo(instances: Instance[], refusals: Record<string, number>) {
 
 test('destroyInstances deletes the others when one is refused, and asks again for that one', async () => {
   const starting = { ...instance('exo-large-41836428433-website-1', {}), state: 'starting' };
-  const running = instance('exo-large-41836428433-vernier-app-1', {});
+  const running = instance('exo-large-41836428433-my-app-1', {});
   const { exo, calls } = fakeExo([starting, running], { [starting.id]: 2 });
   const waits: number[] = [];
   const done = await destroyInstances(quiet, exo, undefined, run, { wait: async (ms) => void waits.push(ms) });
@@ -74,7 +74,7 @@ test('destroyInstances deletes the others when one is refused, and asks again fo
 
 test('destroyInstances fails after the last retry, naming what is left, with the others deleted', async () => {
   const stuck = { ...instance('exo-large-41836428433-website-1', {}), state: 'starting' };
-  const running = instance('exo-large-41836428433-vernier-app-1', {});
+  const running = instance('exo-large-41836428433-my-app-1', {});
   const { exo, calls } = fakeExo([stuck, running], { [stuck.id]: 99 });
   await assert.rejects(
     destroyInstances(quiet, exo, undefined, run, { retries: 2, wait: async () => undefined }),

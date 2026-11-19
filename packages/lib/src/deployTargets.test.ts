@@ -68,15 +68,15 @@ test('one app, two environments: two records, on one VM or on two, and targetsIn
     {
       path: 'inventory/host_vars/vm102.yml',
       target: 'ssh://deploy@vm102',
-      apps: [{ app: 'vernier-app', environment: 'staging' }],
+      apps: [{ app: 'my-app', environment: 'staging' }],
     },
-    { path: 'inventory/host_vars/vm103.yml', target: 'ssh://deploy@vm103', apps: [prod('vernier-app')] },
+    { path: 'inventory/host_vars/vm103.yml', target: 'ssh://deploy@vm103', apps: [prod('my-app')] },
   ]);
   assert.deepEqual(map, {
-    'vernier-app': { production: 'ssh://deploy@vm103', staging: 'ssh://deploy@vm102' },
+    'my-app': { production: 'ssh://deploy@vm103', staging: 'ssh://deploy@vm102' },
     website: { production: 'ssh://deploy@vm101', staging: 'ssh://deploy@vm101' },
   });
-  assert.deepEqual(targetsIn(map, 'staging'), { 'vernier-app': 'ssh://deploy@vm102', website: 'ssh://deploy@vm101' });
+  assert.deepEqual(targetsIn(map, 'staging'), { 'my-app': 'ssh://deploy@vm102', website: 'ssh://deploy@vm101' });
   assert.deepEqual(targetsIn(map, 'preview'), {});
 });
 

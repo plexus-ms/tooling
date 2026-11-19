@@ -18,7 +18,7 @@ test('a publish copies the tested manifest when the forge’s registry lacks it,
       curl: (_cwd, args) => (args.at(-1)?.includes(':5000/') ? '' : notThere('curl')),
     });
   const options = {
-    app: 'vernier-app',
+    app: 'my-app',
     build: 'b1',
     test: 't1',
     sha: 'deadbeef',
@@ -32,9 +32,9 @@ test('a publish copies the tested manifest when the forge’s registry lacks it,
   assert.deepEqual(
     calls.filter((c) => c[0] !== 'digest'),
     [
-      ['copy', '--insecure', 'localhost:5000/vernier-app:test-t1', 'ghcr.io/damage-ms/vernier-app:build-b1'],
-      ['tag', 'ghcr.io/damage-ms/vernier-app:build-b1', 'deadbeef'],
-      ['tag', 'ghcr.io/damage-ms/vernier-app:build-b1', 'test-t1'],
+      ['copy', '--insecure', 'localhost:5000/my-app:test-t1', 'ghcr.io/damage-ms/my-app:build-b1'],
+      ['tag', 'ghcr.io/damage-ms/my-app:build-b1', 'deadbeef'],
+      ['tag', 'ghcr.io/damage-ms/my-app:build-b1', 'test-t1'],
     ],
   );
 
@@ -43,7 +43,7 @@ test('a publish copies the tested manifest when the forge’s registry lacks it,
   assert.equal(tagged.copied, false);
   assert.deepEqual(
     calls.filter((c) => c[0] !== 'digest'),
-    [['tag', 'ghcr.io/damage-ms/vernier-app:build-b1', 'deadbeef']],
+    [['tag', 'ghcr.io/damage-ms/my-app:build-b1', 'deadbeef']],
   );
 });
 
