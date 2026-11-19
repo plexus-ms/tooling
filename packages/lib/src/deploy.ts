@@ -14,9 +14,10 @@
 // swapped into place only once pull and migrate have succeeded, so the compose
 // file on the host always names the image it serves, and a failed deploy
 // leaves the host exactly as it was. Three files in the app dir, one writer
-// each (PLX-Secrets): the configure playbook owns .env and .env.secret, this
-// verb owns compose.yaml. Compose reads .env implicitly, so every command here
-// and by a human is a bare `docker compose …` in the app dir.
+// each (PLX-Secrets): the platform playbook owns .env (its `apps` role) and
+// .env.secret (its `secrets` role), this verb owns compose.yaml. Compose
+// reads .env implicitly, so every command here and by a human is a bare
+// `docker compose …` in the app dir.
 //
 // Every command sent to the host is one line of shell over ssh, carried in
 // the plan and printed verbatim by the dry run, so a stranded operator copies

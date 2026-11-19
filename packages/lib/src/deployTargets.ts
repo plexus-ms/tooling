@@ -4,13 +4,14 @@
 // An inventory file, host_vars for a VM or group_vars for a group, carries
 // `plexus_deploy_target` (ssh://<deploy user>@<address>[:<port>]) and the
 // `plexus_apps` records it hosts, each with a `name` and an optional
-// `environment` (`production` when absent). The verb maps every deployment, an app in
-// an environment, of a file that names a target to that target; a deployment
-// whose file carries no target is left out, so the mount falls back to its one
-// DEPLOY_HOST for it. The same app may have one record per environment, on
-// the same VM or on two; the same app in the same environment declared in two
-// files that both name a target has no one place to deploy to, and that is an
-// error, never a pick.
+// `environment` (`production` when absent). The verb maps every deployment,
+// an app in an environment, of a file that names a target to that target. A
+// deployment whose file carries no target is left out of the map, so the app
+// has no target in that environment: `--apps` gives it no leg and says it has
+// no deployment there, as `plx-ci plan` does, and no mount deploys it. The
+// same app may have one record per environment, on the same VM or on two;
+// the same app in the same environment declared in two files that both name
+// a target has no one place to deploy to, and that is an error, never a pick.
 //
 //   plx deploy-targets [inventory]                    # {"app": {"production": "ssh://...", "staging": "ssh://..."}, ...}
 //   plx deploy-targets --environment production [inventory] # {"app": "ssh://...", ...}, one environment, flat
