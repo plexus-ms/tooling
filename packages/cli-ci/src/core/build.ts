@@ -6,6 +6,14 @@
 // cannot export a registry cache, and localhost:5000 is the sidecar there); a
 // launched instance has bootstrapped it by the time the job starts, anywhere
 // else the build creates it.
+//
+// The pruned context is `turbo prune <app's package> --docker` into a
+// temporary directory: `json/` with the package manifests alone, `full/` with
+// the app and the workspace packages it uses, whole, and the lockfile reduced
+// to them beside the two. The build context is `full/`, with the lockfile and
+// the repo's root .dockerignore copied in and an empty packages/ made where
+// the app uses none; the Dockerfile is apps/<app>/docker/Dockerfile in it.
+// `json/` goes unused. The directory is removed after the build.
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
