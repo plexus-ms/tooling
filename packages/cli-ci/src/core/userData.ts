@@ -33,9 +33,9 @@ export const RUNNER_USER_DATA = `#cloud-config
 #             armed with the others as the first run command; the daily
 #             sweep removes a stopped instance
 #
-# No bootcmd: a scheduled \`shutdown\` there runs before logind exists, and
-# cloud-init never got past it (the hostname stayed \`localhost\`, no network,
-# no SSH), so every layer is a systemd timer started in runcmd.
+# No bootcmd: a \`shutdown\` scheduled there runs before logind exists, and
+# cloud-init does not get past it (the hostname stays \`localhost\`, no
+# network, no SSH), so every layer is a systemd timer started in runcmd.
 #
 # The self-delete key and the registry bucket's write key sit in
 # /etc/plexus-ci/env, readable by root; the job that runs here could read
@@ -75,10 +75,10 @@ write_files:
   # The cloud's API with curl, signed with the self-delete key (EXO2-HMAC-SHA256,
   # as egoscale signs: method and path, body, the query's values, the signed
   # headers, the expiry, each on a line). Nothing to download: the instance's
-  # own rescue must not depend on the forge or a release server, which were
-  # the ones down when twelve instances missed on 2026-11-08. The env file is
-  # sourced exported (set -a), so that a timer's service without HOME or a
-  # login environment has the key all the same.
+  # own rescue must not depend on the forge or a release server, which can be
+  # down exactly when instances miss their boot. The env file is sourced
+  # exported (set -a), so that a timer's service without HOME or a login
+  # environment has the key all the same.
   #
   #   plexus-ci-exo-api METHOD /v2/<path> [BODY]
   - path: /usr/local/sbin/plexus-ci-exo-api
@@ -138,9 +138,9 @@ write_files:
     content: |
       #!/bin/sh
       # Layer 1b: the runner spawns a Worker process for a job and nothing
-      # else, and logs it as _diag/Worker_*.log; _work itself exists empty
-      # from the runner's start (seen 2026-11-04). No Worker log by
-      # now means no job ever came, and nothing will.
+      # else, and logs it as _diag/Worker_*.log; _work itself exists, empty,
+      # from the runner's start, so it tells nothing. No Worker log by now
+      # means no job ever came, and nothing will.
       set -u
       if ! ls /opt/runner/_diag/Worker_*.log >/dev/null 2>&1; then
         logger -t plexus-ci "no job started, deleting"
@@ -210,9 +210,9 @@ write_files:
 
   # Frees the dpkg lock for the run commands. The image is weeks old, so
   # apt-daily-upgrade's persistent timer catches up seconds into the boot, and
-  # unattended-upgrades then holds the lock for about a minute: every apt-get
-  # here failed at once, there was no docker and no runner user, and the
-  # launch kept the instance as a stalled boot. Waiting on the lock costs that
+  # unattended-upgrades then holds the lock for about a minute, in which every
+  # apt-get here fails at once: no docker, no runner user, and the launch
+  # keeps the instance as a stalled boot. Waiting on the lock costs that
   # minute, so the instance, which lives under an hour, masks the apt timers
   # and services (they never start after this), kills whatever of them
   # already runs, dpkg children included (systemctl kill takes the unit's
