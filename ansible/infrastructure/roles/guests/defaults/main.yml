@@ -10,7 +10,7 @@
 # gateway and is first reached through it as jump host.
 #   guests_list:
 #     - vmid: 101
-#       name: vm101
+#       name: host-a
 #       description: what it is for
 #       cores: 2
 #       memory: 4096

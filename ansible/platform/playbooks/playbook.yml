@@ -5,7 +5,7 @@
 #
 #   ansible-playbook plexus.platform.playbook                       # everything
 #   ansible-playbook plexus.platform.playbook --tags apps,secrets   # the everyday pass
-#   ansible-playbook plexus.platform.playbook --limit vm101 --tags ingress
+#   ansible-playbook plexus.platform.playbook --limit host-a --tags ingress
 #
 # Tags: every play carries its layer (`host`, `platform`) and every role its
 # own name, so `--tags platform` is the whole layer and `--tags apps` one role.

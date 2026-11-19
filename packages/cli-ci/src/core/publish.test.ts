@@ -22,7 +22,7 @@ test('a publish copies the tested manifest when the forge’s registry lacks it,
     build: 'b1',
     test: 't1',
     sha: 'deadbeef',
-    prefix: 'ghcr.io/damage-ms',
+    prefix: 'ghcr.io/acme',
     registry: own,
   };
 
@@ -32,9 +32,9 @@ test('a publish copies the tested manifest when the forge’s registry lacks it,
   assert.deepEqual(
     calls.filter((c) => c[0] !== 'digest'),
     [
-      ['copy', '--insecure', 'localhost:5000/my-app:test-t1', 'ghcr.io/damage-ms/my-app:build-b1'],
-      ['tag', 'ghcr.io/damage-ms/my-app:build-b1', 'deadbeef'],
-      ['tag', 'ghcr.io/damage-ms/my-app:build-b1', 'test-t1'],
+      ['copy', '--insecure', 'localhost:5000/my-app:test-t1', 'ghcr.io/acme/my-app:build-b1'],
+      ['tag', 'ghcr.io/acme/my-app:build-b1', 'deadbeef'],
+      ['tag', 'ghcr.io/acme/my-app:build-b1', 'test-t1'],
     ],
   );
 
@@ -43,7 +43,7 @@ test('a publish copies the tested manifest when the forge’s registry lacks it,
   assert.equal(tagged.copied, false);
   assert.deepEqual(
     calls.filter((c) => c[0] !== 'digest'),
-    [['tag', 'ghcr.io/damage-ms/my-app:build-b1', 'deadbeef']],
+    [['tag', 'ghcr.io/acme/my-app:build-b1', 'deadbeef']],
   );
 });
 

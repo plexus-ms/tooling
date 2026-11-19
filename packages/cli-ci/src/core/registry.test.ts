@@ -32,10 +32,10 @@ test('where :5000 answers already, nothing is started and no key is needed', asy
       return '';
     },
   });
-  const sidecars = await startSidecars(new Context({}, io), undefined, 'damage-ms', november);
+  const sidecars = await startSidecars(new Context({}, io), undefined, 'acme', november);
   assert.deepEqual(sidecars, {
-    current: 'damage-ms-ci-registry-2026-11',
-    previous: 'damage-ms-ci-registry-2026-10',
+    current: 'acme-ci-registry-2026-11',
+    previous: 'acme-ci-registry-2026-10',
     previousAnswers: false,
   });
   assert.deepEqual(commands, ['curl http://127.0.0.1:5000/v2/', 'curl http://127.0.0.1:5001/v2/']);
@@ -44,13 +44,13 @@ test('where :5000 answers already, nothing is started and no key is needed', asy
 test('where nothing answers, the key is needed', async () => {
   const io = fakeIo({}, undefined, { curl: () => undefined });
   await assert.rejects(
-    startSidecars(new Context({}, io), undefined, 'damage-ms', november),
+    startSidecars(new Context({}, io), undefined, 'acme', november),
     /REGISTRY_ENDPOINT, REGISTRY_REGION, REGISTRY_ACCESS_KEY and REGISTRY_SECRET_KEY are needed/,
   );
 });
 
 test('the image name is the lower-cased prefix and the app', () => {
-  assert.equal(imageName('ghcr.io/Damage-MS/', 'website'), 'ghcr.io/damage-ms/website');
+  assert.equal(imageName('ghcr.io/Acme/', 'website'), 'ghcr.io/acme/website');
 });
 
 test('a candidate is written to this month’s sidecar, or to the forge’s registry', () => {
@@ -180,18 +180,18 @@ test('rotate creates this month’s bucket when it is missing and removes the on
     },
   });
   const storage = { endpoint: 'https://s3.example/', region: 'r1', accessKey: 'k', secretKey: 's' };
-  const result = await rotateBuckets(new Context({}, io), storage, 'damage-ms', november);
-  assert.deepEqual(result, { created: 'damage-ms-ci-registry-2026-11', removed: 'damage-ms-ci-registry-2026-09' });
+  const result = await rotateBuckets(new Context({}, io), storage, 'acme', november);
+  assert.deepEqual(result, { created: 'acme-ci-registry-2026-11', removed: 'acme-ci-registry-2026-09' });
   assert.deepEqual(calls, [
-    'HEAD /damage-ms-ci-registry-2026-11',
-    'PUT /damage-ms-ci-registry-2026-11',
-    'HEAD /damage-ms-ci-registry-2026-09',
-    'GET /damage-ms-ci-registry-2026-09?list-type=2&max-keys=1000',
-    'POST /damage-ms-ci-registry-2026-09?delete=',
-    'GET /damage-ms-ci-registry-2026-09?list-type=2&max-keys=1000',
-    'GET /damage-ms-ci-registry-2026-09?uploads=',
-    'DELETE /damage-ms-ci-registry-2026-09/docker/x%20y?uploadId=u1',
-    'DELETE /damage-ms-ci-registry-2026-09',
+    'HEAD /acme-ci-registry-2026-11',
+    'PUT /acme-ci-registry-2026-11',
+    'HEAD /acme-ci-registry-2026-09',
+    'GET /acme-ci-registry-2026-09?list-type=2&max-keys=1000',
+    'POST /acme-ci-registry-2026-09?delete=',
+    'GET /acme-ci-registry-2026-09?list-type=2&max-keys=1000',
+    'GET /acme-ci-registry-2026-09?uploads=',
+    'DELETE /acme-ci-registry-2026-09/docker/x%20y?uploadId=u1',
+    'DELETE /acme-ci-registry-2026-09',
   ]);
 });
 
@@ -208,10 +208,10 @@ test('a dry run of rotate lists once and deletes nothing; an answer outside 2xx 
       },
     });
   const storage = { endpoint: 'https://s3.example', region: 'r1', accessKey: 'k', secretKey: 's' };
-  await rotateBuckets(new Context({ dryRun: true }, io('200')), storage, 'damage-ms', november);
+  await rotateBuckets(new Context({ dryRun: true }, io('200')), storage, 'acme', november);
   assert.deepEqual(calls, ['HEAD', 'HEAD', 'GET']);
   await assert.rejects(
-    rotateBuckets(new Context({}, io('403')), storage, 'damage-ms', november),
-    /deleting 1 objects of damage-ms-ci-registry-2026-09 answered 403/,
+    rotateBuckets(new Context({}, io('403')), storage, 'acme', november),
+    /deleting 1 objects of acme-ci-registry-2026-09 answered 403/,
   );
 });

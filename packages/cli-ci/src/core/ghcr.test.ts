@@ -27,8 +27,8 @@ test('only a version older than thirty days whose every tag is a candidate’s g
 });
 
 test('an app’s package is named by what follows the owner in the prefix, and the app', () => {
-  assert.equal(packageOf('ghcr.io/Damage-MS', 'website'), 'website');
-  assert.equal(packageOf('ghcr.io/damage-ms/web/', 'app'), 'web/app');
+  assert.equal(packageOf('ghcr.io/Acme', 'website'), 'website');
+  assert.equal(packageOf('ghcr.io/acme/web/', 'app'), 'web/app');
 });
 
 test('prune takes the named packages only, skips one that does not exist, and deletes by the rule; a dry run deletes nothing', async () => {
@@ -37,7 +37,7 @@ test('prune takes the named packages only, skips one that does not exist, and de
     curl: (_cwd, _args, input = '') => {
       const method = input.match(/request = "(\w+)"/)?.[1];
       const url = input.match(/url = "([^"]+)"/)?.[1] ?? '';
-      calls.push(`${method} ${url.replace('https://api.github.com/orgs/damage-ms/packages', '')}`);
+      calls.push(`${method} ${url.replace('https://api.github.com/orgs/acme/packages', '')}`);
       assert.match(input, /Authorization: Bearer ghp_x/);
       if (method === 'DELETE') return '';
       if (url.includes('/container/website/'))
@@ -52,7 +52,7 @@ test('prune takes the named packages only, skips one that does not exist, and de
   });
   const ctx = new Context({}, io);
   const names = ['website', 'never-built', 'web/app'];
-  const pruned = await prune(ctx, new Packages(ctx, 'damage-ms', 'ghp_x'), names, now);
+  const pruned = await prune(ctx, new Packages(ctx, 'acme', 'ghp_x'), names, now);
   assert.deepEqual(pruned, [{ package: 'website', id: 1, tags: ['build-0f2a'] }]);
   assert.deepEqual(calls, [
     'GET /container/website/versions?per_page=100&page=1',
@@ -63,7 +63,7 @@ test('prune takes the named packages only, skips one that does not exist, and de
 
   calls.length = 0;
   const dry = new Context({ dryRun: true }, io);
-  assert.equal((await prune(dry, new Packages(dry, 'damage-ms', 'ghp_x'), names, now)).length, 1);
+  assert.equal((await prune(dry, new Packages(dry, 'acme', 'ghp_x'), names, now)).length, 1);
   assert.ok(!calls.some((c) => c.startsWith('DELETE')));
 });
 
@@ -74,5 +74,5 @@ test('a package API that refuses the token is an error, not a package that does 
     },
   });
   const ctx = new Context({}, io);
-  await assert.rejects(prune(ctx, new Packages(ctx, 'damage-ms', 'ghp_x'), ['website'], now), /401/);
+  await assert.rejects(prune(ctx, new Packages(ctx, 'acme', 'ghp_x'), ['website'], now), /401/);
 });

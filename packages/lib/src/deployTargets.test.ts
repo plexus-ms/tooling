@@ -12,8 +12,8 @@ import {
 import { fakeIo } from './testing/fakeIo.ts';
 import { UsageError } from './version.ts';
 
-const vm101 = `---
-plexus_deploy_target: "ssh://deploy@vm101.example:22"
+const hostA = `---
+plexus_deploy_target: "ssh://deploy@host-a.example:22"
 plexus_apps:
   - name: beszel
     source: plexus-ms-tenant/platform
@@ -24,9 +24,9 @@ other_key: x
 `;
 
 test('parseInventoryFile reads the target, the app names and their environments, production by default', () => {
-  assert.deepEqual(parseInventoryFile('inventory/host_vars/vm101.yml', vm101), {
-    path: 'inventory/host_vars/vm101.yml',
-    target: 'ssh://deploy@vm101.example:22',
+  assert.deepEqual(parseInventoryFile('inventory/host_vars/host-a.yml', hostA), {
+    path: 'inventory/host_vars/host-a.yml',
+    target: 'ssh://deploy@host-a.example:22',
     apps: [
       { app: 'beszel', environment: 'production' },
       { app: 'pocket-id', environment: 'production' },
@@ -47,36 +47,40 @@ const prod = (app: string) => ({ app, environment: 'production' });
 
 test('selectDeployTargets maps the deployments of files with a target, sorted, and skips files without one', () => {
   const map = selectDeployTargets([
-    { path: 'inventory/host_vars/vm102.yml', target: 'ssh://deploy@vm102', apps: [prod('website')] },
+    { path: 'inventory/host_vars/host-b.yml', target: 'ssh://deploy@host-b', apps: [prod('website')] },
     { path: 'inventory/group_vars/all.yml', apps: [prod('beszel')] },
-    { path: 'inventory/host_vars/vm101.yml', target: 'ssh://deploy@vm101', apps: [prod('beszel'), prod('pocket-id')] },
+    {
+      path: 'inventory/host_vars/host-a.yml',
+      target: 'ssh://deploy@host-a',
+      apps: [prod('beszel'), prod('pocket-id')],
+    },
   ]);
   assert.deepEqual(Object.entries(map), [
-    ['beszel', { production: 'ssh://deploy@vm101' }],
-    ['pocket-id', { production: 'ssh://deploy@vm101' }],
-    ['website', { production: 'ssh://deploy@vm102' }],
+    ['beszel', { production: 'ssh://deploy@host-a' }],
+    ['pocket-id', { production: 'ssh://deploy@host-a' }],
+    ['website', { production: 'ssh://deploy@host-b' }],
   ]);
 });
 
 test('one app, two environments: two records, on one VM or on two, and targetsIn picks one environment', () => {
   const map = selectDeployTargets([
     {
-      path: 'inventory/host_vars/vm101.yml',
-      target: 'ssh://deploy@vm101',
+      path: 'inventory/host_vars/host-a.yml',
+      target: 'ssh://deploy@host-a',
       apps: [prod('website'), { app: 'website', environment: 'staging' }],
     },
     {
-      path: 'inventory/host_vars/vm102.yml',
-      target: 'ssh://deploy@vm102',
+      path: 'inventory/host_vars/host-b.yml',
+      target: 'ssh://deploy@host-b',
       apps: [{ app: 'my-app', environment: 'staging' }],
     },
-    { path: 'inventory/host_vars/vm103.yml', target: 'ssh://deploy@vm103', apps: [prod('my-app')] },
+    { path: 'inventory/host_vars/host-c.yml', target: 'ssh://deploy@host-c', apps: [prod('my-app')] },
   ]);
   assert.deepEqual(map, {
-    'my-app': { production: 'ssh://deploy@vm103', staging: 'ssh://deploy@vm102' },
-    website: { production: 'ssh://deploy@vm101', staging: 'ssh://deploy@vm101' },
+    'my-app': { production: 'ssh://deploy@host-c', staging: 'ssh://deploy@host-b' },
+    website: { production: 'ssh://deploy@host-a', staging: 'ssh://deploy@host-a' },
   });
-  assert.deepEqual(targetsIn(map, 'staging'), { 'my-app': 'ssh://deploy@vm102', website: 'ssh://deploy@vm101' });
+  assert.deepEqual(targetsIn(map, 'staging'), { 'my-app': 'ssh://deploy@host-b', website: 'ssh://deploy@host-a' });
   assert.deepEqual(targetsIn(map, 'preview'), {});
 });
 
@@ -84,10 +88,10 @@ test('an app declared with a target in two files for the same environment is an 
   assert.throws(
     () =>
       selectDeployTargets([
-        { path: 'inventory/host_vars/vm101.yml', target: 'a', apps: [prod('beszel')] },
+        { path: 'inventory/host_vars/host-a.yml', target: 'a', apps: [prod('beszel')] },
         { path: 'inventory/group_vars/apphosts.yml', target: 'b', apps: [prod('beszel')] },
       ]),
-    /"beszel" in production.*inventory\/group_vars\/apphosts\.yml and inventory\/host_vars\/vm101\.yml/,
+    /"beszel" in production.*inventory\/group_vars\/apphosts\.yml and inventory\/host_vars\/host-a\.yml/,
   );
 });
 
@@ -101,12 +105,12 @@ test('readDeployTargets reads group_vars and host_vars, .yml and .yaml, and noth
   const io = fakeIo({
     inv: {
       group_vars: { 'all.yml': 'ansible_user: deploy\n', 'README.md': 'not yaml' },
-      host_vars: { 'vm101.yml': vm101, 'vm102.yaml': 'plexus_deploy_target: ssh://x\nplexus_apps: [{name: web}]\n' },
+      host_vars: { 'host-a.yml': hostA, 'host-b.yaml': 'plexus_deploy_target: ssh://x\nplexus_apps: [{name: web}]\n' },
     },
   });
   assert.deepEqual(await readDeployTargets(new Context({}, io), '/inv'), {
-    beszel: { production: 'ssh://deploy@vm101.example:22' },
-    'pocket-id': { production: 'ssh://deploy@vm101.example:22' },
+    beszel: { production: 'ssh://deploy@host-a.example:22' },
+    'pocket-id': { production: 'ssh://deploy@host-a.example:22' },
     web: { production: 'ssh://x' },
   });
 });
@@ -117,9 +121,9 @@ test('readDeployTargets: an inventory without vars dirs is empty, a missing one 
 });
 
 test('deployLegs: a leg per app of the repo with a target, sorted; the rest are named, and foreign records start nothing', () => {
-  const targets = { beszel: 'ssh://plexus@vm103', website: 'ssh://plexus@vm101' };
+  const targets = { beszel: 'ssh://plexus@host-c', website: 'ssh://plexus@host-a' };
   assert.deepEqual(deployLegs(targets, ['pocket-id', 'beszel']), {
-    legs: [{ app: 'beszel', host: 'ssh://plexus@vm103' }],
+    legs: [{ app: 'beszel', host: 'ssh://plexus@host-c' }],
     without: ['pocket-id'],
   });
   assert.deepEqual(deployLegs(targets, []), { legs: [], without: [] });

@@ -21,10 +21,10 @@ test('months roll over the year', () => {
 });
 
 test('the bucket names follow the convention', () => {
-  assert.deepEqual(registryBuckets('damage-ms', now), {
-    current: 'damage-ms-ci-registry-2026-11',
-    previous: 'damage-ms-ci-registry-2026-10',
-    expired: 'damage-ms-ci-registry-2026-09',
+  assert.deepEqual(registryBuckets('acme', now), {
+    current: 'acme-ci-registry-2026-11',
+    previous: 'acme-ci-registry-2026-10',
+    expired: 'acme-ci-registry-2026-09',
   });
-  assert.equal(turboBucket('damage-ms'), 'damage-ms-ci-turbo');
+  assert.equal(turboBucket('acme'), 'acme-ci-turbo');
 });

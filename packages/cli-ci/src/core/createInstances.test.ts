@@ -19,7 +19,7 @@ const now = new Date('2026-11-04T10:40:27Z');
 const options: LaunchOptions = {
   label: 'exo-large-41-website-1',
   app: 'website',
-  run: { repo: 'damage-ms/web', runId: '41', attempt: '1' },
+  run: { repo: 'acme/web', runId: '41', attempt: '1' },
   runnerToken: 'ghs_x',
   selfDelete: { key: 'EXOsd', secret: 'sd' },
   selfLayers: 'off',
@@ -39,8 +39,8 @@ const options: LaunchOptions = {
 test('the user-data is rendered with the run’s facts and the month’s buckets, and fits the API', () => {
   const text = renderUserData(options, 'JIT', now);
   assert.match(text, /^hostname: exo-large-41-website-1$/m);
-  assert.match(text, /REGISTRY_BUCKET=damage-ms-ci-registry-2026-11/);
-  assert.match(text, /REGISTRY_PREVIOUS_BUCKET=damage-ms-ci-registry-2026-10/);
+  assert.match(text, /REGISTRY_BUCKET=acme-ci-registry-2026-11/);
+  assert.match(text, /REGISTRY_PREVIOUS_BUCKET=acme-ci-registry-2026-10/);
   assert.match(text, /SELF_LAYERS=off/);
   assert.match(text, /content: "JIT"/);
   assert.ok(encodeUserData(text).length < DEFAULTS.userDataLimit);
@@ -49,7 +49,7 @@ test('the user-data is rendered with the run’s facts and the month’s buckets
 test('the labels carry what the cleanup and the sweep read', () => {
   assert.deepEqual(instanceLabels(options, '2026-11-04T10:50:27Z', '2026-11-04T11:25:27Z'), {
     'plexus-ci': 'true',
-    repo: 'damage-ms-web',
+    repo: 'acme-web',
     run: '41',
     attempt: '1',
     app: 'website',
@@ -88,7 +88,7 @@ test('launch: three lookups, JIT config, create, wait, online; the instance id c
     },
   });
   const ctx = new Context({}, io);
-  const result = await launch(ctx, new Exo(ctx, 'de-fra-1'), new GitHubRunners(ctx, 'damage-ms/web', 'ghs_x'), options);
+  const result = await launch(ctx, new Exo(ctx, 'de-fra-1'), new GitHubRunners(ctx, 'acme/web', 'ghs_x'), options);
   assert.equal(result.id, 'inst1');
   assert.equal(result.tries, 1);
   assert.deepEqual(result.kept, []);
@@ -97,7 +97,7 @@ test('launch: three lookups, JIT config, create, wait, online; the instance id c
     'exo list-templates',
     'exo list-instance-types',
     'exo list-security-groups',
-    'curl POST https://api.github.com/repos/damage-ms/web/actions/runners/generate-jitconfig',
+    'curl POST https://api.github.com/repos/acme/web/actions/runners/generate-jitconfig',
     'exo create-instance',
   ]);
   assert.ok(calls.includes('exo get-operation'));
@@ -122,7 +122,7 @@ test('launch under --dry-run performs nothing and reports the placeholder id', a
     },
   });
   const ctx = new Context({ dryRun: true }, io);
-  const result = await launch(ctx, new Exo(ctx, 'de-fra-1'), new GitHubRunners(ctx, 'damage-ms/web', 'ghs_x'), options);
+  const result = await launch(ctx, new Exo(ctx, 'de-fra-1'), new GitHubRunners(ctx, 'acme/web', 'ghs_x'), options);
   assert.equal(result.id, '<instance-id>');
 });
 
@@ -141,7 +141,7 @@ function world(online: (created: number) => boolean) {
         return '';
       }
       const method = input.match(/request = "(\w+)"/)?.[1];
-      calls.push(`curl ${method} ${url.replace('https://api.github.com/repos/damage-ms/web/actions/runners', '')}`);
+      calls.push(`curl ${method} ${url.replace('https://api.github.com/repos/acme/web/actions/runners', '')}`);
       if (url.includes('generate-jitconfig')) {
         registered += 1;
         return JSON.stringify({ encoded_jit_config: `JIT${registered}`, runner: { id: 70 + registered } });
@@ -183,7 +183,7 @@ function world(online: (created: number) => boolean) {
   return {
     ctx,
     exo: new Exo(ctx, 'de-fra-1'),
-    github: new GitHubRunners(ctx, 'damage-ms/web', 'ghs_x'),
+    github: new GitHubRunners(ctx, 'acme/web', 'ghs_x'),
     calls,
     updates,
     mails,
@@ -234,7 +234,7 @@ test('the mail about a kept instance names it, its id and its zone', () => {
   assert.match(mail.text, /kept as exo-large-41-website-1-kept/);
   assert.match(mail.text, /id {4}inst1/);
   assert.match(mail.text, /zone {2}de-fra-1/);
-  assert.match(mail.text, /damage-ms\/web run 41 attempt 1/);
+  assert.match(mail.text, /acme\/web run 41 attempt 1/);
 });
 
 test('createInstances launches every leg and fails as one when a launch does', async () => {

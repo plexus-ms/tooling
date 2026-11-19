@@ -6,7 +6,7 @@
 # plexus.infrastructure playbook first.
 #
 #   ansible-playbook plexus.ci.playbook
-#   ansible-playbook plexus.ci.playbook --limit vm109 --tags actions_runners
+#   ansible-playbook plexus.ci.playbook --limit runner-host --tags actions_runners
 #
 # Tags: every play carries its layer (`host`, `ci`) and every role its own
 # name. The slots mint their runner configs with the tenant's CI App and read

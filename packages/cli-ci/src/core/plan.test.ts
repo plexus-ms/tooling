@@ -6,15 +6,15 @@ import { deployLegsOf, environmentOf, hashesOf, legsOf, plan, readHashes, verbsO
 
 const dryRun = JSON.stringify({
   tasks: [
-    { taskId: '@damage-ms/website#build', package: '@damage-ms/website', hash: '0f2a', command: 'next build' },
-    { taskId: '@damage-ms/website#test', package: '@damage-ms/website', hash: 'dc97', command: '<NONEXISTENT>' },
-    { taskId: '@damage-ms/my-lib#build', package: '@damage-ms/my-lib', hash: '4b6a' },
-    { taskId: '@damage-ms/my-app#build', package: '@damage-ms/my-app', hash: 'c51b', command: 'next build' },
-    { taskId: '@damage-ms/my-app#test', package: '@damage-ms/my-app', hash: '5b05', command: 'pnpm test' },
+    { taskId: '@acme/website#build', package: '@acme/website', hash: '0f2a', command: 'next build' },
+    { taskId: '@acme/website#test', package: '@acme/website', hash: 'dc97', command: '<NONEXISTENT>' },
+    { taskId: '@acme/my-lib#build', package: '@acme/my-lib', hash: '4b6a' },
+    { taskId: '@acme/my-app#build', package: '@acme/my-app', hash: 'c51b', command: 'next build' },
+    { taskId: '@acme/my-app#test', package: '@acme/my-app', hash: '5b05', command: 'pnpm test' },
     { taskId: '@other/x#build', package: '@other/x', hash: 'ffff', command: 'x' },
   ],
 });
-const packages = { website: '@damage-ms/website', 'my-app': '@damage-ms/my-app' };
+const packages = { website: '@acme/website', 'my-app': '@acme/my-app' };
 const hashes = hashesOf(dryRun, packages);
 const run = { runId: '41', attempt: '1' };
 
@@ -23,7 +23,7 @@ test('hashesOf keeps the build hash of each app’s package, and the test hash w
     { app: 'website', hash: '0f2a' },
     { app: 'my-app', hash: 'c51b', test: '5b05' },
   ]);
-  assert.deepEqual(hashesOf(dryRun, { nope: '@damage-ms/nope' }), []);
+  assert.deepEqual(hashesOf(dryRun, { nope: '@acme/nope' }), []);
 });
 
 test('readHashes asks each app’s package.json for the name Turbo knows it by', async () => {
@@ -31,7 +31,7 @@ test('readHashes asks each app’s package.json for the name Turbo knows it by',
     {
       repo: {
         'package.json': JSON.stringify({ devDependencies: { turbo: '2.9.0' } }),
-        apps: { site: { 'package.json': JSON.stringify({ name: '@damage-ms/website' }) } },
+        apps: { site: { 'package.json': JSON.stringify({ name: '@acme/website' }) } },
       },
     },
     undefined,
@@ -73,8 +73,8 @@ test('the environment follows the branch on a push or a run by hand, and a given
 });
 
 test('deployLegsOf: an app with a target deploys the commit’s image there, one without is named', () => {
-  assert.deepEqual(deployLegsOf(['website', 'my-app'], { website: 'ssh://plexus@vm101' }, 'ghcr.io/Damage-MS', 'abc'), {
-    legs: [{ app: 'website', host: 'ssh://plexus@vm101', image: 'ghcr.io/damage-ms/website:abc' }],
+  assert.deepEqual(deployLegsOf(['website', 'my-app'], { website: 'ssh://plexus@host-a' }, 'ghcr.io/Acme', 'abc'), {
+    legs: [{ app: 'website', host: 'ssh://plexus@host-a', image: 'ghcr.io/acme/website:abc' }],
     without: ['my-app'],
   });
 });
@@ -94,8 +94,8 @@ test('the plan skips what the registry holds, per build and per test, and plans 
     run,
     deploy: {
       environment: 'staging',
-      targets: { 'my-app': 'ssh://plexus@vm101' },
-      prefix: 'ghcr.io/damage-ms',
+      targets: { 'my-app': 'ssh://plexus@host-a' },
+      prefix: 'ghcr.io/acme',
       sha: 'abc',
     },
   });
@@ -106,9 +106,7 @@ test('the plan skips what the registry holds, per build and per test, and plans 
   assert.deepEqual(result.skipped, [{ app: 'website', hash: '0f2a', ref: 'localhost:5000/website:build-0f2a' }]);
   assert.deepEqual(result.apps, hashes);
   assert.equal(result.environment, 'staging');
-  assert.deepEqual(result.deploys, [
-    { app: 'my-app', host: 'ssh://plexus@vm101', image: 'ghcr.io/damage-ms/my-app:abc' },
-  ]);
+  assert.deepEqual(result.deploys, [{ app: 'my-app', host: 'ssh://plexus@host-a', image: 'ghcr.io/acme/my-app:abc' }]);
 });
 
 test('an app whose build the registry holds and whose test it does not gets a leg that only tests', async () => {

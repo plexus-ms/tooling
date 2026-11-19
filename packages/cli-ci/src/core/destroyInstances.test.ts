@@ -3,17 +3,17 @@ import { test } from 'node:test';
 import { destroyInstances, repoLabel, selectRunInstances, selectRunRegistrations } from './destroyInstances.ts';
 import type { Exo, Instance } from './exoscale.ts';
 
-const run = { repo: 'damage-ms/web', runId: '41836428433', attempt: '1' };
+const run = { repo: 'acme/web', runId: '41836428433', attempt: '1' };
 const instance = (name: string, labels: Record<string, string>): Instance => ({
   id: `id-${name}`,
   name,
   state: 'running',
   createdAt: '2026-11-04T13:15:00Z',
-  labels: { 'plexus-ci': 'true', repo: 'damage-ms-web', run: run.runId, attempt: '1', ...labels },
+  labels: { 'plexus-ci': 'true', repo: 'acme-web', run: run.runId, attempt: '1', ...labels },
 });
 
 test('the repo label replaces the slash', () => {
-  assert.equal(repoLabel('damage-ms/web'), 'damage-ms-web');
+  assert.equal(repoLabel('acme/web'), 'acme-web');
 });
 
 test('selectRunInstances takes this run and attempt, spares kept instances, and ignores other runs and unlabelled instances', () => {
