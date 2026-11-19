@@ -18,7 +18,8 @@ name: _verify
 # starts when its own build ends, no second machine boots or idles meanwhile,
 # and a failed build tests nothing. Which of the two a leg owes is the plan's:
 # both, the test alone where the registry holds the build, or the build alone
-# for an app without tests; the job is named after exactly those.
+# for an app without tests. The job's name is fixed, `build, test`, whatever a
+# leg owes; the plan's log and the steps that run say which.
 #
 # Where a job of a size runs is the strategy's (`strategy`): the forge's
 # runners, the slots of the tenant's runner hosts, or, for a large job under
@@ -279,9 +280,10 @@ jobs:
           RUNNER_TOKEN: ${{ steps.runners.outputs.token }}
           MATRIX: ${{ steps.plan.outputs.matrix }}
           INSTANCE_TYPE: ${{ inputs.instance-type }}
-          NO_JOB_MINUTES: 10
-          DEATH_MINUTES: 45
-          POWEROFF_MINUTES: 50
+          # Minutes after boot, each a timer the user-data arms (userData.ts).
+          NO_JOB_MINUTES: 10 # no job started by then: the instance deletes itself, no mail
+          DEATH_MINUTES: 45 # a few minutes past build-and-test's timeout-minutes: a mail, then self-delete
+          POWEROFF_MINUTES: 50 # the last resort after the death deadline: power-off, the sweep removes it
         run: plx-ci hybrid create-instances "$MATRIX"
 
   # One job per leg of the plan, an app that owes something, and one machine
