@@ -6,6 +6,19 @@
 // layers first, then a wait for the runner to show online, since a boot that
 // stalls arms no timer and would leave the job queued for a day.
 //
+// The waits. The create's operation is polled every two seconds for about
+// three minutes (waitOperation, exoscale.ts). A create still pending then
+// fails its launch, which removes its runner registration; once every launch
+// has settled the command fails, and with it the plan job, after which the
+// workflow's `cleanup` job (_verify.yml) deletes what the run launched, found
+// by its labels. A created instance's runner then has `onlineSeconds` to
+// show online, 120 by default or ONLINE_SECONDS, looked at every five seconds.
+//
+// The deadlines are computed once per launch, before the first create call,
+// and serve the replacement too: the labels carry them as times, which the
+// sweep reads, and the user-data's timers count the same minutes from boot
+// (userData.ts).
+//
 // The trap: an instance whose runner is not online in time is kept, never
 // deleted. It is stopped at once, so that a boot that merely runs late cannot
 // start the runner and delete itself; renamed `<name>-kept` and labelled

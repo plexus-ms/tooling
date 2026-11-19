@@ -1,8 +1,23 @@
 // The cloud-config an instance boots with (§ 8 PLX-Delivery), as text: a
 // runner's, with every teardown layer. The placeholders `@@NAME@@` are filled
-// by render(); a leftover placeholder is an error. Kept as string constants so that the bundle carries them and the
-// tests render them without a loader. The cloud-config itself is documented
-// inline; edit here, nowhere else.
+// by render(); a leftover placeholder is an error. Kept as string constants so
+// that the bundle carries them and the tests render them without a loader. The
+// cloud-config itself is documented inline; edit here, nowhere else.
+//
+// The three deadlines, minutes the caller passes (NO_JOB_MINUTES,
+// DEATH_MINUTES, POWEROFF_MINUTES in _verify.yml):
+//
+//   no-job    no job has started by then: the instance deletes itself, no mail
+//   death     it mails the alerts address and deletes itself, whatever runs;
+//             the caller sets it a few minutes past the job's own timeout
+//   power-off the last resort after that, for an instance still there: it
+//             powers off and the daily sweep removes it; it must come after
+//             the death deadline, or the launch refuses
+//
+// The launch fixes them before its create call (createInstances.ts), and the
+// timers are armed at boot as the first run commands, each counting its
+// minutes from boot (OnBootSec). SELF_LAYERS=off disarms every self-delete,
+// the runner's exit, no-job and death alike, and leaves the power-off.
 import { UsageError } from '@plexus-ms/lib';
 
 export const RUNNER_USER_DATA = `#cloud-config
