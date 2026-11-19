@@ -93,6 +93,12 @@
       "enabled": false
     },
     {
+      "description": "python in mise.toml is the runtime of the tools mise builds through uv (ansible, copier): their environments link mise's Python by its minor, and mise does not rebuild them when the pin moves, so once the old interpreter is pruned they cannot start. The pin is moved by hand, with the tools reinstalled (`mise install -f <tool>`); the bot never proposes it.",
+      "matchManagers": ["mise"],
+      "matchDepNames": ["python"],
+      "enabled": false
+    },
+    {
       "description": "A TypeScript major changes the compiler every app and package in the repo builds with: it waits for approval on the dependency dashboard.",
       "matchDatasources": ["npm"],
       "matchDepNames": ["typescript"],
