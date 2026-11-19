@@ -3,8 +3,10 @@
 // tags, and as <sha> too where the candidates have a registry of their own
 // (§§ 4 and 8 PLX-Delivery). From the environment: CI_STRATEGY, CI_REGISTRY;
 // NEXT_SERVER_ACTIONS_ENCRYPTION_KEY (the app's fixed key), NO_CACHE=1 for a
-// build from scratch, BUILDX_BUILDER (default ci). Prints the digest, and
-// writes it to GITHUB_OUTPUT when that is set.
+// build from scratch, BUILDX_BUILDER (default ci), NPM_CONFIG_USERCONFIG (a
+// user-level npmrc with the token of the tenant's private package registry,
+// handed to the image's installs as a secret). Prints the digest, and writes
+// it to GITHUB_OUTPUT when that is set.
 //
 //   plx-ci build website 0f2a3f35123dfd73 "$GITHUB_SHA"
 //   NO_CACHE=1 plx-ci build website 0f2a3f35123dfd73 "$GITHUB_SHA" repro-<run>-1
@@ -39,6 +41,7 @@ export function register(program: Command): void {
           sha,
           tags,
           encryptionKey: process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY ?? '',
+          npmrc: process.env.NPM_CONFIG_USERCONFIG || undefined,
           noCache: process.env.NO_CACHE === '1',
           dir: resolve(opts.dir),
           registry: registryFor(settings(opts)),

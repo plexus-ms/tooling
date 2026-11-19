@@ -33,3 +33,9 @@ test('in the forge’s registry a build pushes no commit tag and names no previo
   assert.match(args, /--cache-to type=registry,ref=ghcr.io\/plexus-ms-tenant\/website:cache,mode=max/);
   assert.doesNotMatch(args, /localhost/);
 });
+
+test('the private registry’s npmrc is a secret of the build only where the job has one', () => {
+  assert.doesNotMatch(buildArgs(options, '/c', '/m', false).join(' '), /id=npmrc/);
+  const args = buildArgs({ ...options, npmrc: '/tmp/npmrc' }, '/c', '/m', false).join(' ');
+  assert.match(args, /--secret id=npmrc,src=\/tmp\/npmrc/);
+});

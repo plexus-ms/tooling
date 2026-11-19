@@ -3,9 +3,15 @@ name: _publish-package
 # The package shape of `publish` (§ 5 PLX-Delivery): from checked code on
 # the trunk, version and publish with changesets. On a push with
 # pending changesets it opens or updates the "version packages" PR; on the
-# push that merges that PR it publishes, token-less through OIDC trusted
-# publishing, with provenance. The caller runs this after _check.yml in the
-# same run; the verb does not check again.
+# push that merges that PR it publishes. To npm that is token-less through
+# OIDC trusted publishing, with provenance; to the forge's package registry,
+# where a tenant keeps its private packages, with the job's own token. The
+# caller runs this after _check.yml in the same run; the verb does not check
+# again.
+#
+# With `snapshot`, nothing is versioned on the trunk: the pending changesets
+# of the branch the run was started on are published as snapshot versions
+# under that dist-tag, for a consumer to install before the release.
 
 on:
   workflow_call:
@@ -17,11 +23,25 @@ on:
         required: false
         type: string
         default: github
+      registry:
+        description: >-
+          Where the packages are published (§ 5 PLX-Delivery): `npm`, the public
+          registry; `github`, the forge's package registry, private to the tenant.
+        required: false
+        type: string
+        default: npm
+      snapshot:
+        description: >-
+          A dist-tag: publish the pending changesets as snapshot versions under
+          it instead of versioning and releasing. Empty for a release.
+        required: false
+        type: string
+        default: ''
 
-permissions:
-  contents: write       # push the version PR and the tags
-  pull-requests: write  # open the "version packages" PR
-  id-token: write       # npm build provenance
+# No permissions of its own: the job has what its caller grants. A release
+# needs `contents: write` (the version PR and the tags) and `pull-requests:
+# write` (the "version packages" PR); then `id-token: write` for npm (the
+# build provenance) or `packages: write` for the forge's registry.
 
 jobs:
   publish:
@@ -36,6 +56,16 @@ jobs:
       HK_SKIP_HOOK: pre-commit,pre-push
     steps:
       - uses: actions/checkout@v7
+      # The forge's package registry takes the job's own token, in a user-level
+      # npmrc of the job's own; each package names the registry in its
+      # `publishConfig`. npm needs nothing here: it trusts the workflow.
+      - name: Log in to the forge's package registry
+        if: ${{ inputs.registry == 'github' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          printf '//npm.pkg.github.com/:_authToken=%s\n' "$GITHUB_TOKEN" > "$RUNNER_TEMP/npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
       - uses: jdx/mise-action@v5
       - run: pnpm install --frozen-lockfile
       # Build every package in dependency order before publishing: `changeset
@@ -53,8 +83,18 @@ jobs:
       # bot carries it; our scripts call the CLI directly, so the
       # CHANGESETS_OUTPUT the action hands them reaches it unchanged.
       - uses: changesets/action@v2.1.2
+        if: ${{ inputs.snapshot == '' }}
         with:
           version-script: pnpm exec changeset version
           publish-script: pnpm exec changeset publish
           commit-message: "chore: version packages"
           pr-title: "Version Packages"
+      # A snapshot leaves the trunk alone: the versions it writes
+      # (0.0.0-<tag>-<timestamp>) are published and never committed or tagged.
+      - name: Publish snapshot versions
+        if: ${{ inputs.snapshot != '' }}
+        env:
+          SNAPSHOT: ${{ inputs.snapshot }}
+        run: |
+          pnpm exec changeset version --snapshot "$SNAPSHOT"
+          pnpm exec changeset publish --tag "$SNAPSHOT" --no-git-tag

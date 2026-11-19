@@ -93,6 +93,14 @@ on:
         required: false
         type: string
         default: ''
+      private-packages:
+        description: >-
+          The repo installs private packages of the tenant's from the forge's
+          package registry (§ 5 PLX-Delivery): the job logs in to it with its
+          own token, which needs `packages: read` from the caller.
+        required: false
+        type: boolean
+        default: false
       tooling-ref:
         description: >-
           A trial of unreleased tooling: plx-ci and plx are built from a
@@ -368,6 +376,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      # The tenant's private packages (§ 5 PLX-Delivery), for the test's install
+      # and, as a BuildKit secret, for the image's (plx-ci build): the job's own token
+      # in a user-level npmrc of the job's own, which pnpm and npm read beside
+      # the scope's registry in pnpm-workspace.yaml. The repo holds no token,
+      # and the package grants this repo's workflows read access on the forge.
+      - name: Log in to the forge's package registry
+        if: ${{ inputs.private-packages }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          printf '//npm.pkg.github.com/:_authToken=%s\n' "$GITHUB_TOKEN" > "$RUNNER_TEMP/npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
       - name: The registry
         run: plx-ci registry
       # The specs and their dependencies, the app's own; Chromium's headless

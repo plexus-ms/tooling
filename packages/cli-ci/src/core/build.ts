@@ -31,6 +31,11 @@ export interface BuildOptions {
   tags?: string[];
   /** The app's fixed key, a BuildKit secret; the Dockerfile reads it as next-server-actions-encryption-key. */
   encryptionKey: string;
+  /**
+   * A user-level npmrc holding the token of the tenant's private package registry, a BuildKit
+   * secret; the Dockerfile mounts it as npmrc for its installs. Absent where the repo installs none.
+   */
+  npmrc?: string;
   /** Build from scratch, the reproducibility measurement. */
   noCache?: boolean;
   /** The checkout; default the cwd. */
@@ -93,6 +98,7 @@ export function buildArgs(
     `BUILD_HASH=${options.hash}`,
     '--secret',
     'id=next-server-actions-encryption-key,env=NEXT_SERVER_ACTIONS_ENCRYPTION_KEY',
+    ...(options.npmrc ? ['--secret', `id=npmrc,src=${options.npmrc}`] : []),
     ...cache,
     ...tags,
     // SOURCE_DATE_EPOCH and rewrite-timestamp flatten every timestamp the image
