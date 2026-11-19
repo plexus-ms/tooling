@@ -1,10 +1,11 @@
 ---
-# The app name is the join key across repos (§ 3 PLX-Platform): the inventory record,
-# the compose project <tenant>-<slug>, and the host dir all key on it, so it is
-# unique per tenant and environment — across every app repo and this platform
-# repo. A record's `environment` is `production` when absent; the deployment's
-# slug on the host is the name in production and <name>-<environment> elsewhere,
-# so a production record changes nothing.
+# The app name is the join key across repos (§ 3 PLX-Platform): the inventory
+# record, the host dir and the compose project all key on it, so it is unique
+# per tenant and environment — across every app repo and this platform repo.
+# A record's `environment` is `production` when absent; the deployment's slug
+# on the host is the name in production and <name>-<environment> elsewhere,
+# so a production record changes nothing. The slug names the host dir and is
+# the compose project's name (app.yml writes it to .env).
 - name: Assert app names are unique per tenant and environment
   ansible.builtin.assert:
     that:
