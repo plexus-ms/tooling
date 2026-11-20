@@ -146,6 +146,22 @@ export {
 export { mergeLine, renderSummary } from './summary.ts';
 export { detail, emptySummary, isClean, type Summary, type Take, takeVersion } from './take.ts';
 export { RENAMED_TEMPLATES, TEMPLATES, templateOf, templateSource } from './templates.ts';
+export {
+  type Link,
+  linksOf,
+  mergeWorkspaces,
+  newestPnpm,
+  planDown,
+  planUp,
+  pnpmDifference,
+  readUmbrella,
+  readUmbrellaDown,
+  UMBRELLA_MARK,
+  UMBRELLA_ROOT_VAR,
+  type Umbrella,
+  type UmbrellaPackage,
+  type UmbrellaRepo,
+} from './umbrella.ts';
 export { type UpdateOptions, update } from './update.ts';
 export {
   COMPENDIUM,

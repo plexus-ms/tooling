@@ -262,6 +262,9 @@ importers:
 
   packages/lib:
     dependencies:
+      semver:
+        specifier: ^7.8.6
+        version: 7.8.6
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -269,6 +272,9 @@ importers:
       '@types/node':
         specifier: ^24.19.2
         version: 24.19.2
+      '@types/semver':
+        specifier: ^7.8.0
+        version: 7.8.0
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
@@ -670,6 +676,9 @@ packages:
   '@types/node@24.19.2':
     resolution: {integrity: sha512-93d49wCWJkCyN87MxLpNN6KXPCwFw7bVUg79mGUV1OS40JGWwVCr8n61DXCSqz7CV6/VfPkb7xec7uP2M+QHWQ==}
 
+  '@types/semver@7.8.0':
+    resolution: {integrity: sha512-1mAINjtQCXXeLkJ9ehXkwOcBpqtLxiVtKhpUf83DdRNdQKV0iXZpaHYqRr7nj+wvxuJzoAmAwXI+sCNMv1CzLQ==}
+
   chardet@2.2.0:
     resolution: {integrity: sha512-rddelWYNPRrXq6PtNEN2S3f6t9ILzvqaN5pVgi4kqt9jHQaXIial9PznB5iSPVlQSLNaaH22ItWz3EJtQ10+OA==}
 
@@ -705,6 +714,11 @@ packages:
 
   safer-buffer@2.1.2:
     resolution: {integrity: sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==}
+
+  semver@7.8.6:
+    resolution: {integrity: sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==}
+    engines: {node: '>=10'}
+    hasBin: true
 
   signal-exit@4.1.0:
     resolution: {integrity: sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw==}
@@ -993,6 +1007,8 @@ snapshots:
     dependencies:
       undici-types: 7.24.6
 
+  '@types/semver@7.8.0': {}
+
   chardet@2.2.0: {}
 
   cli-width@4.1.0: {}
@@ -1045,6 +1061,8 @@ snapshots:
   mute-stream@4.0.0: {}
 
   safer-buffer@2.1.2: {}
+
+  semver@7.8.6: {}
 
   signal-exit@4.1.0: {}
 
