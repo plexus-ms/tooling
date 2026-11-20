@@ -95,8 +95,23 @@ test('summarize folds what each repo came to, in order, without touching the out
     { repo: 'acme/docs', version: '', kind: 'skipped', reason: 'no origin remote' },
     { repo: 'acme/old', version: '0.2.0', kind: 'current' },
     { repo: 'acme/ops', version: '0.2.0', kind: 'resting', reason: 'inside the interval' },
-    { repo: 'acme/found', version: '0.2.0', kind: 'found', pull: 'https://forge/acme/found/pull/2', mergeable: true },
-    { repo: 'acme/gone', version: '0.2.0', kind: 'found', mergeable: false },
+    {
+      repo: 'acme/found',
+      version: '0.2.0',
+      kind: 'found',
+      pull: 'https://forge/acme/found/pull/2',
+      marked: [],
+      mergeable: true,
+    },
+    {
+      repo: 'acme/marked',
+      version: '0.2.0',
+      kind: 'found',
+      pull: 'https://forge/acme/marked/pull/3',
+      marked: ['apps/a/x.ts'],
+      mergeable: false,
+    },
+    { repo: 'acme/gone', version: '0.2.0', kind: 'found', marked: [], mergeable: false },
     { repo: 'acme/broken', version: '0.2.0', kind: 'failed', detail: 'worktree' },
     {
       repo: 'acme/web',
@@ -109,7 +124,8 @@ test('summarize folds what each repo came to, in order, without touching the out
           { rel: 'acme/web/apps/site', outcome: 'conflicted' },
         ],
         lockfile: 'failed',
-        pull: { branch: 'plexus/0.2.0', url: 'https://forge/acme/web/pull/7' },
+        marked: ['apps/site/x.txt'],
+        pull: { branch: 'plexus/0.2.0', url: 'https://forge/acme/web/pull/7', draft: true },
       },
     },
     {
@@ -119,7 +135,7 @@ test('summarize folds what each repo came to, in order, without touching the out
       taken: {
         rel: 'acme/platform',
         sites: [{ rel: 'acme/platform', outcome: 'clean' }],
-        pull: { branch: 'plexus/0.2.0' },
+        pull: { branch: 'plexus/0.2.0', draft: false },
       },
     },
     {
@@ -130,7 +146,7 @@ test('summarize folds what each repo came to, in order, without touching the out
         rel: 'acme/clean',
         sites: [{ rel: 'acme/clean', outcome: 'clean' }],
         lockfile: 'refreshed',
-        pull: { branch: 'plexus/0.2.0', url: 'https://forge/acme/clean/pull/1' },
+        pull: { branch: 'plexus/0.2.0', url: 'https://forge/acme/clean/pull/1', draft: false },
       },
     },
     {
@@ -145,12 +161,13 @@ test('summarize folds what each repo came to, in order, without touching the out
     version: '0.2.0',
     preview: false,
     clean: ['acme/web', 'acme/platform', 'acme/clean'],
-    conflicted: ['acme/web/apps/site'],
+    conflicted: ['acme/marked/apps/a/x.ts', 'acme/web/apps/site'],
     failed: ['acme/broken', 'acme/web/pnpm-lock.yaml', 'acme/push', 'acme/push'],
     skipped: [{ path: 'acme/docs', reason: 'no origin remote' }],
     resting: [{ path: 'acme/ops', reason: 'inside the interval' }],
     pulls: [
       'https://forge/acme/found/pull/2',
+      'https://forge/acme/marked/pull/3',
       'https://forge/acme/web/pull/7',
       'acme/platform plexus/0.2.0',
       'https://forge/acme/clean/pull/1',

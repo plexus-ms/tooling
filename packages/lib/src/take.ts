@@ -4,7 +4,8 @@
 // the lockfile refreshed where manifests moved, the hand-owned workflows pinned to the version; then one
 // commit, pushed as `plexus/<version>`, and a pull request against the branch.
 // A conflict is committed with its markers and reported, and the pull request
-// is opened all the same: that is where it gets resolved. Nothing here aborts
+// is opened all the same, as a draft whose body opens with what needs a hand
+// (pull.ts): that is where it gets resolved. Nothing here aborts
 // a run: what became of each site, the lockfile and the pull request is
 // returned as data (`Taken`), which the caller folds into the summary that
 // says what needs a human (summary.ts). Reviewing and merging the pull
@@ -17,12 +18,13 @@
 // `SiteUpdate`, against the local template checkouts, and opens nothing.
 import { join, relative } from 'node:path';
 import { bumpWorkflowRefs, WORKFLOW_REF } from './bookkeeping.ts';
-import { hasConflictMarkers, hasUnmergedEntries } from './conflicts.ts';
+import { filesWithConflictMarkers, hasConflictMarkers, hasUnmergedEntries } from './conflicts.ts';
 import type { Consumer, Site } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, copierVia, parseAnswers, setAnswer } from './copier.ts';
 import { run, write } from './effects.ts';
-import { ExecError, TimeoutError } from './io.ts';
+import { detailOf } from './io.ts';
+import { needsAHand, openPullOf, type PullState, pullBody, versionBranch } from './pull.ts';
 import { namesOldTemplate, templateSource } from './templates.ts';
 
 /** What became of one site: merged clean, left with conflicts, or its copier run failed (`detail` says why). */
@@ -39,20 +41,20 @@ export interface Taken {
   sites: SiteResult[];
   /** The lockfile refresh, where manifests moved; undefined when nothing needed one. */
   lockfile?: 'refreshed' | 'failed';
-  /** The pull request opened: its URL, unknown when the forge did not say it. */
-  pull?: { branch: string; url?: string };
+  /** Tracked files of the scratch checkout that hold a conflict marker once the sites are updated. */
+  marked?: string[];
+  /** The pull request opened, a draft when something needs a hand; its URL unknown when the forge did not say it. */
+  pull?: { branch: string; url?: string; draft: boolean };
   /** Why the commit, the push or the pull request failed, when one did. */
   failed?: string;
 }
 
 /** Whether the consumer needs a hand beyond reviewing its pull request. */
 export const needsHand = (t: Taken): boolean =>
-  t.sites.some((s) => s.outcome !== 'clean') || t.lockfile === 'failed' || t.failed !== undefined;
-
-/** What a pull request's body says when nothing in it needs a hand; read back to tell a clean one found on origin. */
-export const CLEAN_BODY = 'Merged clean at every site.';
-
-export const versionBranch = (version: string): string => `plexus/${version}`;
+  t.sites.some((s) => s.outcome !== 'clean') ||
+  (t.marked?.length ?? 0) > 0 ||
+  t.lockfile === 'failed' ||
+  t.failed !== undefined;
 
 /**
  * How a site is brought to the version in the scratch checkout: `target` is
@@ -255,19 +257,14 @@ async function bumpConsumerRefs(ctx: Context, consumer: Consumer, dir: string, v
   }
 }
 
-/** The URL of the open pull request from the version branch against the consumer's branch, if any. */
-export async function openPullUrl(ctx: Context, consumer: Consumer, dir: string, version: string): Promise<string> {
-  const args = ['pr', 'list', '--head', versionBranch(version), '--base', consumer.branch, '--state', 'open'];
-  return (await ctx.read('gh', [...args, '--json', 'url', '--jq', '.[0].url'], { cwd: dir }).catch(() => '')).trim();
-}
-
 /**
  * One commit, the version branch pushed, and a pull request against the
- * consumer's branch: opened once, found again on a re-run. The branch is plx's
- * own, so a re-run may move it, with a lease on what it fetched. Hooks are
- * skipped: the checks are the pull request's job, and the mount's own
- * checkout may carry the repo's hooks. The body says what needs a hand,
- * from what the sites and the lockfile came to.
+ * consumer's branch, opened once. The push only creates the branch: one
+ * already on origin is never moved (pull.ts). Hooks are skipped: the checks
+ * are the pull request's job, and the mount's own checkout may carry the
+ * repo's hooks. The pull request is a draft when anything needs a hand, and
+ * its body says what, from what the sites and the lockfile came to and the
+ * detector over the committed tree.
  */
 async function openPull(
   ctx: Context,
@@ -275,7 +272,7 @@ async function openPull(
   dir: string,
   take: Take,
   taken: Taken,
-): Promise<Pick<Taken, 'pull' | 'failed'>> {
+): Promise<Pick<Taken, 'pull' | 'failed' | 'marked'>> {
   const { version } = take;
   const branch = versionBranch(version);
   if (ctx.dryRun) {
@@ -293,39 +290,39 @@ async function openPull(
     await ctx.apply([
       run('git', ['add', '-A'], { cwd: dir }),
       run('git', ['commit', '--quiet', '--no-verify', '-m', `chore: Plexus ${version}`], { cwd: dir }),
-    ]);
-    // The lease needs the remote-tracking ref; a fresh clone has none for a branch it did not check out.
-    await ctx
-      .read('git', ['fetch', '--quiet', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], {
-        cwd: dir,
-      })
-      .catch(() => '');
-    await ctx.apply([
-      run('git', ['push', '--quiet', '--no-verify', '--force-with-lease', 'origin', `HEAD:refs/heads/${branch}`], {
-        cwd: dir,
-      }),
+      // An empty expected value: the branch must not exist on origin yet.
+      run(
+        'git',
+        [
+          'push',
+          '--quiet',
+          '--no-verify',
+          `--force-with-lease=refs/heads/${branch}:`,
+          'origin',
+          `HEAD:refs/heads/${branch}`,
+        ],
+        { cwd: dir },
+      ),
     ]);
   } catch (error) {
     const why = detailOf(error);
     ctx.say(`  ✗ FAILED — push to ${head}${why ? `: ${why}` : ''}`);
     return { failed: `push to ${head}${why ? `: ${why}` : ''}` };
   }
-  const existing = await openPullUrl(ctx, consumer, dir, version);
-  if (existing) {
-    ctx.say(`• ${consumer.rel}: pull request updated: ${existing}`);
-    return { pull: { branch, url: existing } };
-  }
-  const of = (outcome: SiteResult['outcome']) => taken.sites.filter((s) => s.outcome === outcome).map((s) => s.rel);
-  const conflicted = of('conflicted');
-  const failed = [...of('failed'), ...(taken.lockfile === 'failed' ? [`${consumer.rel}/pnpm-lock.yaml`] : [])];
-  const sites = consumer.sites.map((s) => s.rel);
-  const body = [
-    `Plexus ${version} (§ 1.5 PLX): \`copier update\` at ${sites.join(', ')}, the lockfile where manifests moved, and the workflow refs.`,
-    ...(conflicted.length > 0 ? [`Conflicts to resolve, committed with their markers: ${conflicted.join(', ')}.`] : []),
-    ...(failed.length > 0 ? [`Failed, and left as it was: ${failed.join(', ')}.`] : []),
-    ...(needsHand(taken) ? [] : [CLEAN_BODY]),
-    `Opened by ${take.opener}${take.why ? `: ${take.why}` : ''}.`,
-  ].join('\n\n');
+  const marked = await filesWithConflictMarkers(ctx, dir);
+  const of = (outcome: SiteResult['outcome']) =>
+    taken.sites.filter((s) => s.outcome === outcome).map((s) => siteOf(consumer, s.rel));
+  const state: PullState = {
+    version,
+    sites: consumer.sites.map((s) => relative(consumer.path, s.path) || '.'),
+    conflicted: of('conflicted'),
+    marked,
+    failed: of('failed'),
+    lockfile: taken.lockfile === 'failed',
+    note: `Opened by ${take.opener}${take.why ? `: ${take.why}` : ''}.`,
+  };
+  const draft = needsAHand(state);
+  if (marked.length > 0) ctx.say(`  ${consumer.rel}: conflict markers in ${marked.join(', ')}`);
   try {
     await ctx.apply([
       run(
@@ -333,6 +330,7 @@ async function openPull(
         [
           'pr',
           'create',
+          ...(draft ? ['--draft'] : []),
           '--base',
           consumer.branch,
           '--head',
@@ -340,7 +338,7 @@ async function openPull(
           '--title',
           `chore: Plexus ${version}`,
           '--body',
-          body,
+          pullBody(state),
         ],
         { cwd: dir },
       ),
@@ -348,28 +346,15 @@ async function openPull(
   } catch (error) {
     const why = detailOf(error);
     ctx.say(`  ✗ FAILED — pull request${why ? `: ${why}` : ''}`);
-    return { failed: `pull request${why ? `: ${why}` : ''}` };
+    return { marked, failed: `pull request${why ? `: ${why}` : ''}` };
   }
-  const url = await openPullUrl(ctx, consumer, dir, version);
-  ctx.say(`• ${consumer.rel}: pull request opened${url ? `: ${url}` : ''}`);
-  return { pull: { branch, ...(url ? { url } : {}) } };
+  const url = (await openPullOf(ctx, consumer, dir, version))?.url;
+  ctx.say(`• ${consumer.rel}: ${draft ? 'draft ' : ''}pull request opened${url ? `: ${url}` : ''}`);
+  return { marked, pull: { branch, draft, ...(url ? { url } : {}) } };
 }
 
-/**
- * What went wrong, in one line, from the error itself: a tool's last line of
- * output on stderr, else its exit code; a time limit as such; any other
- * error's message. Empty when there is nothing to say.
- */
-export function detailOf(error: unknown): string {
-  if (error instanceof TimeoutError) return `did not finish within ${error.limit} ms`;
-  if (error instanceof ExecError) {
-    const last = error.stderr
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .at(-1);
-    return last ?? (error.code === null ? '' : `exit code ${error.code}`);
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  return message.trim().split('\n')[0] ?? '';
+/** A site's name in the run, as the repo names it: `.` for its root. */
+function siteOf(consumer: Consumer, rel: string): string {
+  const s = consumer.sites.find((x) => x.rel === rel);
+  return s ? relative(consumer.path, s.path) || '.' : rel;
 }

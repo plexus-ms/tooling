@@ -80,6 +80,25 @@ export class TimeoutError extends ExecError {
   }
 }
 
+/**
+ * What went wrong, in one line, from the error itself: a tool's last line of
+ * output on stderr, else its exit code; a time limit as such; any other
+ * error's message. Empty when there is nothing to say.
+ */
+export function detailOf(error: unknown): string {
+  if (error instanceof TimeoutError) return `did not finish within ${error.limit} ms`;
+  if (error instanceof ExecError) {
+    const last = error.stderr
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .at(-1);
+    return last ?? (error.code === null ? '' : `exit code ${error.code}`);
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return message.trim().split('\n')[0] ?? '';
+}
+
 /** How long a process past its time limit has between SIGTERM and SIGKILL. */
 const GRACE = 5000;
 

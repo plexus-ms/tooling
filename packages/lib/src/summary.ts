@@ -14,6 +14,7 @@ export interface Summary {
   preview: boolean;
   /** Sites, relative to the workspace. */
   clean: string[];
+  /** Sites left with conflicts, and the files of a version branch on origin that still hold conflict markers. */
   conflicted: string[];
   /** Sites whose update exited nonzero, consumers that could not be cloned or pushed, and lockfiles that failed to refresh. */
   failed: string[];
@@ -23,7 +24,7 @@ export interface Summary {
   resting: { path: string; reason: string }[];
   /** The pull requests opened or found, one per consumer that changed. */
   pulls: string[];
-  /** Those of `pulls` whose repo merged clean at every site and failed nowhere: ready to merge once their checks pass. */
+  /** Those of `pulls` that are no draft and need no hand: ready to merge once their checks pass. */
   mergeable: string[];
 }
 
@@ -65,6 +66,9 @@ export function summarize(
         s.failed.push(o.repo);
         break;
       case 'found':
+        // Files that still hold markers need a human, like a conflicted site.
+        for (const file of o.marked) s.conflicted.push(o.repo === '.' ? file : `${o.repo}/${file}`);
+        if (o.failed !== undefined) s.failed.push(o.repo);
         if (o.pull) s.pulls.push(o.pull);
         if (o.pull && o.mergeable) s.mergeable.push(o.pull);
         break;
@@ -74,7 +78,7 @@ export function summarize(
         if (t.lockfile === 'failed') s.failed.push(`${t.rel}/pnpm-lock.yaml`);
         if (t.failed !== undefined) s.failed.push(t.rel);
         if (t.pull) s.pulls.push(t.pull.url ?? `${t.rel} ${t.pull.branch}`);
-        if (t.pull?.url && !needsHand(t)) s.mergeable.push(t.pull.url);
+        if (t.pull?.url && !t.pull.draft && !needsHand(t)) s.mergeable.push(t.pull.url);
         break;
       }
     }

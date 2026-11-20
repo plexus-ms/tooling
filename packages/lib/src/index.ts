@@ -82,6 +82,7 @@ export { body, describe, type Plan, run, type Step, write } from './effects.ts';
 export { frontmatterField, setFrontmatterField } from './frontmatter.ts';
 export {
   type DirEntry,
+  detailOf,
   ExecError,
   type ExecOptions,
   type Io,
@@ -127,6 +128,16 @@ export {
   type Release,
 } from './need.ts';
 export { overview, PRUNED, type ScanOptions } from './overview.ts';
+export {
+  needsAHand,
+  type OpenPull,
+  openPullOf,
+  type PullState,
+  pullBody,
+  type Revisited,
+  revisit,
+  versionBranch,
+} from './pull.ts';
 export { type RecursiveOptions, updateRecursive } from './recursive.ts';
 export {
   type CompendiumCheck,
@@ -159,7 +170,6 @@ export {
 export { isClean, mergeLine, renderSummary, type Summary, summarize } from './summary.ts';
 export {
   copierIn,
-  detailOf,
   type SiteResult,
   type SiteUpdate,
   scratchCommit,

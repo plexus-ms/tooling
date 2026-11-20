@@ -29,9 +29,12 @@
 //
 // The version is pulled once per repo: a `plexus/<version>` branch already on
 // origin, from an earlier run or from a human resolving its conflicts, is
-// left alone, so a daily run never moves a branch somebody is
-// working on; deleting the branch is how a pull is redone. A repo whose every
-// site already records the newest version does nothing at all.
+// never moved, so a daily run never touches a branch somebody is working on;
+// deleting the branch is how a pull is redone. With its pull request open, the
+// run looks at it again (pull.ts): the branch read as origin has it, the body
+// rewritten to what still needs a hand, ready once no conflict marker remains.
+// A repo whose every site already records the newest version does nothing at
+// all.
 //
 //   plx update                      # the version the repo's schedule takes, if any
 //   plx update --now                # the newest version, whatever its step
@@ -43,10 +46,11 @@ import { type Consumer, findConsumers } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers } from './copier.ts';
 import { run } from './effects.ts';
-import { ExecError } from './io.ts';
+import { detailOf, ExecError } from './io.ts';
 import { maxAgeOf, type Need, needOf, type Release } from './need.ts';
 import { overview } from './overview.ts';
-import { CLEAN_BODY, detailOf, openPullUrl, type Taken, takeVersion, versionBranch } from './take.ts';
+import { openPullOf, revisit, versionBranch } from './pull.ts';
+import { type Taken, takeVersion } from './take.ts';
 import { TEMPLATES, templateSource } from './templates.ts';
 import { COMPENDIUM, compareVersions, isPlexusVersion, preflightForge, UsageError } from './version.ts';
 
@@ -81,14 +85,16 @@ export interface Known {
  * would take. `current`: every site records it already. `skipped`: left
  * untouched, with why. `resting`: needs no version yet (need.ts), with what
  * would end the rest. `found`: its version branch is on origin already, with
- * the pull request found there, if any, and whether it is ready to merge.
+ * the pull request found there, if any, the files of the branch that hold
+ * conflict markers, whether it is ready to merge, and why looking at it
+ * failed, if it did.
  * `taken`: it took the version. `failed`: it could not be worked on, with why.
  */
 export type Outcome = { repo: string; version: string } & (
   | { kind: 'current' }
   | { kind: 'skipped'; reason: string }
   | { kind: 'resting'; reason: string }
-  | { kind: 'found'; pull?: string; mergeable: boolean }
+  | { kind: 'found'; pull?: string; marked: string[]; mergeable: boolean; failed?: string }
   | { kind: 'taken'; taken: Taken }
   | { kind: 'failed'; detail: string }
 );
@@ -147,16 +153,22 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
 
   const branch = versionBranch(version);
   if (await onOrigin(ctx, repo, branch)) {
-    const url = await openPullUrl(ctx, consumer, repo, version);
-    ctx.say(
-      `• ${name}: ${branch} is already on origin${url ? ` (${url})` : ''} — nothing to do; delete the branch to pull the version again`,
-    );
-    if (!url) return { repo: name, version, kind: 'found', mergeable: false };
-    // Whether it merged clean is what its body says (take.ts wrote it).
-    const body = await ctx
-      .read('gh', ['pr', 'view', url, '--json', 'body', '--jq', '.body'], { cwd: repo })
-      .catch(() => '');
-    return { repo: name, version, kind: 'found', pull: url, mergeable: body.includes(CLEAN_BODY) };
+    const pull = await openPullOf(ctx, consumer, repo, version);
+    if (!pull) {
+      ctx.say(
+        `• ${name}: ${branch} is already on origin, with no open pull request — nothing to do; delete the branch to pull the version again`,
+      );
+      return { repo: name, version, kind: 'found', marked: [], mergeable: false };
+    }
+    try {
+      const { url, ...found } = await revisit(ctx, consumer, pull, version);
+      if (found.failed) ctx.say(`  ✗ FAILED — ${found.failed}`);
+      return { repo: name, version, kind: 'found', pull: url, ...found };
+    } catch (error) {
+      const why = detailOf(error);
+      ctx.say(`  ✗ FAILED — ${branch} as origin has it${why ? `: ${why}` : ''}`);
+      return { repo: name, version, kind: 'found', pull: pull.url, marked: [], mergeable: false, failed: why };
+    }
   }
 
   if (!need.take) {

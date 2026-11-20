@@ -1,7 +1,9 @@
 // conflicts: whether a text, or the tracked files of a repo, hold conflict
 // markers. The one detector of plx, for every verb that asks: `doctor`
-// reports a repo's files that hold one, and a repo taking a version
-// (take.ts) tells a conflicted site by it.
+// reports a repo's files that hold one, a repo taking a version (take.ts)
+// tells a conflicted site by it and lists the files in its pull request, and
+// a later run tells by it whether that pull request still needs a hand
+// (pull.ts).
 //
 // A marker is a line that opens (`<<<<<<<`) or closes (`>>>>>>>`) a
 // conflict, followed by a space or the end of the line. The `=======` line

@@ -17,7 +17,10 @@
 // Fake gh: releases and pull requests are files under the forge, keyed by the
 // repo (the basename of origin); `release create` checks the tag is on origin,
 // keeps the release's notes (notes-<tag>) and, on tooling, "publishes" the
-// version to the fake registry. Knobs:
+// version to the fake registry. A pull request is pr-<branch> (its URL) with
+// .body, .base and .draft beside it; `pr list` answers as JSON, `pr ready`
+// (--undo) sets .draft, and `api repos/{owner}/{repo}/pulls/<n> --method
+// PATCH -f body=…` rewrites .body. Knobs:
 //   FAKE_GH_LOGGED_OUT=1              `gh auth status` fails
 //   FAKE_GH_MUTABLE=1                 releases are created mutable
 //   FAKE_GH_CREATE_FAIL=<repo>        `gh release create` fails in that repo
@@ -107,6 +110,7 @@ sed -i.bak 's/^_commit: .*/_commit: next/' .copier-answers.yml && rm -f .copier-
 //   FAKE_NEWBORN_DOCTOR_FAIL=<template>  its newborn one has no `verify` task
 //   FAKE_NEWBORN_KEPT=<template>=<path>  it says it kept them at <path> instead,
 //                                        a literal $TMPDIR in it expanded
+//   FAKE_PNPM_FAIL=1                     \`mise exec -- pnpm install\` fails
 //   FAKE_NEWBORN_HANG=<template>         it hangs in shape one's check, in a
 //                                        background sleep whose pid goes to
 //                                        FAKE_NEWBORN_HANG_PID
@@ -115,6 +119,7 @@ script(
   'mise',
   `echo "mise $* ignored=\${MISE_IGNORED_CONFIG_PATHS:-}" >> "$FAKE_LOG"
 if [ "$1" = exec ] && [[ "$2" == copier@* ]] && [ "$3" = -- ]; then shift 3; exec "$@"; fi
+case "$*" in "exec -- pnpm install"*) [ -z "\${FAKE_PNPM_FAIL:-}" ] || { echo "ERR_PNPM_FETCH_404 on purpose" >&2; exit 1; } ;; esac
 if [ "$1 $2" = "run verify" ]; then
   t="$(basename "$PWD")"
   echo "verify[$t] KEEP=\${KEEP:-} TURBO_TEMPLATE=\${TURBO_TEMPLATE:-} TURBO_REF=\${TURBO_REF:-} TMPDIR=\${TMPDIR:-}" >> "$FAKE_LOG"
@@ -155,6 +160,8 @@ case "$2" in repos/[!{]*/[!{]*/*) r="\${2#repos/*/}"; repo="\${r%%/*}" ;; esac
 echo "gh[$repo] $*" >> "$FAKE_LOG"
 dir="$FAKE_FORGE/$repo"; mkdir -p "$dir"
 arg() { local k="$1"; shift; while [ $# -gt 0 ]; do [ "$1" = "$k" ] && { echo "$2"; return; }; shift; done; }
+has() { local k="$1"; shift; for a in "$@"; do [ "$a" = "$k" ] && { echo true; return; }; done; echo false; }
+prs() { for f in "$dir"/pr-*; do case "$f" in *.body|*.base|*.draft|*.reviewers) ;; *) [ -f "$f" ] && echo "$f" ;; esac; done; }
 # \`-R <owner>/<repo>\` names the repo whatever the directory.
 named="$(arg -R "$@")"; [ -z "$named" ] || { repo="\${named##*/}"; dir="$FAKE_FORGE/$repo"; mkdir -p "$dir"; }
 case "$1 $2" in
@@ -169,16 +176,22 @@ case "$1 $2" in
   "api "*)
     case "$2" in
       *"/releases/tags/"*) cat "$dir/release-\${2##*/}" ;;
+      *"/pulls/"*)
+        for f in $(prs); do [ "$(sed 's|.*/||' "$f")" = "\${2##*/}" ] || continue; b="$(arg -f "$@")"; printf '%s' "\${b#body=}" > "$f.body"; done ;;
       *"/releases") for f in "$dir"/release-*; do [ -f "$f" ] || continue; v="\${f##*/release-}"; echo "$v $(cat "$dir/date-$v" 2>/dev/null || echo 2026-01-01T00:00:00Z)"; done ;;
       *) ls "$dir"/release-* 2>/dev/null | tail -1 | xargs -r cat ;;
     esac ;;
-  "pr view") for f in "$dir"/pr-plexus-*; do case "$f" in *.body|*.base) continue ;; esac; [ -f "$f" ] && [ "$(cat "$f")" = "$3" ] && cat "$f.body"; done ;;
-  "pr list") f="$dir/pr-$(arg --head "$@" | tr / -)"; [ ! -f "$f" ] || cat "$f" ;;
+  "pr view") for f in $(prs); do [ "$(cat "$f")" = "$3" ] && cat "$f.body"; done; true ;;
+  "pr list")
+    f="$dir/pr-$(arg --head "$@" | tr / -)"
+    if [ -f "$f" ]; then printf '[{"url":"%s","number":%s,"isDraft":%s}]\n' "$(cat "$f")" "$(sed 's|.*/||' "$f")" "$(cat "$f.draft")"; else echo '[]'; fi ;;
   "pr create")
     head="$(arg --head "$@")"; f="$dir/pr-$(echo "$head" | tr / -)"
     [ ! -f "$f" ] || { echo "a pull request for $head already exists" >&2; exit 1; }
-    echo "https://forge/$repo/pull/$(( $(ls "$dir" | grep -c '^pr-') + 1 ))" > "$f"
+    echo "https://forge/$repo/pull/$(( $(prs | wc -l) + 1 ))" > "$f"
+    has --draft "$@" > "$f.draft"
     arg --body "$@" > "$f.body"; arg --base "$@" > "$f.base"; cat "$f" ;;
+  "pr ready") for f in $(prs); do [ "$(cat "$f")" = "$3" ] && has --undo "$@" > "$f.draft"; done; true ;;
   *) echo "fake gh: unexpected $*" >&2; exit 1 ;;
 esac
 `,
@@ -734,8 +747,10 @@ test('update --recursive: every repo under the directory takes the version in a 
   assert.equal(pull('acme-web', '0.2.0'), 'https://forge/acme-web/pull/1');
   assert.equal(pull('acme-web', '0.2.0', '.base'), 'develop');
   assert.equal(pull('acme-platform', '0.2.0', '.base'), 'main');
-  assert.match(pull('acme-web', '0.2.0', '.body'), /Plexus 0\.2\.0 .*acme\/web, acme\/web\/apps\/site/);
-  assert.match(pull('acme-web', '0.2.0', '.body'), /Merged clean/);
+  assert.match(pull('acme-web', '0.2.0', '.body'), /Plexus 0\.2\.0 .*`copier update` at the root, `apps\/site`/);
+  assert.match(pull('acme-web', '0.2.0', '.body'), /^Nothing needs a hand: every site merged clean\.$/m);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'false', 'ready for review');
+  assert.ok(has(out, '--force-with-lease=refs/heads/plexus/0.2.0: origin'), 'the push only creates the branch');
   assert.match(pull('acme-web', '0.2.0', '.body'), /Opened by `plx update`: 0\.2\.0, the oldest version not taken/);
   assert.ok(has(out, 'acme/web: pull request opened: https://forge/acme-web/pull/1'));
   for (const r of ['acme/web', 'acme/platform'])
@@ -789,7 +804,12 @@ test('update --recursive: a directory of tenant repos and no upstream checkout; 
   const now = await runRecursive({ yes: true }, { dir: acme, now: true });
   assert.equal(now.error, undefined, now.out);
   assert.ok(has(now.out, '• web: takes 0.2.0 — asked for (--now)'), now.out);
-  assert.ok(has(now.out, 'platform: plexus/0.2.0 is already on origin (https://forge/acme-platform/pull/1)'));
+  assert.ok(
+    has(
+      now.out,
+      'platform: plexus/0.2.0 is on origin (https://forge/acme-platform/pull/1); no conflict marker remains',
+    ),
+  );
   assert.deepEqual(now.result?.resting, []);
   assert.deepEqual(now.result?.pulls, ['https://forge/acme-platform/pull/1', 'https://forge/acme-web/pull/1']);
 });
@@ -804,7 +824,14 @@ test('update --recursive: a second run finds the version branches on origin and 
   const second = await runRecursive({ yes: true }, { now: true });
   assert.equal(second.error, undefined, second.out);
   assert.equal(fakeLog().filter((l) => has(l, 'pr create')).length, 2, 'two repos, two pull requests in all');
-  assert.ok(has(second.out, 'acme/web: plexus/0.2.0 is already on origin (https://forge/acme-web/pull/1)'));
+  assert.ok(
+    has(second.out, 'acme/web: plexus/0.2.0 is on origin (https://forge/acme-web/pull/1); no conflict marker remains'),
+  );
+  assert.ok(!fakeLog().some((l) => has(l, 'pr ready')), 'a ready one with no marker stays ready');
+  assert.match(pull('acme-web', '0.2.0', '.body'), /^Nothing needs a hand/, 'the body rewritten to the present state');
+  const patched = fakeLog().filter((l) => has(l, '--method PATCH')).length;
+  await runRecursive({ yes: true }, { now: true });
+  assert.equal(fakeLog().filter((l) => has(l, '--method PATCH')).length, patched, 'a body already current is left');
   assert.equal(git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0'), tip, 'the branch is where it was');
   assert.equal(copierRuns().length, 3, 'copier not run again');
   assert.deepEqual(second.result?.pulls, ['https://forge/acme-platform/pull/1', 'https://forge/acme-web/pull/1']);
@@ -1285,7 +1312,10 @@ test('update --recursive: a failing site does not stop the others, and the summa
   assert.ok(has(out, '✗ FAILED — copier update exited nonzero: fake copier: failing on purpose'));
   assert.deepEqual(result?.failed, ['acme/platform']);
   assert.deepEqual(result?.mergeable, ['https://forge/acme-web/pull/1'], 'a repo with a failed site is not offered');
-  assert.match(pull('acme-platform', '0.2.0', '.body'), /Failed, and left as it was: acme\/platform\./);
+  assert.match(pull('acme-platform', '0.2.0', '.body'), /^\*\*Needs a hand\.\*\*/, 'the body opens with it');
+  assert.match(pull('acme-platform', '0.2.0', '.body'), /^- `copier update` failed at the root, left as it was/m);
+  assert.equal(pull('acme-platform', '0.2.0', '.draft'), 'true', 'a draft');
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'false');
   assert.deepEqual(result?.clean, ['acme/web', 'acme/web/apps/site']);
 });
 
@@ -1299,14 +1329,19 @@ test('update --recursive: a conflict is committed with its markers and the pull 
   assert.deepEqual(result?.conflicted, ['acme/web/apps/site']);
   assert.deepEqual(result?.clean, ['acme/platform', 'acme/web']);
   assert.match(onVersion('acme-web', '0.2.0', 'apps/site/template-owned.txt'), /^<<<<<<< /m, 'markers in the branch');
-  assert.match(pull('acme-web', '0.2.0', '.body'), /Conflicts to resolve.*acme\/web\/apps\/site/);
+  assert.match(pull('acme-web', '0.2.0', '.body'), /^- Conflicts at `apps\/site`, committed with their markers\.$/m);
+  assert.match(
+    pull('acme-web', '0.2.0', '.body'),
+    /^- Files that hold conflict markers: `apps\/site\/template-owned\.txt`\.$/m,
+  );
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'a draft');
   assert.equal(result?.pulls.length, 2, 'the pull request is opened all the same');
   assert.deepEqual(
     result?.mergeable,
     ['https://forge/acme-platform/pull/1'],
     'only the clean one is offered for merging',
   );
-  assert.doesNotMatch(pull('acme-web', '0.2.0', '.body'), /Merged clean/);
+  assert.doesNotMatch(pull('acme-web', '0.2.0', '.body'), /Nothing needs a hand/);
 });
 
 test('update --recursive: a conflict at the repo root does not stop its apps', async () => {
@@ -1415,13 +1450,15 @@ test('update: a repo takes the newest version itself, in a worktree, and leaves 
   // The next day: the branch is on origin, so nothing moves it.
   const again = await runUpdate({ yes: true }, { repo: web });
   assert.equal(again.error, undefined, again.out);
-  assert.ok(has(again.out, 'web: plexus/0.2.0 is already on origin (https://forge/acme-web/pull/1) — nothing to do'));
+  assert.ok(
+    has(again.out, 'web: plexus/0.2.0 is on origin (https://forge/acme-web/pull/1); no conflict marker remains'),
+  );
   assert.equal(copierRuns().length, 2, 'copier not run again');
   assert.deepEqual(again.result?.pulls, ['https://forge/acme-web/pull/1']);
   assert.deepEqual(
     again.result?.mergeable,
     ['https://forge/acme-web/pull/1'],
-    'found on origin, and its body says clean',
+    'found on origin, no draft, and no marker in it',
   );
   assert.deepEqual(again.result?.clean, []);
 });
@@ -1471,7 +1508,7 @@ test("update: after a recursive run opened the version's pull request, the repo'
   const before = copierRuns().length;
   const { result, error, out } = await runUpdate({ yes: true }, { repo: join(WS, 'acme/platform') });
   assert.equal(error, undefined, out);
-  assert.ok(has(out, 'platform: plexus/0.2.0 is already on origin (https://forge/acme-platform/pull/1)'));
+  assert.ok(has(out, 'platform: plexus/0.2.0 is on origin (https://forge/acme-platform/pull/1)'), out);
   assert.equal(copierRuns().length, before);
   assert.deepEqual(result?.pulls, ['https://forge/acme-platform/pull/1']);
   assert.deepEqual(result?.failed, []);
@@ -1487,7 +1524,82 @@ test('update: a conflict is committed with its markers, the pull request opened,
   assert.deepEqual(result?.conflicted, ['web/apps/site']);
   assert.deepEqual(result?.clean, ['web']);
   assert.match(onVersion('acme-web', '0.2.0', 'apps/site/template-owned.txt'), /^<<<<<<< /m);
-  assert.match(pull('acme-web', '0.2.0', '.body'), /Conflicts to resolve.*web\/apps\/site/);
+  assert.match(pull('acme-web', '0.2.0', '.body'), /^- Conflicts at `apps\/site`/m);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true');
+});
+
+test('update: a pull request that needs a hand is a draft; later runs follow its markers, never its body, and never move it', async () => {
+  fixture('update-hand');
+  versionCut('0.2.0');
+  const web = join(WS, 'acme/web');
+  process.env.FAKE_COPIER_CONFLICT = 'apps/site';
+  process.env.FAKE_PNPM_FAIL = '1';
+  const first = await runUpdate({ yes: true }, { repo: web });
+  delete process.env.FAKE_COPIER_CONFLICT;
+  delete process.env.FAKE_PNPM_FAIL;
+  assert.equal(first.error, undefined, first.out);
+  const url = 'https://forge/acme-web/pull/1';
+  assert.ok(has(first.out, `web: draft pull request opened: ${url}`), first.out);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'opened as a draft');
+  const body = pull('acme-web', '0.2.0', '.body');
+  assert.match(body, /^\*\*Needs a hand\.\*\*/, 'the body opens with what needs a hand');
+  assert.match(body, /^- Files that hold conflict markers: `apps\/site\/template-owned\.txt`\.$/m);
+  assert.match(body, /^- The lockfile did not refresh: run `pnpm install` after resolving/m);
+  assert.deepEqual(first.result?.conflicted, ['web/apps/site']);
+  assert.deepEqual(first.result?.failed, ['web/pnpm-lock.yaml']);
+  assert.deepEqual(first.result?.mergeable, []);
+  const tip = git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0');
+
+  // Somebody edits the body to say it is clean: nothing follows from it.
+  writeFileSync(join(FORGE(), 'acme-web', 'pr-plexus-0.2.0.body'), 'Nothing needs a hand: every site merged clean.');
+  const second = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(second.error, undefined, second.out);
+  assert.ok(
+    has(second.out, `web: plexus/0.2.0 is on origin (${url}); 1 file still holds conflict markers`),
+    second.out,
+  );
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'still a draft');
+  assert.match(
+    pull('acme-web', '0.2.0', '.body'),
+    /^- Files that hold conflict markers: `apps\/site\/template-owned\.txt`\.$/m,
+  );
+  assert.doesNotMatch(pull('acme-web', '0.2.0', '.body'), /pnpm install/, 'the lockfile is not checked again');
+  assert.deepEqual(second.result?.conflicted, ['web/apps/site/template-owned.txt'], 'still needs a human');
+  assert.deepEqual(second.result?.mergeable, []);
+  assert.equal(git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0'), tip, 'the branch is where it was');
+  assert.equal(copierRuns().length, 2, 'copier not run again');
+
+  // Somebody resolves the conflict on the branch.
+  const human = join(WS, 'human');
+  git(WS, 'clone', '--quiet', '--branch', 'plexus/0.2.0', remote('acme-web'), human);
+  put(join(human, 'apps/site/template-owned.txt'), 'resolved\n');
+  commit(human, 'resolve');
+  git(human, 'push', '--quiet', 'origin', 'plexus/0.2.0');
+  const resolved = git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0');
+  const preview = await runUpdate({ dryRun: true, yes: true }, { repo: web });
+  assert.equal(preview.error, undefined, preview.out);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'a dry run changes nothing');
+  assert.deepEqual(preview.result?.mergeable, [], 'still a draft, so not ready to merge');
+  const third = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(third.error, undefined, third.out);
+  assert.ok(has(third.out, `web: plexus/0.2.0 is on origin (${url}); no conflict marker remains — ready for review`));
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'false', 'marked ready');
+  assert.match(pull('acme-web', '0.2.0', '.body'), /^Nothing needs a hand/);
+  assert.ok(fakeLog().some((l) => l === `gh[acme-web] pr ready ${url}`));
+  assert.deepEqual(third.result?.conflicted, []);
+  assert.deepEqual(third.result?.mergeable, [url]);
+  assert.equal(git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0'), resolved, "the human's commit, untouched");
+
+  // A bad merge brings markers back: a draft again.
+  put(join(human, 'template-owned.txt'), `x\n${'>'.repeat(7)} theirs\n`);
+  commit(human, 'oops');
+  git(human, 'push', '--quiet', 'origin', 'plexus/0.2.0');
+  const fourth = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(fourth.error, undefined, fourth.out);
+  assert.ok(has(fourth.out, '1 file still holds conflict markers — a draft again'), fourth.out);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true');
+  assert.ok(fakeLog().some((l) => l === `gh[acme-web] pr ready ${url} --undo`));
+  assert.deepEqual(fourth.result?.conflicted, ['web/template-owned.txt']);
 });
 
 test('update: a pending minor rests inside the interval; past it the newest is taken, the versions skipped in one pull', async () => {

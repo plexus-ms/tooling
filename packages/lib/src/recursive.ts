@@ -21,9 +21,9 @@
 //   plx -y update -r ~/dev --to 0.66.0
 import { findConsumers } from './consumers.ts';
 import type { Context } from './context.ts';
+import { detailOf } from './io.ts';
 import type { Release } from './need.ts';
 import { overview } from './overview.ts';
-import { detailOf } from './take.ts';
 import { TEMPLATES, templateSource } from './templates.ts';
 import { type Outcome, releasesOf, type UpdateOptions, update } from './update.ts';
 import { isPlexusVersion, preflightForge, UsageError } from './version.ts';
