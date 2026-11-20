@@ -6,7 +6,8 @@ name: _deploy-targets
 # fan _deploy.yml over. Every app, on every push: the deploy verb ends at
 # once where the host already serves the app's file, so only a changed app
 # restarts. The inventory's records of apps built in an app repo start
-# nothing here. Logic lives in `plx deploy-targets` (@plexus-ms/cli, pinned
+# nothing here. An app under apps/ whose record names no target fails the
+# job. Logic lives in `plx deploy-targets` (@plexus-ms/cli, pinned
 # in the caller's mise.toml), never here.
 
 on:
@@ -36,4 +37,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
       - id: run
-        run: echo "matrix=$(plx deploy-targets --environment production --apps apps inventory)" | tee -a "$GITHUB_OUTPUT"
+        # The assignment is a line of its own so that a failing verb fails the step.
+        run: |
+          matrix=$(plx deploy-targets --environment production --apps apps inventory)
+          echo "matrix=$matrix" | tee -a "$GITHUB_OUTPUT"

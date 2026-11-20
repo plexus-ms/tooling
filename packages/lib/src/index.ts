@@ -47,8 +47,12 @@ export {
   type InventoryFile,
   parseInventoryFile,
   readDeployTargets,
+  readInventory,
+  recordsWithoutTarget,
   selectDeployTargets,
   targetsIn,
+  type Untargeted,
+  untargetedError,
 } from './deployTargets.ts';
 export {
   type AppFacts,

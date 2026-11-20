@@ -9,8 +9,20 @@
 //   plx deploy-targets                              # in a platform repo's root
 //   plx deploy-targets --environment staging ../platform/inventory
 //   plx deploy-targets --environment production --apps apps    # the matrix of this repo's own apps
-import { resolve } from 'node:path';
-import { deployLegs, readDeployTargets, targetsIn, UsageError } from '@plexus-ms/lib';
+//
+// With --apps, an app under <dir> whose record in the environment sits in a
+// file without `plexus_deploy_target` fails the verb, which names the app and
+// the file; an app under <dir> with no record there is named and left out.
+import { relative, resolve } from 'node:path';
+import {
+  deployLegs,
+  readInventory,
+  recordsWithoutTarget,
+  selectDeployTargets,
+  targetsIn,
+  UsageError,
+  untargetedError,
+} from '@plexus-ms/lib';
 import type { Command } from 'commander';
 import { contextOf } from '../program.ts';
 
@@ -28,14 +40,24 @@ export function register(program: Command): void {
     )
     .action(async (inventory: string, opts: { environment?: string; apps?: string }, command: Command) => {
       const ctx = contextOf(command);
-      const targets = await readDeployTargets(ctx, resolve(inventory));
+      const files = await readInventory(ctx, resolve(inventory));
+      const targets = selectDeployTargets(files);
       if (opts.apps !== undefined) {
         if (!opts.environment) throw new UsageError('--apps needs --environment');
         const dirs = (await ctx.readDir(resolve(opts.apps)).catch(() => []))
           .filter((e) => e.directory)
           .map((e) => e.name);
-        const { legs, without } = deployLegs(targetsIn(targets, opts.environment), dirs);
-        for (const app of without) ctx.say(`${app} has no deployment in ${opts.environment}; nothing to deploy`);
+        const { legs, untargeted, without } = deployLegs(
+          targetsIn(targets, opts.environment),
+          dirs,
+          recordsWithoutTarget(files, opts.environment),
+        );
+        for (const app of without) ctx.say(`${app} has no record in ${opts.environment}; nothing to deploy`);
+        if (untargeted.length > 0)
+          throw untargetedError(
+            untargeted.map((u) => ({ app: u.app, files: u.files.map((f) => relative(process.cwd(), f)) })),
+            opts.environment,
+          );
         ctx.result(legs, (l) => JSON.stringify(l));
         return;
       }

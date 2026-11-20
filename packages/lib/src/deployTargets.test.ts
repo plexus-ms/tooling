@@ -6,8 +6,11 @@ import {
   deploymentSlug,
   parseInventoryFile,
   readDeployTargets,
+  readInventory,
+  recordsWithoutTarget,
   selectDeployTargets,
   targetsIn,
+  untargetedError,
 } from './deployTargets.ts';
 import { fakeIo } from './testing/fakeIo.ts';
 import { UsageError } from './version.ts';
@@ -124,7 +127,44 @@ test('deployLegs: a leg per app of the repo with a target, sorted; the rest are 
   const targets = { beszel: 'ssh://plexus@host-c', website: 'ssh://plexus@host-a' };
   assert.deepEqual(deployLegs(targets, ['pocket-id', 'beszel']), {
     legs: [{ app: 'beszel', host: 'ssh://plexus@host-c' }],
+    untargeted: [],
     without: ['pocket-id'],
   });
-  assert.deepEqual(deployLegs(targets, []), { legs: [], without: [] });
+  assert.deepEqual(deployLegs(targets, []), { legs: [], untargeted: [], without: [] });
+});
+
+test('recordsWithoutTarget: the records of an environment in files without a target, unless another file gives one', () => {
+  const files = [
+    { path: 'inventory/host_vars/vm103.yml', apps: [prod('pocket-id'), { app: 'website', environment: 'staging' }] },
+    { path: 'inventory/group_vars/all.yml', apps: [prod('pocket-id'), prod('beszel')] },
+    { path: 'inventory/host_vars/host-a.yml', target: 'ssh://deploy@host-a', apps: [prod('beszel')] },
+  ];
+  assert.deepEqual(recordsWithoutTarget(files, 'production'), {
+    'pocket-id': ['inventory/group_vars/all.yml', 'inventory/host_vars/vm103.yml'],
+  });
+  assert.deepEqual(recordsWithoutTarget(files, 'staging'), { website: ['inventory/host_vars/vm103.yml'] });
+});
+
+test('an app of the repo with a record and no target is neither a leg nor without: the error names it and its file', async () => {
+  const io = fakeIo({
+    inv: {
+      host_vars: {
+        'vm103.yml': 'plexus_apps:\n  - name: pocket-id\n    port: 3012\n',
+        'vm104.yml': 'plexus_deploy_target: ssh://plexus@vm104\nplexus_apps: [{name: beszel}]\n',
+      },
+    },
+  });
+  const files = await readInventory(new Context({}, io), '/inv');
+  const { legs, untargeted, without } = deployLegs(
+    targetsIn(selectDeployTargets(files), 'production'),
+    ['pocket-id', 'beszel', 'unrecorded'],
+    recordsWithoutTarget(files, 'production'),
+  );
+  assert.deepEqual(legs, [{ app: 'beszel', host: 'ssh://plexus@vm104' }]);
+  assert.deepEqual(without, ['unrecorded']);
+  assert.deepEqual(untargeted, [{ app: 'pocket-id', files: ['/inv/host_vars/vm103.yml'] }]);
+  assert.match(
+    untargetedError(untargeted, 'production').message,
+    /^pocket-id has a record in production in \/inv\/host_vars\/vm103\.yml, which names no plexus_deploy_target$/,
+  );
 });
