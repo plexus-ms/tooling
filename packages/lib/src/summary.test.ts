@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mergeLine, renderSummary, summarize } from './summary.ts';
+import { isClean, mergeLine, renderSummary, summarize } from './summary.ts';
 import type { Outcome } from './update.ts';
 
 test('renderSummary lists every site and ends with the verdict', () => {
@@ -176,4 +176,40 @@ test('summarize folds what each repo came to, in order, without touching the out
   });
   assert.equal(JSON.stringify(outcomes), before, 'the outcomes are as they were');
   assert.equal(summarize([], true, '0.3.0').version, '0.3.0', "a version given is the summary's");
+});
+
+test('a file holding a marker outside any conflicted site makes the opening run need a human', () => {
+  const taken = (sites: { rel: string; outcome: 'clean' | 'conflicted' }[], marked: string[]): Outcome => ({
+    repo: 'acme/web',
+    version: '0.2.0',
+    kind: 'taken',
+    taken: {
+      rel: 'acme/web',
+      sites,
+      marked,
+      pull: { branch: 'plexus/0.2.0', url: 'https://forge/acme/web/pull/1', draft: true },
+    },
+  });
+  const clean = summarize([taken([{ rel: 'acme/web', outcome: 'clean' }], ['docs/old.md'])], false);
+  assert.deepEqual(clean.conflicted, ['acme/web/docs/old.md'], 'no site reported it, the summary does');
+  assert.deepEqual(clean.mergeable, []);
+  assert.equal(isClean(clean), false, 'so the run exits nonzero');
+  assert.match(renderSummary(clean, ''), /^✗ needs attention/m);
+  const covered = summarize(
+    [
+      taken(
+        [
+          { rel: 'acme/web', outcome: 'clean' },
+          { rel: 'acme/web/apps/site', outcome: 'conflicted' },
+        ],
+        ['apps/site/a.txt', 'apps/sitex/b.txt'],
+      ),
+    ],
+    false,
+  );
+  assert.deepEqual(
+    covered.conflicted,
+    ['acme/web/apps/site', 'acme/web/apps/sitex/b.txt'],
+    'a file in a conflicted site is that site',
+  );
 });

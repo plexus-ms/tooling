@@ -14,7 +14,7 @@ export interface Summary {
   preview: boolean;
   /** Sites, relative to the workspace. */
   clean: string[];
-  /** Sites left with conflicts, and the files of a version branch on origin that still hold conflict markers. */
+  /** Sites left with conflicts, and files that hold conflict markers outside them: in a pull request opened, or on a version branch found on origin. */
   conflicted: string[];
   /** Sites whose update exited nonzero, consumers that could not be cloned or pushed, lockfiles that failed to refresh, and review requests the forge refused. */
   failed: string[];
@@ -27,6 +27,9 @@ export interface Summary {
   /** Those of `pulls` that are no draft and need no hand: ready to merge once their checks pass. */
   mergeable: string[];
 }
+
+/** A repo's file as the run names it: under the repo's name, `.` for a repo run from inside. */
+const inRun = (repo: string, file: string): string => (repo === '.' ? file : `${repo}/${file}`);
 
 /** True when nothing in the summary needs a human but the pull requests. */
 export const isClean = (s: Summary): boolean =>
@@ -67,7 +70,7 @@ export function summarize(
         break;
       case 'found':
         // Files that still hold markers need a human, like a conflicted site.
-        for (const file of o.marked) s.conflicted.push(o.repo === '.' ? file : `${o.repo}/${file}`);
+        for (const file of o.marked) s.conflicted.push(inRun(o.repo, file));
         if (o.failed !== undefined) s.failed.push(o.repo);
         if (o.pull) s.pulls.push(o.pull);
         if (o.pull && o.mergeable) s.mergeable.push(o.pull);
@@ -75,6 +78,14 @@ export function summarize(
       case 'taken': {
         const t = o.taken;
         for (const site of t.sites) s[site.outcome].push(site.rel);
+        // A file that holds a marker makes the pull request a draft too: listed
+        // unless a conflicted site it lies in says so already.
+        const conflicted = t.sites.filter((x) => x.outcome === 'conflicted').map((x) => x.rel);
+        for (const file of t.marked ?? []) {
+          const path = inRun(t.rel, file);
+          if (!conflicted.some((site) => site === '.' || path === site || path.startsWith(`${site}/`)))
+            s.conflicted.push(path);
+        }
         if (t.lockfile === 'failed') s.failed.push(`${t.rel}/pnpm-lock.yaml`);
         if (t.failed !== undefined) s.failed.push(t.rel);
         if (t.pull) s.pulls.push(t.pull.url ?? `${t.rel} ${t.pull.branch}`);
