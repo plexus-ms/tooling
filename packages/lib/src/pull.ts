@@ -134,6 +134,13 @@ export async function pullOf(
 export type Review = { requested: string[] } | { failed: string };
 
 /**
+ * Who is asked to review: the logins named (`--reviewer`), or the repo's
+ * answers, whose `pr_reviewers` is read, and checked, only when a pull
+ * request is opened.
+ */
+export type Reviewers = { named: string[] } | { answers: Record<string, unknown> };
+
+/**
  * Ask the users for a review of the pull request, once; none asked, nothing
  * done. The request is one call for every login, so its author, who opened
  * it (a maintainer running the verb by hand who is among the reviewers), is
@@ -143,9 +150,17 @@ export async function askForReviews(
   ctx: Context,
   name: string,
   pull: Pull,
-  named: string[],
+  from: Reviewers,
   cwd: string,
 ): Promise<Review | undefined> {
+  let named: string[];
+  try {
+    named = 'named' in from ? from.named : reviewersOf(from.answers);
+  } catch (error) {
+    const why = (error as Error).message;
+    ctx.say(`  ✗ FAILED — ${name}: no review requested: ${why}`);
+    return { failed: why };
+  }
   const author = pull.author?.toLowerCase();
   const reviewers = named.filter((l) => l.toLowerCase() !== author);
   if (reviewers.length < named.length)
@@ -297,7 +312,7 @@ export async function openLate(
   ctx: Context,
   consumer: Consumer,
   version: string,
-  reviewers: string[],
+  reviewers: Reviewers,
 ): Promise<OpenedLate> {
   const { path: repo, rel: name } = consumer;
   const branch = versionBranch(version);

@@ -24,7 +24,16 @@ import type { Context } from './context.ts';
 import { ANSWERS_FILE, copierVia, parseAnswers, setAnswer } from './copier.ts';
 import { run, write } from './effects.ts';
 import { detailOf } from './io.ts';
-import { askForReviews, needsAHand, type PullState, pullBody, pullOf, type Review, versionBranch } from './pull.ts';
+import {
+  askForReviews,
+  needsAHand,
+  type PullState,
+  pullBody,
+  pullOf,
+  type Review,
+  type Reviewers,
+  versionBranch,
+} from './pull.ts';
 import { namesOldTemplate, templateSource } from './templates.ts';
 
 /** What became of one site: merged clean, left with conflicts, or its copier run failed (`detail` says why). */
@@ -79,8 +88,8 @@ export interface Take {
   why?: string;
   /** How each site is updated; default: copier against the published template, at `ref`. */
   update?: SiteUpdate;
-  /** The users asked to review the pull request when it is opened; none by default. */
-  reviewers?: string[];
+  /** Who is asked to review the pull request when it is opened; nobody by default. */
+  reviewers?: Reviewers;
 }
 
 /**
@@ -365,7 +374,7 @@ async function openPull(
   ctx.say(`• ${consumer.rel}: ${draft ? 'draft ' : ''}pull request opened${url ? `: ${url}` : ''}`);
   const pull = { branch, draft, ...(url ? { url } : {}) };
   if (!opened) return { marked, pull, failed: 'the forge did not list the pull request it opened' };
-  const review = await askForReviews(ctx, consumer.rel, opened, take.reviewers ?? [], dir);
+  const review = await askForReviews(ctx, consumer.rel, opened, take.reviewers ?? { named: [] }, dir);
   return { marked, pull, ...(review ? { review } : {}) };
 }
 

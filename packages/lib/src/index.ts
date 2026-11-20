@@ -140,6 +140,7 @@ export {
   pullOf,
   REVIEWERS_ANSWER,
   type Review,
+  type Reviewers,
   type Revisited,
   requestReviews,
   reviewersOf,

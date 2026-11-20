@@ -40,7 +40,9 @@
 //
 // The pull request it opens asks for a review from the users the repo's root
 // answers name (`pr_reviewers`), or from those `reviewers` names instead
-// (pull.ts), once, when it is opened.
+// (pull.ts), once, when it is opened. The answer is read and checked only
+// then: a bad one fails no run that opens nothing, and the pull request is
+// opened all the same, with the refused answer reported.
 //
 //   plx update                      # the version the repo's schedule takes, if any
 //   plx update --now                # the newest version, whatever its step
@@ -55,7 +57,7 @@ import { run } from './effects.ts';
 import { detailOf, ExecError } from './io.ts';
 import { maxAgeOf, type Need, needOf, type Release } from './need.ts';
 import { overview } from './overview.ts';
-import { openLate, pullOf, type Review, reviewersOf, revisit, versionBranch } from './pull.ts';
+import { openLate, pullOf, type Review, type Reviewers, revisit, versionBranch } from './pull.ts';
 import { type Taken, takeVersion } from './take.ts';
 import { TEMPLATES, templateSource } from './templates.ts';
 import { COMPENDIUM, compareVersions, isPlexusVersion, preflightForge, UsageError } from './version.ts';
@@ -157,7 +159,10 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
         now: options.today === undefined ? new Date() : new Date(options.today),
       });
   if (need.held) ctx.say(`• ${name}: ${need.held} (plx update --now takes it)`);
-  const reviewers = options.reviewers ?? reviewersOf(answers[consumer.sites.indexOf(root)]?.answers ?? {});
+  // Checked only when a pull request is opened: a run that opens none never reads it.
+  const reviewers: Reviewers = options.reviewers
+    ? { named: options.reviewers }
+    : { answers: answers[consumer.sites.indexOf(root)]?.answers ?? {} };
   // A repo that rests is looked at for the newest version: one asked for earlier may be on origin.
   const version = need.take ? need.version : newest;
 

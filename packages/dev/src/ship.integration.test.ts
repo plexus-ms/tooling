@@ -1763,7 +1763,7 @@ test('update: the review is asked of the users pr_reviewers names, or --reviewer
   assert.equal(pull('acme-web', '0.2.0', '.reviewers'), 'carol', 'requested on the draft');
   assert.equal(requests().length, 2, 'the platform repo, found on origin, is not asked again');
 
-  // An answer that names a team is refused before anything is made.
+  // An answer that names a team is read only when a pull request is opened.
   const bad = join(WS, 'acme/platform');
   put(
     join(bad, '.copier-answers.yml'),
@@ -1771,8 +1771,28 @@ test('update: the review is asked of the users pr_reviewers names, or --reviewer
   );
   commit(bad, 'a team');
   git(bad, 'push', '--quiet', 'origin', 'main');
-  const team = await runUpdate({ yes: true }, { repo: bad, to: '0.2.0' });
-  assert.match(team.error ?? '', /the answer pr_reviewers names `acme\/ops`, a team; only users are requested/);
+  const found = await runUpdate({ yes: true }, { repo: bad, to: '0.2.0' });
+  assert.equal(found.error, undefined, found.out);
+  assert.deepEqual(found.result?.failed, [], 'a run that finds the branch on origin opens nothing and reads nothing');
+  // Once on 0.2.0, with 0.3.0 cut the day before: it rests, then is asked.
+  put(
+    join(bad, '.copier-answers.yml'),
+    '_commit: 0.2.0\n_src_path: gh:plexus-ms/template-repo-operations\npr_reviewers: acme/ops\n',
+  );
+  commit(bad, 'Plexus 0.2.0');
+  git(bad, 'push', '--quiet', 'origin', 'main');
+  versionCut('0.3.0', '2026-02-28');
+  const rests = await runUpdate({ yes: true }, { repo: bad });
+  assert.equal(rests.error, undefined, rests.out);
+  assert.equal(rests.result?.resting.length, 1, 'a run that rests passes');
+  const opened = await runUpdate({ yes: true }, { repo: bad, now: true });
+  assert.equal(opened.error, undefined, opened.out);
+  assert.ok(
+    has(opened.out, 'platform: no review requested: the answer pr_reviewers names `acme/ops`, a team'),
+    opened.out,
+  );
+  assert.equal(pull('acme-platform', '0.3.0'), 'https://forge/acme-platform/pull/2', 'opened all the same');
+  assert.deepEqual(opened.result?.failed, ['platform (review request)'], 'and the run needs a human');
 });
 
 test("update: the pull request's author is left out of the review request, and the run says so", async () => {
