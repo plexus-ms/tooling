@@ -3,11 +3,13 @@
 // that finds the branch on origin with the pull request open comes back to it
 // here (`revisit`).
 //
-// A pull request that needs a hand is a draft, and its body opens with what
-// needs it: the sites that conflicted, the tracked files that hold conflict
-// markers (conflicts.ts), the sites whose copier run failed, and, when the
-// lockfile did not refresh, that `pnpm install` is to be run after resolving.
-// One that needs none is ready for review.
+// A pull request that needs a hand is asked for as a draft, and its body
+// opens with what needs it: the sites that conflicted, the tracked files that
+// hold conflict markers (conflicts.ts), the sites whose copier run failed,
+// and, when the lockfile did not refresh, that `pnpm install` is to be run
+// after resolving. Where the forge refuses a draft, the same pull request is
+// opened as an ordinary one, and the run says so; it needs a hand all the
+// same. One that needs none is ready for review.
 //
 // The branch is never moved by any run, and plx never pushes to it again: it
 // is the human's from the moment it is on origin. A later run that finds it
@@ -20,7 +22,9 @@
 // remote-tracking ref written, so no checkout and no ref of the repo is
 // touched, under a dry run as in a real one. It runs the detector over its tracked files, writes the
 // body afresh for that present state (it never reads the body), and marks the pull request ready when no marker
-// remains, or a draft again while one does. It does not check the lockfile:
+// remains, or a draft again while one does; a forge that refuses the draft
+// leaves it ordinary, which the run says and does not count as a failure of
+// its own. It does not check the lockfile:
 // that is the human's, and the repo's CI catches a stale one. Whether the pull
 // request is ready to merge is read from its draft state and the detector,
 // never from its body.
@@ -92,6 +96,62 @@ export const requestReviews = (number: number, logins: string[], cwd: string) =>
     ],
     { cwd },
   );
+
+/** The pull request to open: the version branch against `base`, with its body. */
+export interface PullRequest {
+  base: string;
+  version: string;
+  body: string;
+  /** Asked for as a draft. */
+  draft: boolean;
+}
+
+/**
+ * Open the version's pull request, as a draft when one is asked for. A forge
+ * that refuses the draft, for whatever reason, is asked once more for the
+ * same pull request as an ordinary one, and the run says so; when that fails
+ * too, the error names both attempts. Resolves with whether it is a draft.
+ */
+export async function createPull(ctx: Context, name: string, req: PullRequest, cwd: string): Promise<boolean> {
+  const create = (draft: boolean) =>
+    run(
+      'gh',
+      [
+        'pr',
+        'create',
+        ...(draft ? ['--draft'] : []),
+        '--base',
+        req.base,
+        '--head',
+        versionBranch(req.version),
+        '--title',
+        `chore: Plexus ${req.version}`,
+        '--body',
+        req.body,
+      ],
+      { cwd },
+    );
+  if (!req.draft) {
+    await ctx.apply([create(false)]);
+    return false;
+  }
+  try {
+    await ctx.apply([create(true)]);
+    return true;
+  } catch (refused) {
+    try {
+      await ctx.apply([create(false)]);
+    } catch (error) {
+      throw new Error(
+        `as a draft: ${detailOf(refused) || 'refused'}; as an ordinary one: ${detailOf(error) || 'refused'}`,
+      );
+    }
+    ctx.say(
+      `• ${name}: the pull request is no draft: the forge refused one${detailOf(refused) ? ` (${detailOf(refused)})` : ''}`,
+    );
+    return false;
+  }
+}
 
 /** The version's pull request as the forge lists it, in any state. */
 export interface Pull {
@@ -244,7 +304,7 @@ export function pullBody(p: PullState): string {
   const head =
     hand.length > 0
       ? [
-          `**Needs a hand.** This pull request is a draft; \`plx update\` marks it ready once no tracked file holds a conflict marker.\n\n${hand.join('\n')}`,
+          `**Needs a hand.** \`plx update\` marks this pull request ready once no tracked file holds a conflict marker.\n\n${hand.join('\n')}`,
         ]
       : ['Nothing needs a hand: every site merged clean.'];
   return [
@@ -287,18 +347,22 @@ export async function revisit(ctx: Context, consumer: Consumer, pull: Pull, vers
       : `• ${name}: ${branch} is on origin (${pull.url}); ${marked.length} file${marked.length === 1 ? '' : 's'} still hold${marked.length === 1 ? 's' : ''} conflict markers${pull.draft ? '' : ' — a draft again'}`,
   );
   // The body is written, never read: what it says decides nothing.
-  const steps = [
-    run('gh', ['api', `repos/{owner}/{repo}/pulls/${pull.number}`, '--method', 'PATCH', '-f', `body=${body}`], {
-      cwd: repo,
-    }),
-    ...(ready && pull.draft ? [run('gh', ['pr', 'ready', pull.url], { cwd: repo })] : []),
-    ...(!ready && !pull.draft ? [run('gh', ['pr', 'ready', pull.url, '--undo'], { cwd: repo })] : []),
-  ];
   try {
-    await ctx.apply(steps);
+    await ctx.apply([
+      run('gh', ['api', `repos/{owner}/{repo}/pulls/${pull.number}`, '--method', 'PATCH', '-f', `body=${body}`], {
+        cwd: repo,
+      }),
+      ...(ready && pull.draft ? [run('gh', ['pr', 'ready', pull.url], { cwd: repo })] : []),
+    ]);
   } catch (error) {
     return { url: pull.url, marked, mergeable: false, failed: `pull request ${pull.url}: ${detailOf(error)}` };
   }
+  // A forge that refuses the draft leaves the pull request ordinary: the markers keep the run nonzero.
+  if (!ready && !pull.draft)
+    await ctx.apply([run('gh', ['pr', 'ready', pull.url, '--undo'], { cwd: repo })]).catch((error) => {
+      const why = detailOf(error);
+      ctx.say(`  ${name}: still no draft: the forge refused one${why ? ` (${why})` : ''}`);
+    });
   // A dry run left the state as it was.
   const draft = ctx.dryRun ? pull.draft : !ready;
   return { url: pull.url, marked, mergeable: ready && !draft };
@@ -333,28 +397,16 @@ export async function openLate(
   const marked = await filesWithConflictMarkers(ctx, repo, tip);
   const sites = consumer.sites.map((s) => relative(consumer.path, s.path) || '.');
   const state: PullState = { version, sites, marked, note: OPENED_LATE };
-  const draft = needsAHand(state);
-  ctx.say(`• ${name}: ${branch} is on origin with no pull request — opening it${draft ? ' as a draft' : ''}`);
+  const asDraft = needsAHand(state);
+  ctx.say(`• ${name}: ${branch} is on origin with no pull request — opening it${asDraft ? ' as a draft' : ''}`);
+  let draft: boolean;
   try {
-    await ctx.apply([
-      run(
-        'gh',
-        [
-          'pr',
-          'create',
-          ...(draft ? ['--draft'] : []),
-          '--base',
-          consumer.branch,
-          '--head',
-          branch,
-          '--title',
-          `chore: Plexus ${version}`,
-          '--body',
-          pullBody(state),
-        ],
-        { cwd: repo },
-      ),
-    ]);
+    draft = await createPull(
+      ctx,
+      name,
+      { base: consumer.branch, version, body: pullBody(state), draft: asDraft },
+      repo,
+    );
   } catch (error) {
     const why = detailOf(error);
     ctx.say(`  ✗ FAILED — pull request${why ? `: ${why}` : ''}`);

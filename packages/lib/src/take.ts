@@ -4,8 +4,8 @@
 // the lockfile refreshed where manifests moved, the hand-owned workflows pinned to the version; then one
 // commit, pushed as `plexus/<version>`, and a pull request against the branch.
 // A conflict is committed with its markers and reported, and the pull request
-// is opened all the same, as a draft whose body opens with what needs a hand
-// (pull.ts): that is where it gets resolved. Nothing here aborts
+// is opened all the same, as a draft where the forge offers one, whose body
+// opens with what needs a hand (pull.ts): that is where it gets resolved. Nothing here aborts
 // a run: what became of each site, the lockfile and the pull request is
 // returned as data (`Taken`), which the caller folds into the summary that
 // says what needs a human (summary.ts). Reviewing and merging the pull
@@ -26,6 +26,7 @@ import { run, write } from './effects.ts';
 import { detailOf } from './io.ts';
 import {
   askForReviews,
+  createPull,
   needsAHand,
   type PullState,
   pullBody,
@@ -52,7 +53,7 @@ export interface Taken {
   lockfile?: 'refreshed' | 'failed';
   /** Tracked files of the scratch checkout that hold a conflict marker once the sites are updated. */
   marked?: string[];
-  /** The pull request opened, a draft when something needs a hand; its URL unknown when the forge did not say it. */
+  /** The pull request opened, a draft when something needs a hand and the forge took one; its URL unknown when the forge did not say it. */
   pull?: { branch: string; url?: string; draft: boolean };
   /** Why the commit, the push or the pull request failed, when one did. */
   failed?: string;
@@ -334,28 +335,15 @@ async function openPull(
     lockfile: taken.lockfile === 'failed',
     note: `Opened by ${take.opener}${take.why ? `: ${take.why}` : ''}.`,
   };
-  const draft = needsAHand(state);
   if (marked.length > 0) ctx.say(`  ${consumer.rel}: conflict markers in ${marked.join(', ')}`);
+  let draft: boolean;
   try {
-    await ctx.apply([
-      run(
-        'gh',
-        [
-          'pr',
-          'create',
-          ...(draft ? ['--draft'] : []),
-          '--base',
-          consumer.branch,
-          '--head',
-          branch,
-          '--title',
-          `chore: Plexus ${version}`,
-          '--body',
-          pullBody(state),
-        ],
-        { cwd: dir },
-      ),
-    ]);
+    draft = await createPull(
+      ctx,
+      consumer.rel,
+      { base: consumer.branch, version, body: pullBody(state), draft: needsAHand(state) },
+      dir,
+    );
   } catch (error) {
     const why = detailOf(error);
     ctx.say(`  ✗ FAILED — pull request${why ? `: ${why}` : ''}`);

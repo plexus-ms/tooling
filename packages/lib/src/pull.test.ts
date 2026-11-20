@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Context } from './context.ts';
-import { needsAHand, pullBody, pullOf } from './pull.ts';
+import { createPull, needsAHand, pullBody, pullOf } from './pull.ts';
 import { fakeIo } from './testing/fakeIo.ts';
 
 const base = { version: '0.2.0', sites: ['.', 'apps/site'], marked: [], note: 'Opened by `plx update`.' };
@@ -24,7 +24,8 @@ test('a body that needs a hand opens with every reason, the lockfile with what t
   };
   assert.equal(needsAHand(state), true);
   const body = pullBody(state);
-  assert.match(body, /^\*\*Needs a hand\.\*\* This pull request is a draft;/);
+  assert.match(body, /^\*\*Needs a hand\.\*\* `plx update` marks this pull request ready once/);
+  assert.doesNotMatch(body, /is a draft/, 'the same body serves a pull request the forge would not make a draft');
   assert.match(body, /^- Conflicts at `apps\/site`, committed with their markers\.$/m);
   assert.match(body, /^- Files that hold conflict markers: `apps\/site\/a\.txt`, `mise\.toml`\.$/m);
   assert.match(body, /^- `copier update` failed at the root, left as it was; run it there by hand\.$/m);
@@ -79,4 +80,43 @@ test('reviewers: a comma-separated string of user logins, blank for none; a team
   assert.deepEqual(reviewersOf({ pr_reviewers: null }), []);
   assert.deepEqual(reviewersOf({ pr_reviewers: 'alice' }), ['alice']);
   assert.deepEqual(reviewersOf({ renovate_reviewers: 'alice' }), [], 'the old name is not read');
+});
+
+test('a draft the forge refuses is asked for once more as an ordinary pull request, with the same body', async () => {
+  const req = { base: 'develop', version: '0.2.0', body: 'the body', draft: true };
+  const opening = (refuse: (args: string[]) => boolean) => {
+    const asked: string[][] = [];
+    const said: string[] = [];
+    const ctx = new Context(
+      {},
+      fakeIo({}, () => undefined, {
+        gh: (_cwd, args) => {
+          asked.push(args);
+          return refuse(args) ? undefined : 'https://forge/o/r/pull/1';
+        },
+      }),
+    );
+    ctx.say = (line: string) => void said.push(line);
+    return { ctx, asked, said };
+  };
+  const offered = opening(() => false);
+  assert.equal(await createPull(offered.ctx, 'r', req, '/r'), true, 'a draft where the forge offers one');
+  assert.equal(offered.asked.length, 1);
+  assert.ok(offered.asked[0]?.includes('--draft'));
+
+  const refused = opening((args) => args.includes('--draft'));
+  assert.equal(await createPull(refused.ctx, 'r', req, '/r'), false, 'an ordinary one where it does not');
+  assert.equal(refused.asked.length, 2, 'asked once more, not by the message');
+  assert.ok(!refused.asked[1]?.includes('--draft'));
+  assert.equal(refused.asked[1]?.at(-1), 'the body', 'the same body');
+  assert.equal(refused.said.filter((l) => /the pull request is no draft: the forge refused one/.test(l)).length, 1);
+
+  const neither = opening(() => true);
+  await assert.rejects(createPull(neither.ctx, 'r', req, '/r'), /^Error: as a draft: .+; as an ordinary one: .+/);
+  assert.equal(neither.asked.length, 2);
+
+  const ordinary = opening(() => false);
+  assert.equal(await createPull(ordinary.ctx, 'r', { ...req, draft: false }, '/r'), false);
+  assert.equal(ordinary.asked.length, 1, 'no draft asked for, none tried');
+  assert.ok(!ordinary.asked[0]?.includes('--draft'));
 });
