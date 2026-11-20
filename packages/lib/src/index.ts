@@ -35,7 +35,15 @@ export {
 export { filesWithConflictMarkers, hasConflictMarkers, hasUnmergedEntries } from './conflicts.ts';
 export { type Consumer, expectedBranch, findConsumers, type Site } from './consumers.ts';
 export { Context, type Options } from './context.ts';
-export { ANSWERS_FILE, type Answers, COPIER_VERSION, copierVia, parseAnswers, TEMPLATE_FILES } from './copier.ts';
+export {
+  ANSWERS_FILE,
+  type Answers,
+  COPIER_VERSION,
+  copierVia,
+  parseAnswers,
+  setAnswer,
+  TEMPLATE_FILES,
+} from './copier.ts';
 export { type Deploy, type DeployOptions, defaultAppDir, deploy, q as shellQuote, renderCompose } from './deploy.ts';
 export {
   DEFAULT_ENVIRONMENT,
@@ -119,7 +127,7 @@ export {
   type Release,
 } from './need.ts';
 export { overview, PRUNED, type ScanOptions } from './overview.ts';
-export { type PropagateOptions, propagate } from './propagate.ts';
+export { type RecursiveOptions, updateRecursive } from './recursive.ts';
 export {
   type CompendiumCheck,
   checkCommitMessage,
@@ -148,8 +156,17 @@ export {
   STANDARD_INDEX_FILE,
   type StandardIndex,
 } from './standardIndex.ts';
-export { mergeLine, renderSummary } from './summary.ts';
-export { detail, emptySummary, isClean, type Summary, type Take, takeVersion } from './take.ts';
+export { isClean, mergeLine, renderSummary, type Summary, summarize } from './summary.ts';
+export {
+  copierIn,
+  detailOf,
+  type SiteResult,
+  type SiteUpdate,
+  scratchCommit,
+  type Take,
+  type Taken,
+  takeVersion,
+} from './take.ts';
 export { RENAMED_TEMPLATES, TEMPLATES, templateOf, templateSource } from './templates.ts';
 export {
   type Link,
@@ -167,7 +184,7 @@ export {
   type UmbrellaPackage,
   type UmbrellaRepo,
 } from './umbrella.ts';
-export { type UpdateOptions, update } from './update.ts';
+export { type Known, type Outcome, type UpdateOptions, update } from './update.ts';
 export {
   COMPENDIUM,
   compareVersions,

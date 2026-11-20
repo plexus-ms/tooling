@@ -1,28 +1,43 @@
 // plx update [dir]: this repo takes a version by its step and a schedule (§ 3
 // PLX-Updates), as a pull request on `plexus/<version>`: copier update at every
-// site, the marker, the lockfile, the workflow refs. A patch (a hotfix) is
-// taken at once, a minor (routine) once the oldest version not taken is as old
-// as the repo's interval, a major (a changed contract) only when asked (--now,
-// or --to); otherwise the repo rests and says why. Mounted by the templates'
+// site, the lockfile, the workflow refs. A patch (a hotfix) is taken at once, a
+// minor (routine) once the oldest version not taken is as old as the repo's
+// interval, a major (a changed contract) only when asked (--now, or --to);
+// otherwise the repo rests and says why. Mounted by the templates'
 // plx-update.yml on a schedule in the tenant's own CI, and run by hand from a
 // checkout otherwise; the checkout itself is never touched.
+//
+// -r (--recursive) does the same in every repo generated from the templates
+// under the directory, at any depth, with the same options for each: the
+// operator's convenience for many repos checked out side by side, with one
+// summary over all of them. Without it, the directory is the one repo.
 //
 //   plx update                      # the version the schedule takes, if any
 //   plx update --now                # the newest version, whatever its step
 //   plx -n update --now             # preview in a worktree, push nothing
-//   plx -y update --to 0.102.0   # unattended (CI): copier takes defaults
+//   plx -y update --to 0.102.0      # unattended (CI): copier takes defaults
+//   plx update -r ~/dev             # every repo under ~/dev, the version its schedule takes
+//   plx -y update -r ~/dev --now    # every repo, the newest version, unattended
 import { resolve } from 'node:path';
-import { isClean, parseMaxAge, renderSummary, update } from '@plexus-ms/lib';
+import { isClean, parseMaxAge, renderSummary, summarize, update, updateRecursive } from '@plexus-ms/lib';
 import type { Command } from 'commander';
 import { contextOf } from '../program.ts';
+
+interface Opts {
+  recursive?: boolean;
+  to?: string;
+  now?: boolean;
+  maxAge?: number;
+}
 
 export function register(program: Command): void {
   program
     .command('update')
     .description(
-      'take a version as a pull request on plexus/<version> (copier update at every site, the marker, the lockfile, the workflow refs): a patch at once, a minor at the next scheduled pull (--max-age), a major only when asked',
+      'take a version as a pull request on plexus/<version> (copier update at every site, the lockfile, the workflow refs): a patch at once, a minor at the next scheduled pull (--max-age), a major only when asked; -r in every repo generated from the templates under a directory',
     )
-    .argument('[dir]', 'a repo generated from the templates', '.')
+    .argument('[dir]', 'a repo generated from the templates; with -r, a directory the repos sit under', '.')
+    .option('-r, --recursive', 'run in every repo generated from the templates under the directory, at any depth')
     .option('--to <version>', 'take this version, whatever its step: asking')
     .option('--now', 'take the newest version, whatever its step: asking')
     .option(
@@ -30,10 +45,19 @@ export function register(program: Command): void {
       "the interval: a minor version is taken once the oldest one not taken is this many days old (default: the repo's answer update_max_age, else 7; 0 takes every version)",
       (v: string) => parseMaxAge(v, '--max-age'),
     )
-    .action(async (dir: string, opts: { to?: string; now?: boolean; maxAge?: number }, command: Command) => {
+    .action(async (dir: string, opts: Opts, command: Command) => {
       const ctx = contextOf(command);
-      const result = await update(ctx, { repo: resolve(dir), to: opts.to, now: opts.now, maxAge: opts.maxAge });
-      ctx.result(result, (r) => renderSummary(r, `plx -y update --to ${r.version} ${dir}`, 'update'));
+      const { recursive, ...asked } = opts;
+      const outcomes = recursive
+        ? await updateRecursive(ctx, { dir: resolve(dir), ...asked })
+        : [await update(ctx, { repo: resolve(dir), ...asked })];
+      const result = summarize(outcomes, ctx.dryRun, opts.to);
+      // The real run of a clean preview: the one version taken, or, over many repos, what was asked of each.
+      const flags = recursive
+        ? ['-r', opts.to ? `--to ${opts.to}` : '', opts.now ? '--now' : '']
+        : [`--to ${result.version}`];
+      const real = `plx -y update ${flags.filter(Boolean).join(' ')} ${dir}`;
+      ctx.result(result, (r) => renderSummary(r, real, recursive ? 'update --recursive' : 'update'));
       if (!isClean(result)) process.exitCode = 1;
     });
 }

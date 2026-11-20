@@ -1,11 +1,11 @@
 // The offline harness for the version, both sides of it: `ship` cutting it here,
-// and @plexus-ms/lib's `update` and `propagate` taking it, end to end. It
+// and @plexus-ms/lib's `update` taking it, in one repo and recursively, end to end. It
 // lives in the package that depends on both. A scratch workspace laid out like ~/dev — the
 // five versioned repos with bare "origin" remotes (the compendium among them), a
 // tenant with a web repo (root + one app, on develop) and a platform repo (on
 // main), each with a bare origin of its own — plus fakes for `copier`, `mise`,
 // `gh` and `npm` on PATH, and a scratch "forge" the gh and npm fakes share.
-// Each scenario builds a fresh fixture, runs `ship`, `propagate` or `update`
+// Each scenario builds a fresh fixture, runs `ship`, `update` or `update --recursive`
 // against it with the real Io, and asserts on tags, releases, the consumers'
 // origins, the summary and the narration.
 //
@@ -46,12 +46,13 @@ import {
   COPIER_VERSION,
   Context,
   type Options,
-  type PropagateOptions,
-  propagate,
+  type RecursiveOptions,
   realIo,
   type Summary,
+  summarize,
   type UpdateOptions,
   update,
+  updateRecursive,
   VERSIONED_REPOS,
 } from '@plexus-ms/lib';
 import { type ShipOptions, type ShipResult, ship } from './ship.ts';
@@ -396,14 +397,14 @@ async function runUpdate(options: Options, args: UpdateOptions): Promise<UpdateR
   try {
     // The clock: two months past the fixture's epoch, so a release without a
     // date of its own is older than the interval and the version is taken.
-    return { result: await update(ctx, { today: '2026-03-01', ...args }), out };
+    return { result: summarize([await update(ctx, { today: '2026-03-01', ...args })], ctx.dryRun), out };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error), out };
   }
 }
 
-/** `propagate` over the workspace (or `dir`), on the clock `runUpdate` uses. */
-async function runPropagate(options: Options, args: Partial<PropagateOptions> = {}): Promise<UpdateRun> {
+/** `update --recursive` over the workspace (or `dir`), on the clock `runUpdate` uses. */
+async function runRecursive(options: Options, args: Partial<RecursiveOptions> = {}): Promise<UpdateRun> {
   const stderr = new PassThrough();
   let out = '';
   stderr.on('data', (c: Buffer) => {
@@ -412,7 +413,8 @@ async function runPropagate(options: Options, args: Partial<PropagateOptions> = 
   const io = { ...realIo(), stdout: new PassThrough(), stderr };
   const ctx = new Context(options, io);
   try {
-    return { result: await propagate(ctx, { dir: WS, today: '2026-03-01', ...args }), out };
+    const outcomes = await updateRecursive(ctx, { dir: WS, today: '2026-03-01', ...args });
+    return { result: summarize(outcomes, ctx.dryRun, args.to), out };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error), out };
   }
@@ -476,7 +478,7 @@ const newbornsRemoved = () => {
 };
 
 // ── scenarios ────────────────────────────────────────────────────────────────
-test('dry run previews both phases and the propagation in scratch clones, and changes nothing', async () => {
+test('dry run previews both phases and the consumers in scratch clones, and changes nothing', async () => {
   fixture('dry');
   const { result, error, out } = await run({ dryRun: true, yes: true });
   assert.equal(error, undefined, out);
@@ -677,12 +679,12 @@ test('happy path: tooling first, the npm wait, the rest, and no pull request in 
   });
 });
 
-// ── the operator's loop over update: propagate ───────────────────────────────
-test('propagate: every repo under the directory takes the version in a worktree of its branch, one pull request each', async () => {
-  fixture('propagate');
+// ── the operator's loop over update: --recursive ────────────────────────────
+test('update --recursive: every repo under the directory takes the version in a worktree of its branch, one pull request each', async () => {
+  fixture('recursive');
   const shipped = await run({ yes: true });
   assert.equal(shipped.error, undefined, shipped.out);
-  const { result, error, out } = await runPropagate({ yes: true });
+  const { result, error, out } = await runRecursive({ yes: true });
   assert.equal(error, undefined, out);
   consumersUntouched();
   assert.deepEqual(
@@ -751,8 +753,8 @@ test('propagate: every repo under the directory takes the version in a worktree 
   });
 });
 
-test('propagate: a directory of tenant repos and no upstream checkout; a repo inside its interval rests until asked', async () => {
-  fixture('propagate-tenant');
+test('update --recursive: a directory of tenant repos and no upstream checkout; a repo inside its interval rests until asked', async () => {
+  fixture('recursive-tenant');
   versionCut('0.2.0', '2026-02-25');
   const acme = join(WS, 'acme');
   // The platform repo's answers set three days; the web repo's say nothing, which is a week.
@@ -762,9 +764,15 @@ test('propagate: a directory of tenant repos and no upstream checkout; a repo in
   );
   commit(join(acme, 'platform'), 'three days at most');
   git(join(acme, 'platform'), 'push', '--quiet', 'origin', 'main');
-  const { result, error, out } = await runPropagate({ yes: true }, { dir: acme });
+  const { result, error, out } = await runRecursive({ yes: true }, { dir: acme });
   assert.equal(error, undefined, out);
   assert.ok(!fakeLog().some((l) => has(l, `${WS}/plexus-ms`)), 'nothing read from an upstream checkout');
+  assert.equal(fakeLog().filter((l) => has(l, ' auth status')).length, 1, 'the login is checked once for both repos');
+  assert.equal(
+    fakeLog().filter((l) => has(l, ' api repos/plexus-ms/compendium/releases')).length,
+    1,
+    'the versions are listed once for both repos',
+  );
   assert.ok(has(out, '• web: rests — 1 newer version, the oldest (0.2.0) cut 4 days ago; the interval is 7 days'), out);
   assert.ok(
     has(out, '• platform: takes 0.2.0 — 0.2.0, the oldest version not taken, was cut 4 days ago (interval: 3 days'),
@@ -778,7 +786,7 @@ test('propagate: a directory of tenant repos and no upstream checkout; a repo in
   assert.throws(() => onVersion('acme-web', '0.2.0', 'template-owned.txt'), 'the resting repo has no version branch');
 
   // Asked, the resting repo takes it; the other has its branch on origin and is left alone.
-  const now = await runPropagate({ yes: true }, { dir: acme, now: true });
+  const now = await runRecursive({ yes: true }, { dir: acme, now: true });
   assert.equal(now.error, undefined, now.out);
   assert.ok(has(now.out, '• web: takes 0.2.0 — asked for (--now)'), now.out);
   assert.ok(has(now.out, 'platform: plexus/0.2.0 is already on origin (https://forge/acme-platform/pull/1)'));
@@ -786,14 +794,14 @@ test('propagate: a directory of tenant repos and no upstream checkout; a repo in
   assert.deepEqual(now.result?.pulls, ['https://forge/acme-platform/pull/1', 'https://forge/acme-web/pull/1']);
 });
 
-test('propagate: a second run finds the version branches on origin and moves nothing', async () => {
+test('update --recursive: a second run finds the version branches on origin and moves nothing', async () => {
   fixture('rerun');
   const shipped = await run({ yes: true });
   assert.equal(shipped.error, undefined, shipped.out);
-  const first = await runPropagate({ yes: true });
+  const first = await runRecursive({ yes: true });
   assert.equal(first.error, undefined, first.out);
   const tip = git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0');
-  const second = await runPropagate({ yes: true }, { now: true });
+  const second = await runRecursive({ yes: true }, { now: true });
   assert.equal(second.error, undefined, second.out);
   assert.equal(fakeLog().filter((l) => has(l, 'pr create')).length, 2, 'two repos, two pull requests in all');
   assert.ok(has(second.out, 'acme/web: plexus/0.2.0 is already on origin (https://forge/acme-web/pull/1)'));
@@ -802,13 +810,13 @@ test('propagate: a second run finds the version branches on origin and moves not
   assert.deepEqual(second.result?.pulls, ['https://forge/acme-platform/pull/1', 'https://forge/acme-web/pull/1']);
 });
 
-test('propagate: the state of the checkouts does not matter', async () => {
+test('update --recursive: the state of the checkouts does not matter', async () => {
   fixture('checkouts');
   put(join(WS, 'acme/web/notes.txt'), 'scratch\n'); // untracked
   put(join(WS, 'acme/platform/template-owned.txt'), 'generated\nedited\n'); // tracked modification
   git(join(WS, 'acme/web'), 'checkout', '--quiet', '-b', 'feature/x'); // wrong branch
   versionCut('0.2.0');
-  const { result, error, out } = await runPropagate({ yes: true });
+  const { result, error, out } = await runRecursive({ yes: true });
   assert.equal(error, undefined, out);
   assert.match(onVersion('acme-web', '0.2.0', 'template-owned.txt'), /updated from/, 'origin updated from develop');
   assert.match(onVersion('acme-platform', '0.2.0', 'template-owned.txt'), /updated from/);
@@ -1260,11 +1268,11 @@ test('a push failure mid-release names the recovery, and the re-run finishes the
   assert.ok(!fakeLog().some((l) => has(l, 'pr create')), 'no pull request, before or after');
 });
 
-test('propagate: a failing site does not stop the others, and the summary says so', async () => {
+test('update --recursive: a failing site does not stop the others, and the summary says so', async () => {
   fixture('failsite');
   versionCut('0.2.0');
   process.env.FAKE_COPIER_FAIL = 'acme/platform';
-  const { result, error, out } = await runPropagate({ yes: true });
+  const { result, error, out } = await runRecursive({ yes: true });
   delete process.env.FAKE_COPIER_FAIL;
   assert.equal(error, undefined, out);
   assert.match(onVersion('acme-web', '0.2.0', 'template-owned.txt'), /updated from/);
@@ -1281,11 +1289,11 @@ test('propagate: a failing site does not stop the others, and the summary says s
   assert.deepEqual(result?.clean, ['acme/web', 'acme/web/apps/site']);
 });
 
-test('propagate: a conflict is committed with its markers and the pull request says so', async () => {
+test('update --recursive: a conflict is committed with its markers and the pull request says so', async () => {
   fixture('conflict');
   versionCut('0.2.0');
   process.env.FAKE_COPIER_CONFLICT = 'acme/web/apps';
-  const { result, out } = await runPropagate({ yes: true });
+  const { result, out } = await runRecursive({ yes: true });
   delete process.env.FAKE_COPIER_CONFLICT;
   assert.ok(has(out, '✗ CONFLICTS'));
   assert.deepEqual(result?.conflicted, ['acme/web/apps/site']);
@@ -1301,11 +1309,11 @@ test('propagate: a conflict is committed with its markers and the pull request s
   assert.doesNotMatch(pull('acme-web', '0.2.0', '.body'), /Merged clean/);
 });
 
-test('propagate: a conflict at the repo root does not stop its apps', async () => {
+test('update --recursive: a conflict at the repo root does not stop its apps', async () => {
   fixture('rootconflict');
   versionCut('0.2.0');
   process.env.FAKE_COPIER_CONFLICT = 'acme/web';
-  const { result, out } = await runPropagate({ yes: true });
+  const { result, out } = await runRecursive({ yes: true });
   delete process.env.FAKE_COPIER_CONFLICT;
   assert.deepEqual(result?.conflicted, ['acme/web', 'acme/web/apps/site'], out);
   assert.deepEqual(result?.failed, []);
@@ -1317,13 +1325,13 @@ test('propagate: a conflict at the repo root does not stop its apps', async () =
   assert.equal(git(remote('acme-web'), 'rev-list', '--count', 'develop..plexus/0.2.0'), '1', 'still one commit');
 });
 
-test('propagate: a named version is validated, and asks every repo for it without a release list', async () => {
+test('update --recursive: a named version is validated, and asks every repo for it without a release list', async () => {
   fixture('prop');
-  const bad = await runPropagate({ yes: true }, { to: '1.2' });
+  const bad = await runRecursive({ yes: true }, { to: '1.2' });
   assert.match(bad.error ?? '', /'1\.2' is not plain semver/);
-  const { result, error, out } = await runPropagate({ yes: true }, { to: '0.2.0' });
+  const { result, error, out } = await runRecursive({ yes: true }, { to: '0.2.0' });
   assert.equal(error, undefined, out);
-  assert.ok(noneTagged('0.2.0'), 'propagate cuts nothing');
+  assert.ok(noneTagged('0.2.0'), 'update cuts nothing');
   assert.ok(has(out, '• acme/web: takes 0.2.0 — asked for (--to 0.2.0)'), out);
   assert.ok(!fakeLog().some((l) => has(l, '/releases')), 'the forge is not asked for the versions');
   assert.match(onVersion('acme-web', '0.2.0', 'template-owned.txt'), /updated from 0\.2\.0/);
@@ -1332,10 +1340,10 @@ test('propagate: a named version is validated, and asks every repo for it withou
   assert.equal(result?.pulls.length, 2);
 });
 
-test('propagate: a repo whose origin lacks the branch the version lands on is skipped, with the reason', async () => {
+test('update --recursive: a repo whose origin lacks the branch the version lands on is skipped, with the reason', async () => {
   fixture('no-branch');
   git(remote('acme-web'), 'update-ref', '-d', 'refs/heads/develop');
-  const { result, error, out } = await runPropagate({ yes: true }, { to: '0.2.0' });
+  const { result, error, out } = await runRecursive({ yes: true }, { to: '0.2.0' });
   assert.equal(error, undefined, out);
   const reason = 'origin has no branch `develop`, the one the version lands on';
   assert.ok(has(out, `⚠ acme/web: ${reason} — skipped`), out);
@@ -1455,11 +1463,11 @@ test('update: the dry run previews in the worktree and pushes nothing', async ()
   assert.equal(result?.preview, true);
 });
 
-test("update: after propagate opened the version's pull request, the repo's own run finds it", async () => {
-  fixture('update-after-propagate');
+test("update: after a recursive run opened the version's pull request, the repo's own run finds it", async () => {
+  fixture('update-after-recursive');
   versionCut('0.2.0');
-  const propagated = await runPropagate({ yes: true });
-  assert.equal(propagated.error, undefined, propagated.out);
+  const recursive = await runRecursive({ yes: true });
+  assert.equal(recursive.error, undefined, recursive.out);
   const before = copierRuns().length;
   const { result, error, out } = await runUpdate({ yes: true }, { repo: join(WS, 'acme/platform') });
   assert.equal(error, undefined, out);
@@ -1621,7 +1629,7 @@ test('ship to update, end to end: a minor rests inside the interval, a patch cut
   const minor = await run({ yes: true });
   assert.equal(minor.error, undefined, minor.out);
   // The day after the version: well inside the week.
-  const quiet = await runPropagate({ yes: true }, { today: '2026-01-02' });
+  const quiet = await runRecursive({ yes: true }, { today: '2026-01-02' });
   assert.equal(quiet.error, undefined, quiet.out);
   assert.deepEqual(
     quiet.result?.resting.map((r) => r.path),
@@ -1631,7 +1639,7 @@ test('ship to update, end to end: a minor rests inside the interval, a patch cut
   const patch = await run({ yes: true }, { to: '0.2.1' });
   assert.equal(patch.error, undefined, patch.out);
   assert.ok(allTagged('0.2.1') && allReleased('0.2.1'));
-  const { result, error, out } = await runPropagate({ yes: true }, { today: '2026-01-02' });
+  const { result, error, out } = await runRecursive({ yes: true }, { today: '2026-01-02' });
   assert.equal(error, undefined, out);
   assert.ok(has(out, '• acme/web: takes 0.2.1 — 0.2.1 is a hotfix, taken at once (2 newer versions)'), out);
   assert.match(onVersion('acme-web', '0.2.1', 'template-owned.txt'), /updated from 0\.2\.1/);

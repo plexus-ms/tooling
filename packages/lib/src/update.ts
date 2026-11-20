@@ -19,8 +19,13 @@
 // worktree of origin's branch, never in the checkout: a developer's branch and
 // edits stay as they are, and in CI the worktree shares the checkout's
 // credentials, so the push and the pull request need no second token. Then
-// `takeVersion` (propagate.ts): copier update at every site, lockfile,
+// `takeVersion` (take.ts): copier update at every site, lockfile,
 // workflow refs, one commit on `plexus/<version>`, one pull request.
+//
+// What the run came to is returned as data, one `Outcome` for the repo, which
+// the caller folds into the summary (summary.ts). Run over many repos
+// (`--recursive`, recursive.ts), it is handed what that run read once for all
+// of them: the repo as found, and the versions.
 //
 // The version is pulled once per repo: a `plexus/<version>` branch already on
 // origin, from an earlier run or from a human resolving its conflicts, is
@@ -31,16 +36,17 @@
 //   plx update                      # the version the repo's schedule takes, if any
 //   plx update --now                # the newest version, whatever its step
 //   plx -n update --now             # preview in a worktree, push nothing
-//   plx -y update --to 0.102.0   # unattended, an explicit version
+//   plx -y update --to 0.102.0      # unattended, an explicit version
+//   plx update --recursive ~/dev    # every repo under a directory (recursive.ts)
 import { basename, join, relative } from 'node:path';
-import { findConsumers } from './consumers.ts';
+import { type Consumer, findConsumers } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers } from './copier.ts';
 import { run } from './effects.ts';
 import { ExecError } from './io.ts';
 import { maxAgeOf, type Need, needOf, type Release } from './need.ts';
 import { overview } from './overview.ts';
-import { CLEAN_BODY, detail, emptySummary, openPullUrl, type Summary, takeVersion, versionBranch } from './take.ts';
+import { CLEAN_BODY, detailOf, openPullUrl, type Taken, takeVersion, versionBranch } from './take.ts';
 import { TEMPLATES, templateSource } from './templates.ts';
 import { COMPENDIUM, compareVersions, isPlexusVersion, preflightForge, UsageError } from './version.ts';
 
@@ -59,27 +65,44 @@ export interface UpdateOptions {
   today?: string;
 }
 
-export async function update(ctx: Context, options: UpdateOptions): Promise<Summary> {
-  const { repo } = options;
-  const name = options.name ?? basename(repo);
+/**
+ * What a run over many repos (recursive.ts) has read once for all of them,
+ * so that `update` reads none of it again: the repo as the walk found it,
+ * named as that run names it, and the versions, listed after the login was
+ * checked (none when a version is named).
+ */
+export interface Known {
+  consumer: Consumer;
+  releases: Release[];
+}
+
+/**
+ * What one repo's run came to; `version` is the one it took, looked at, or
+ * would take. `current`: every site records it already. `skipped`: left
+ * untouched, with why. `resting`: needs no version yet (need.ts), with what
+ * would end the rest. `found`: its version branch is on origin already, with
+ * the pull request found there, if any, and whether it is ready to merge.
+ * `taken`: it took the version. `failed`: it could not be worked on, with why.
+ */
+export type Outcome = { repo: string; version: string } & (
+  | { kind: 'current' }
+  | { kind: 'skipped'; reason: string }
+  | { kind: 'resting'; reason: string }
+  | { kind: 'found'; pull?: string; mergeable: boolean }
+  | { kind: 'taken'; taken: Taken }
+  | { kind: 'failed'; detail: string }
+);
+
+export async function update(ctx: Context, options: UpdateOptions, known?: Known): Promise<Outcome> {
   if (options.to !== undefined && !isPlexusVersion(options.to))
     throw new UsageError(`'${options.to}' is not plain semver (X.Y.Z, no v)`);
-
-  const tree = await overview(ctx, repo);
-  const consumer = (await findConsumers(ctx, tree, TEMPLATES)).find((c) => c.path === tree.path);
-  if (!consumer)
-    throw new Error(
-      `${repo} is not a repo generated from the templates: no ${ANSWERS_FILE} at its root naming one of ${TEMPLATES.map(templateSource).join(', ')}`,
-    );
-  if (consumer.skipped) throw new Error(`${name}: ${consumer.skipped}`);
-  // Sites are named from the repo, not from a workspace.
-  consumer.rel = name;
-  for (const s of consumer.sites) s.rel = s.rel === '.' ? name : join(name, s.rel);
+  const consumer = known?.consumer ?? (await repoAt(ctx, options.repo, options.name ?? basename(options.repo)));
+  const { path: repo, rel: name } = consumer;
   const root = consumer.sites.find((s) => s.path === consumer.path);
   if (!root) throw new Error(`${name}: its root is not a site of a repo template`);
 
-  await preflightForge(ctx);
-  const releases = options.to === undefined ? await releasesOf(ctx) : [];
+  if (!known) await preflightForge(ctx);
+  const releases = known?.releases ?? (options.to === undefined ? await releasesOf(ctx) : []);
   const newest = options.to ?? newestOf(releases);
 
   // The repo is judged by what its origin has on the branch the version lands
@@ -88,9 +111,7 @@ export async function update(ctx: Context, options: UpdateOptions): Promise<Summ
   if ((await onOrigin(ctx, repo, consumer.branch)) === false) {
     const reason = `origin has no branch \`${consumer.branch}\`, the one the version lands on`;
     ctx.say(`⚠ ${name}: ${reason} — skipped`);
-    const skipped = emptySummary(newest, ctx.dryRun);
-    skipped.skipped.push({ path: name, reason });
-    return skipped;
+    return { repo: name, version: newest, kind: 'skipped', reason };
   }
   await ctx.read('git', ['fetch', '--quiet', 'origin', consumer.branch], { cwd: repo }).catch(() => '');
   const answers = await Promise.all(
@@ -105,15 +126,15 @@ export async function update(ctx: Context, options: UpdateOptions): Promise<Summ
   const recorded = answers.map((a) => a.commit);
   if (recorded.every((c) => c === newest)) {
     ctx.say(`• ${name}: already at ${newest}`);
-    return emptySummary(newest, ctx.dryRun);
+    return { repo: name, version: newest, kind: 'current' };
   }
   // copier refuses a downgrade; say so before a worktree is made for nothing.
   const past = recorded.find((c) => c && isPlexusVersion(c) && compareVersions(c, newest) > 0);
   if (past) throw new Error(`${name} is at ${past}, past ${newest}; a repo is never taken back to an older version`);
 
-  const asked = options.to !== undefined ? `--to ${newest}` : options.now ? '--now' : undefined;
+  const asked = options.to !== undefined || options.now === true;
   const need: Need = asked
-    ? { take: true, version: newest, why: `asked for (${asked})` }
+    ? { take: true, version: newest, why: `asked for (${options.to !== undefined ? `--to ${newest}` : '--now'})` }
     : needOf({
         recorded,
         releases,
@@ -123,7 +144,6 @@ export async function update(ctx: Context, options: UpdateOptions): Promise<Summ
   if (need.held) ctx.say(`• ${name}: ${need.held} (plx update --now takes it)`);
   // A repo that rests is looked at for the newest version: one asked for earlier may be on origin.
   const version = need.take ? need.version : newest;
-  const summary = emptySummary(version, ctx.dryRun);
 
   const branch = versionBranch(version);
   if (await onOrigin(ctx, repo, branch)) {
@@ -131,21 +151,17 @@ export async function update(ctx: Context, options: UpdateOptions): Promise<Summ
     ctx.say(
       `• ${name}: ${branch} is already on origin${url ? ` (${url})` : ''} — nothing to do; delete the branch to pull the version again`,
     );
-    if (url) {
-      summary.pulls.push(url);
-      // Whether it merged clean is what its body says (take.ts wrote it).
-      const body = await ctx
-        .read('gh', ['pr', 'view', url, '--json', 'body', '--jq', '.body'], { cwd: repo })
-        .catch(() => '');
-      if (body.includes(CLEAN_BODY)) summary.mergeable.push(url);
-    }
-    return summary;
+    if (!url) return { repo: name, version, kind: 'found', mergeable: false };
+    // Whether it merged clean is what its body says (take.ts wrote it).
+    const body = await ctx
+      .read('gh', ['pr', 'view', url, '--json', 'body', '--jq', '.body'], { cwd: repo })
+      .catch(() => '');
+    return { repo: name, version, kind: 'found', pull: url, mergeable: body.includes(CLEAN_BODY) };
   }
 
   if (!need.take) {
     ctx.say(`• ${name}: rests — ${need.why} (plx update --now takes ${version})`);
-    summary.resting.push({ path: name, reason: need.why });
-    return summary;
+    return { repo: name, version, kind: 'resting', reason: need.why };
   }
   ctx.say(`• ${name}: takes ${version} — ${need.why}`);
 
@@ -159,16 +175,40 @@ export async function update(ctx: Context, options: UpdateOptions): Promise<Summ
         run('git', ['worktree', 'add', '--quiet', '--detach', dir, `origin/${consumer.branch}`], { cwd: repo }),
       );
     } catch (error) {
-      ctx.say(`  ✗ FAILED — worktree of origin/${consumer.branch}${detail(error)}`);
-      summary.failed.push(name);
-      return summary;
+      const why = detailOf(error);
+      ctx.say(`  ✗ FAILED — worktree of origin/${consumer.branch}${why ? `: ${why}` : ''}`);
+      return { repo: name, version, kind: 'failed', detail: `worktree of origin/${consumer.branch}: ${why}` };
     }
-    await takeVersion(ctx, consumer, dir, { version, ref: version, opener: '`plx update`', why: need.why }, summary);
+    const taken = await takeVersion(ctx, consumer, dir, {
+      version,
+      ref: version,
+      opener: '`plx update`',
+      why: need.why,
+    });
+    return { repo: name, version, kind: 'taken', taken };
   } finally {
     await ctx.stage(run('git', ['worktree', 'remove', '--force', dir], { cwd: repo })).catch(() => undefined);
     if (scratch) await ctx.stage(run('rm', ['-rf', scratch]));
   }
-  return summary;
+}
+
+/**
+ * The repo at `path`, which must be generated from a repo template, as a
+ * consumer whose sites are named from `name` rather than from a workspace.
+ */
+async function repoAt(ctx: Context, path: string, name: string): Promise<Consumer> {
+  const tree = await overview(ctx, path);
+  const found = (await findConsumers(ctx, tree, TEMPLATES)).find((c) => c.path === tree.path);
+  if (!found)
+    throw new Error(
+      `${path} is not a repo generated from the templates: no ${ANSWERS_FILE} at its root naming one of ${TEMPLATES.map(templateSource).join(', ')}`,
+    );
+  if (found.skipped) throw new Error(`${name}: ${found.skipped}`);
+  return {
+    ...found,
+    rel: name,
+    sites: found.sites.map((s) => ({ ...s, rel: s.rel === '.' ? name : join(name, s.rel) })),
+  };
 }
 
 /**
@@ -190,7 +230,7 @@ async function onOrigin(ctx: Context, repo: string, branch: string): Promise<boo
 const RELEASES_REPO = `plexus-ms/${COMPENDIUM}`;
 
 /** The versions (§ 1.6 PLX: every version tag has a release), with the dates they were cut; a draft is no version yet. */
-async function releasesOf(ctx: Context): Promise<Release[]> {
+export async function releasesOf(ctx: Context): Promise<Release[]> {
   const jq = '.[] | select(.draft | not) | "\\(.tag_name) \\(.published_at)"';
   const lines = await ctx
     .read('gh', ['api', `repos/${RELEASES_REPO}/releases`, '--paginate', '--jq', jq])

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mergeLine, renderSummary } from './summary.ts';
+import { mergeLine, renderSummary, summarize } from './summary.ts';
+import type { Outcome } from './update.ts';
 
 test('renderSummary lists every site and ends with the verdict', () => {
   const base = {
@@ -87,4 +88,75 @@ test('the summary ends the pull requests with one line that merges the clean one
     '',
     'what is no pull request URL is left out',
   );
+});
+
+test('summarize folds what each repo came to, in order, without touching the outcomes', () => {
+  const outcomes: Outcome[] = [
+    { repo: 'acme/docs', version: '', kind: 'skipped', reason: 'no origin remote' },
+    { repo: 'acme/old', version: '0.2.0', kind: 'current' },
+    { repo: 'acme/ops', version: '0.2.0', kind: 'resting', reason: 'inside the interval' },
+    { repo: 'acme/found', version: '0.2.0', kind: 'found', pull: 'https://forge/acme/found/pull/2', mergeable: true },
+    { repo: 'acme/gone', version: '0.2.0', kind: 'found', mergeable: false },
+    { repo: 'acme/broken', version: '0.2.0', kind: 'failed', detail: 'worktree' },
+    {
+      repo: 'acme/web',
+      version: '0.2.0',
+      kind: 'taken',
+      taken: {
+        rel: 'acme/web',
+        sites: [
+          { rel: 'acme/web', outcome: 'clean' },
+          { rel: 'acme/web/apps/site', outcome: 'conflicted' },
+        ],
+        lockfile: 'failed',
+        pull: { branch: 'plexus/0.2.0', url: 'https://forge/acme/web/pull/7' },
+      },
+    },
+    {
+      repo: 'acme/platform',
+      version: '0.2.0',
+      kind: 'taken',
+      taken: {
+        rel: 'acme/platform',
+        sites: [{ rel: 'acme/platform', outcome: 'clean' }],
+        pull: { branch: 'plexus/0.2.0' },
+      },
+    },
+    {
+      repo: 'acme/clean',
+      version: '0.2.0',
+      kind: 'taken',
+      taken: {
+        rel: 'acme/clean',
+        sites: [{ rel: 'acme/clean', outcome: 'clean' }],
+        lockfile: 'refreshed',
+        pull: { branch: 'plexus/0.2.0', url: 'https://forge/acme/clean/pull/1' },
+      },
+    },
+    {
+      repo: 'acme/push',
+      version: '0.2.0',
+      kind: 'taken',
+      taken: { rel: 'acme/push', sites: [{ rel: 'acme/push', outcome: 'failed', detail: 'boom' }], failed: 'push' },
+    },
+  ];
+  const before = JSON.stringify(outcomes);
+  assert.deepEqual(summarize(outcomes, false), {
+    version: '0.2.0',
+    preview: false,
+    clean: ['acme/web', 'acme/platform', 'acme/clean'],
+    conflicted: ['acme/web/apps/site'],
+    failed: ['acme/broken', 'acme/web/pnpm-lock.yaml', 'acme/push', 'acme/push'],
+    skipped: [{ path: 'acme/docs', reason: 'no origin remote' }],
+    resting: [{ path: 'acme/ops', reason: 'inside the interval' }],
+    pulls: [
+      'https://forge/acme/found/pull/2',
+      'https://forge/acme/web/pull/7',
+      'acme/platform plexus/0.2.0',
+      'https://forge/acme/clean/pull/1',
+    ],
+    mergeable: ['https://forge/acme/found/pull/2', 'https://forge/acme/clean/pull/1'],
+  });
+  assert.equal(JSON.stringify(outcomes), before, 'the outcomes are as they were');
+  assert.equal(summarize([], true, '0.3.0').version, '0.3.0', "a version given is the summary's");
 });

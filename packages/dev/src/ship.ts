@@ -54,7 +54,6 @@ import {
   type Context,
   checkRepo,
   compareVersions,
-  emptySummary,
   frontmatterField,
   MAP_PAGE,
   PLX_PIN,
@@ -66,6 +65,7 @@ import {
   run,
   STANDARD_INDEX_FILE,
   type Summary,
+  summarize,
   WORKFLOW_REF,
   write,
 } from '@plexus-ms/lib';
@@ -140,7 +140,7 @@ export async function ship(ctx: Context, options: ShipOptions): Promise<ShipResu
   await release(ctx, versioned, next, today, { ...DEFAULT_WAIT, ...options.wait });
   if (ctx.dryRun) return { ...(await previewConsumers(ctx, options.workspace, next)), released: true };
   ctx.say(`• Plexus ${next} is cut; every repo takes it itself, by its step and a schedule (plx update)`);
-  return { ...emptySummary(next, false), released: true };
+  return { ...summarize([], false, next), released: true };
 }
 
 /**

@@ -2,7 +2,7 @@
 //
 // ../ship.ts does the work: preflight, bookkeeping, tags, releases, the wait
 // for npm. It opens no pull request: a repo takes the version itself, when it
-// needs it (`plx update`), and `plx propagate --now` asks many at once. This
+// needs it (`plx update`), and `plx update --recursive --now` asks many at once. This
 // file maps the arguments and renders the outcome. -n previews the release as
 // its steps and tries the unreleased templates on the workspace's consumers in
 // scratch clones, with a summary; -y is required off a terminal.
@@ -21,7 +21,7 @@ export function register(program: Command): void {
   program
     .command('ship')
     .description(
-      'cut the version: tag and release every versioned repo identically; repos take it themselves (plx update, plx propagate)',
+      'cut the version: tag and release every versioned repo identically; repos take it themselves (plx update, plx update --recursive)',
     )
     .argument('[dir]', 'the workspace: plexus-ms/ sits under it, and the consumers the dry run previews', '.')
     .option(
@@ -34,7 +34,7 @@ export function register(program: Command): void {
       ctx.result(result, (r) =>
         r.preview
           ? renderSummary(r, `plx-dev -y ship --to ${r.version} ${dir}`, 'ship')
-          : `✓ Plexus ${r.version} cut — repos take it themselves; to take it now where it matters: plx propagate --now ${dir}`,
+          : `✓ Plexus ${r.version} cut — repos take it themselves; to take it now where it matters: plx update --recursive --now ${dir}`,
       );
       if (!isClean(result)) process.exitCode = 1;
     });

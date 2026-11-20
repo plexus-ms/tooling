@@ -31,3 +31,14 @@ test('help lists the global options', () => {
   for (const flag of ['--dry-run', '--verbose', '--quiet', '--yes', '--json', '--version'])
     assert.match(help, new RegExp(flag));
 });
+
+test('update runs in many repos with -r; no command named propagate is left', () => {
+  const program = buildProgram();
+  const update = program.commands.find((c) => c.name() === 'update');
+  assert.ok(update);
+  assert.match(update.helpInformation(), /-r, --recursive/);
+  assert.equal(
+    program.commands.find((c) => c.name() === 'propagate'),
+    undefined,
+  );
+});

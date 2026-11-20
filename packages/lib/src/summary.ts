@@ -1,8 +1,86 @@
-// The summary of a run that takes a version in one or more repos (update,
-// propagate) or previews one (the dry run of `plx-dev ship`), rendered for a
-// human: one line per site, the pull requests, the line that merges the clean
-// ones, then the verdict. Every tool that prints a Summary prints it this way.
-import { isClean, type Summary } from './take.ts';
+// The summary of a run that takes a version in one or more repos (`update`,
+// `update --recursive`) or previews one (the dry run of `plx-dev ship`): what
+// each repo's run came to (`Outcome`, update.ts), folded into lists by
+// `summarize` at the edge, where the run is rendered, and rendered for a
+// human: one line per site, the pull requests, the line that merges the
+// clean ones, then the verdict. Every tool that prints a Summary prints it
+// this way.
+import { needsHand } from './take.ts';
+import type { Outcome } from './update.ts';
+
+export interface Summary {
+  version: string;
+  /** True for a dry run: nothing in the workspace changed. */
+  preview: boolean;
+  /** Sites, relative to the workspace. */
+  clean: string[];
+  conflicted: string[];
+  /** Sites whose update exited nonzero, consumers that could not be cloned or pushed, and lockfiles that failed to refresh. */
+  failed: string[];
+  /** Consumers left untouched, with the reason. */
+  skipped: { path: string; reason: string }[];
+  /** Repos that need no version yet and rest on the one they have (need.ts), with what would end the rest. */
+  resting: { path: string; reason: string }[];
+  /** The pull requests opened or found, one per consumer that changed. */
+  pulls: string[];
+  /** Those of `pulls` whose repo merged clean at every site and failed nowhere: ready to merge once their checks pass. */
+  mergeable: string[];
+}
+
+/** True when nothing in the summary needs a human but the pull requests. */
+export const isClean = (s: Summary): boolean =>
+  s.conflicted.length === 0 && s.failed.length === 0 && s.skipped.length === 0;
+
+/**
+ * The summary of what the repos' runs came to, in their order. Its version is
+ * the one given, else the first a run names.
+ */
+export function summarize(
+  outcomes: readonly Outcome[],
+  preview: boolean,
+  version = outcomes.find((o) => o.version)?.version ?? '',
+): Summary {
+  const s: Summary = {
+    version,
+    preview,
+    clean: [],
+    conflicted: [],
+    failed: [],
+    skipped: [],
+    resting: [],
+    pulls: [],
+    mergeable: [],
+  };
+  for (const o of outcomes) {
+    switch (o.kind) {
+      case 'current':
+        break;
+      case 'skipped':
+        s.skipped.push({ path: o.repo, reason: o.reason });
+        break;
+      case 'resting':
+        s.resting.push({ path: o.repo, reason: o.reason });
+        break;
+      case 'failed':
+        s.failed.push(o.repo);
+        break;
+      case 'found':
+        if (o.pull) s.pulls.push(o.pull);
+        if (o.pull && o.mergeable) s.mergeable.push(o.pull);
+        break;
+      case 'taken': {
+        const t = o.taken;
+        for (const site of t.sites) s[site.outcome].push(site.rel);
+        if (t.lockfile === 'failed') s.failed.push(`${t.rel}/pnpm-lock.yaml`);
+        if (t.failed !== undefined) s.failed.push(t.rel);
+        if (t.pull) s.pulls.push(t.pull.url ?? `${t.rel} ${t.pull.branch}`);
+        if (t.pull?.url && !needsHand(t)) s.mergeable.push(t.pull.url);
+        break;
+      }
+    }
+  }
+  return s;
+}
 
 /**
  * One line to paste that merges the given pull requests, each with a merge
@@ -18,7 +96,7 @@ export function mergeLine(urls: string[]): string {
 }
 
 /** The summary: one line per site, the pull requests, then the verdict. */
-export function renderSummary(s: Summary, realCommand: string, verb = 'propagate'): string {
+export function renderSummary(s: Summary, realCommand: string, verb = 'update'): string {
   const lines = ['── summary ──────────────────────────────────────────────────────────────'];
   for (const p of s.clean) lines.push(`  ✓ clean:      ${p}`);
   for (const p of s.conflicted) lines.push(`  ✗ conflicts:  ${p}`);

@@ -1,8 +1,8 @@
 // Copier's bookkeeping in a generated project (§ 3 PLX-Updates): the answers
 // file records the template (`_src_path`) and the version it was last synced
 // to (`_commit`), plus the answers given. A template is a directory carrying a
-// `copier.yml`.
-import { parse } from 'yaml';
+// `copier.yml`. The file is read and written as YAML, never as lines of text.
+import { parse, parseDocument } from 'yaml';
 
 export const ANSWERS_FILE = '.copier-answers.yml';
 export const TEMPLATE_FILES = ['copier.yml', 'copier.yaml'];
@@ -36,4 +36,12 @@ export function parseAnswers(text: string): Answers {
     src: _src_path === undefined ? undefined : String(_src_path),
     answers,
   };
+}
+
+/** The answers file with one top-level key set, everything else (comments, order, the other answers) kept. */
+export function setAnswer(text: string, key: string, value: string): string {
+  const doc = parseDocument(text);
+  if (doc.errors.length > 0) throw new Error(`answers file is not YAML: ${doc.errors[0]?.message}`);
+  doc.set(key, value);
+  return doc.toString();
 }

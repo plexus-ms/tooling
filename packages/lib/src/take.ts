@@ -5,91 +5,76 @@
 // commit, pushed as `plexus/<version>`, and a pull request against the branch.
 // A conflict is committed with its markers and reported, and the pull request
 // is opened all the same: that is where it gets resolved. Nothing here aborts
-// a run: a failing or conflicting site is recorded in the summary, which says
-// what needs a human. Reviewing and merging the pull request stays human.
+// a run: what became of each site, the lockfile and the pull request is
+// returned as data (`Taken`), which the caller folds into the summary that
+// says what needs a human (summary.ts). Reviewing and merging the pull
+// request stays human.
 //
 // `update` (update.ts) is the verb on top of it, and the only thing that
-// opens a version's pull request; `propagate` (propagate.ts) runs that verb over
-// many repos. The maintainers' preview of an unreleased version (preview.ts of
-// @plexus-ms/dev) uses the same steps against the local template checkouts, and opens nothing.
+// opens a version's pull request; `update --recursive` (recursive.ts) runs
+// that verb over many repos. The maintainers' preview of an unreleased
+// version (preview.ts of @plexus-ms/dev) uses the same steps with its own
+// `SiteUpdate`, against the local template checkouts, and opens nothing.
 import { join, relative } from 'node:path';
 import { bumpWorkflowRefs, WORKFLOW_REF } from './bookkeeping.ts';
 import { hasConflictMarkers, hasUnmergedEntries } from './conflicts.ts';
 import type { Consumer, Site } from './consumers.ts';
 import type { Context } from './context.ts';
-import { ANSWERS_FILE, copierVia } from './copier.ts';
+import { ANSWERS_FILE, copierVia, parseAnswers, setAnswer } from './copier.ts';
 import { run, write } from './effects.ts';
+import { ExecError, TimeoutError } from './io.ts';
 import { namesOldTemplate, templateSource } from './templates.ts';
 
-export interface Summary {
-  version: string;
-  /** True for a dry run: nothing in the workspace changed. */
-  preview: boolean;
-  /** Sites, relative to the workspace. */
-  clean: string[];
-  conflicted: string[];
-  /** Sites whose update exited nonzero, consumers that could not be cloned or pushed, and lockfiles that failed to refresh. */
-  failed: string[];
-  /** Consumers left untouched, with the reason. */
-  skipped: { path: string; reason: string }[];
-  /** Repos that need no version yet and rest on the one they have (need.ts), with what would end the rest. */
-  resting: { path: string; reason: string }[];
-  /** The pull requests opened or updated, one per consumer that changed. */
-  pulls: string[];
-  /** Those of `pulls` whose repo merged clean at every site and failed nowhere: ready to merge once their checks pass. */
-  mergeable: string[];
+/** What became of one site: merged clean, left with conflicts, or its copier run failed (`detail` says why). */
+export interface SiteResult {
+  rel: string;
+  outcome: 'clean' | 'conflicted' | 'failed';
+  detail?: string;
 }
 
-/** True when nothing in the summary needs a human but the pull requests. */
-export const isClean = (s: Summary): boolean =>
-  s.conflicted.length === 0 && s.failed.length === 0 && s.skipped.length === 0;
-
-/** Add what one repo's run found to the summary of a run over many. */
-export function mergeSummary(into: Summary, from: Summary): void {
-  into.clean.push(...from.clean);
-  into.conflicted.push(...from.conflicted);
-  into.failed.push(...from.failed);
-  into.skipped.push(...from.skipped);
-  into.resting.push(...from.resting);
-  into.pulls.push(...from.pulls);
-  into.mergeable.push(...from.mergeable);
+/** What one consumer's taking of the version came to, as data: the caller folds it into a summary. */
+export interface Taken {
+  rel: string;
+  /** Every site, in the order they were updated. */
+  sites: SiteResult[];
+  /** The lockfile refresh, where manifests moved; undefined when nothing needed one. */
+  lockfile?: 'refreshed' | 'failed';
+  /** The pull request opened: its URL, unknown when the forge did not say it. */
+  pull?: { branch: string; url?: string };
+  /** Why the commit, the push or the pull request failed, when one did. */
+  failed?: string;
 }
 
-export const emptySummary = (version: string, preview: boolean): Summary => ({
-  version,
-  preview,
-  clean: [],
-  conflicted: [],
-  failed: [],
-  skipped: [],
-  resting: [],
-  pulls: [],
-  mergeable: [],
-});
+/** Whether the consumer needs a hand beyond reviewing its pull request. */
+export const needsHand = (t: Taken): boolean =>
+  t.sites.some((s) => s.outcome !== 'clean') || t.lockfile === 'failed' || t.failed !== undefined;
 
 /** What a pull request's body says when nothing in it needs a hand; read back to tell a clean one found on origin. */
 export const CLEAN_BODY = 'Merged clean at every site.';
 
-/** The entries of a summary list that belong to a consumer: itself, its sites, its lockfile. */
-const ofConsumer = (list: string[], consumer: Consumer): string[] =>
-  list.filter((p) => p === consumer.rel || p.startsWith(`${consumer.rel}/`));
-
 export const versionBranch = (version: string): string => `plexus/${version}`;
 
-/** How a consumer takes the version: the knobs the preview and update set differently. */
+/**
+ * How a site is brought to the version in the scratch checkout: `target` is
+ * the site's directory there, `dir` the checkout's root. The default runs
+ * copier against the published template; the maintainers' preview of an
+ * unreleased version (preview.ts of @plexus-ms/dev) brings its own, against
+ * the local template checkouts. Whatever it leaves is then judged and
+ * staged the same way.
+ */
+export type SiteUpdate = (ctx: Context, site: Site, target: string, dir: string) => Promise<void>;
+
+/** How a consumer takes the version. */
 export interface Take {
   version: string;
-  /**
-   * Preview from the local template checkouts under this upstream directory at
-   * main (preview.ts of @plexus-ms/dev), instead of the published template.
-   */
-  previewFrom?: string;
-  /** The template ref copier updates to; unset, copier takes the newest tag, which the version just cut. */
+  /** The template ref copier updates to; unset, copier takes the newest tag. */
   ref?: string;
   /** Who opened the pull request, named in its body. */
   opener: string;
   /** Why the repo takes the version now (need.ts), named in the body beside the opener. */
   why?: string;
+  /** How each site is updated; default: copier against the published template, at `ref`. */
+  update?: SiteUpdate;
 }
 
 /**
@@ -98,7 +83,7 @@ export interface Take {
  * with conflict markers by the root site's update would otherwise fail every
  * later mise call in the directory, the apps' updates first of all.
  */
-const copierIn = (dir: string, args: string[]): [string, string[]] => [
+export const copierIn = (dir: string, args: string[]): [string, string[]] => [
   'env',
   [`MISE_IGNORED_CONFIG_PATHS=${dir}`, 'mise', ...copierVia(args)],
 ];
@@ -108,16 +93,19 @@ const copierIn = (dir: string, args: string[]): [string, string[]] => [
  * every site updated, the lockfile refreshed, the workflow refs bumped, then
  * the commit, the branch and the pull request.
  */
-export async function takeVersion(ctx: Context, consumer: Consumer, dir: string, take: Take, summary: Summary) {
+export async function takeVersion(ctx: Context, consumer: Consumer, dir: string, take: Take): Promise<Taken> {
   const base = (await ctx.read('git', ['rev-parse', 'HEAD'], { cwd: dir })).trim();
-  for (const site of consumer.sites) await updateSite(ctx, consumer, site, dir, take, summary);
-  await refreshLockfile(ctx, consumer, dir, base, summary);
+  const update = take.update ?? fromTemplate(take.ref);
+  const sites: SiteResult[] = [];
+  for (const site of consumer.sites) sites.push(await updateSite(ctx, consumer, site, dir, update));
+  const lockfile = await refreshLockfile(ctx, consumer, dir, base);
   await bumpConsumerRefs(ctx, consumer, dir, take.version);
-  await openPull(ctx, consumer, dir, take, summary);
+  const taken: Taken = { rel: consumer.rel, sites, ...(lockfile ? { lockfile } : {}) };
+  return { ...taken, ...(await openPull(ctx, consumer, dir, take, taken)) };
 }
 
-// Preview commits are plain plumbing on a throwaway clone: unsigned, no hooks, a stand-in identity.
-const previewCommit = (ctx: Context, dir: string, message: string) =>
+/** A commit of plain plumbing on a scratch checkout: unsigned, no hooks, a stand-in identity. */
+export const scratchCommit = (ctx: Context, dir: string, message: string) =>
   ctx
     .stage(run('git', ['add', '-A'], { cwd: dir }))
     .then(() =>
@@ -143,68 +131,54 @@ const previewCommit = (ctx: Context, dir: string, message: string) =>
       ),
     );
 
+/** copier against the published template, at `ref`. */
+const fromTemplate =
+  (ref: string | undefined): SiteUpdate =>
+  async (ctx, site, target, dir) => {
+    ctx.say(`→ ${site.rel}: copier update${ref ? ` to ${ref}` : ''}`);
+    // A template renamed on a version: the answers still name the old source,
+    // which copier would clone through the forge's redirect; point them at
+    // the current name first, committed because copier refuses a dirty
+    // subproject.
+    const answers = await ctx.readFile(join(target, ANSWERS_FILE));
+    const current = templateSource(site.template);
+    const recorded = parseAnswers(answers).src;
+    if (recorded && namesOldTemplate(recorded)) {
+      ctx.say(`  ${site.rel}: the template is ${current} now; the answers follow`);
+      await ctx.stage(write(join(target, ANSWERS_FILE), setAnswer(answers, '_src_path', current)));
+      await scratchCommit(ctx, dir, `plx: ${site.rel} reads ${current}, the template's name since its rename`);
+    }
+    // Template tasks (mise install, hook setup) serve a developer's checkout,
+    // not a pull request. Unattended, a new question takes its default; on a
+    // terminal copier asks. A dry run previews on the scratch checkout, so
+    // the step is staged there rather than only announced.
+    const args = [
+      'update',
+      '--skip-answered',
+      '--trust',
+      '--skip-tasks',
+      ...(ref ? ['--vcs-ref', ref] : []),
+      ...(ctx.yes || ctx.dryRun ? ['--defaults'] : []),
+    ];
+    const step = run(...copierIn(dir, args), { cwd: target, interactive: !ctx.dryRun });
+    if (ctx.dryRun) await ctx.stage(step);
+    else await ctx.apply([step]);
+  };
+
 async function updateSite(
   ctx: Context,
   consumer: Consumer,
   site: Site,
   dir: string,
-  take: Take,
-  summary: Summary,
-): Promise<void> {
+  update: SiteUpdate,
+): Promise<SiteResult> {
   const target = join(dir, relative(consumer.path, site.path));
   try {
-    if (take.previewFrom) {
-      const localTemplate = join(take.previewFrom, site.template);
-      ctx.say(`→ ${site.rel}: copier update (preview from ${localTemplate}@main)`);
-      // Point the answers at the local template so the preview reads it; copier
-      // refuses a dirty subproject, hence the commit.
-      const answers = await ctx.readFile(join(target, ANSWERS_FILE));
-      await ctx.stage(
-        write(join(target, ANSWERS_FILE), answers.replace(/^_src_path: .*$/m, `_src_path: ${localTemplate}`)),
-      );
-      await previewCommit(ctx, dir, `plx preview: ${site.rel} reads ${localTemplate} from the local checkout`);
-      await ctx.stage(
-        run(
-          ...copierIn(dir, ['update', '--skip-answered', '--trust', '--defaults', '--skip-tasks', '--vcs-ref', 'main']),
-          { cwd: target },
-        ),
-      );
-    } else {
-      ctx.say(`→ ${site.rel}: copier update${take.ref ? ` to ${take.ref}` : ''}`);
-      // A template renamed on a version: the answers still name the old source,
-      // which copier would clone through the forge's redirect; point them at
-      // the current name first, committed because copier refuses a dirty
-      // subproject.
-      const answers = await ctx.readFile(join(target, ANSWERS_FILE));
-      const current = templateSource(site.template);
-      const recorded = /^_src_path: (.*)$/m.exec(answers)?.[1];
-      if (recorded && namesOldTemplate(recorded)) {
-        ctx.say(`  ${site.rel}: the template is ${current} now; the answers follow`);
-        await ctx.stage(
-          write(join(target, ANSWERS_FILE), answers.replace(/^_src_path: .*$/m, `_src_path: ${current}`)),
-        );
-        await previewCommit(ctx, dir, `plx: ${site.rel} reads ${current}, the template's name since its rename`);
-      }
-      // Template tasks (mise install, hook setup) serve a developer's checkout,
-      // not a pull request. Unattended, a new question takes its default; on a
-      // terminal copier asks. A dry run previews on the scratch checkout, so
-      // the step is staged there rather than only announced.
-      const args = [
-        'update',
-        '--skip-answered',
-        '--trust',
-        '--skip-tasks',
-        ...(take.ref ? ['--vcs-ref', take.ref] : []),
-        ...(ctx.yes || ctx.dryRun ? ['--defaults'] : []),
-      ];
-      const step = run(...copierIn(dir, args), { cwd: target, interactive: !ctx.dryRun });
-      if (ctx.dryRun) await ctx.stage(step);
-      else await ctx.apply([step]);
-    }
+    await update(ctx, site, target, dir);
   } catch (error) {
-    ctx.say(`  ✗ FAILED — copier update exited nonzero${detail(error)}`);
-    summary.failed.push(site.rel);
-    return;
+    const why = detailOf(error);
+    ctx.say(`  ✗ FAILED — copier update exited nonzero${why ? `: ${why}` : ''}`);
+    return { rel: site.rel, outcome: 'failed', ...(why ? { detail: why } : {}) };
   }
 
   // copier applies the template diff with `git apply --3way`, which leaves
@@ -221,21 +195,15 @@ async function updateSite(
     if (hasConflictMarkers(text)) conflict = true;
   }
 
-  if (conflict) {
-    ctx.say('  ✗ CONFLICTS — committed with their <<<<<<< markers, to resolve in the pull request:');
-    summary.conflicted.push(site.rel);
-  } else {
-    ctx.say('  ✓ merged clean:');
-    summary.clean.push(site.rel);
-  }
+  if (conflict) ctx.say('  ✗ CONFLICTS — committed with their <<<<<<< markers, to resolve in the pull request:');
+  else ctx.say('  ✓ merged clean:');
   for (const line of status.split('\n').filter(Boolean)) ctx.say(`    ${line}`);
-  // Each preview-from-local site is committed so the next site's answers
-  // rewrite starts from a clean tree. Otherwise the site is staged: a conflict
-  // leaves unmerged index entries, and copier's own git plumbing (`git
-  // write-tree`) refuses an index with those, so the next site's update would
-  // fail; staged, the markers are in the tree and the index is whole.
-  if (take.previewFrom) await previewCommit(ctx, dir, `plx preview: ${site.rel} updated`);
-  else await ctx.stage(run('git', ['add', '-A'], { cwd: dir }));
+  // Staged, so that the next site starts from a whole index: a conflict
+  // leaves unmerged entries, and copier's own git plumbing (`git
+  // write-tree`) refuses an index with those, so the next site's update
+  // would fail; staged, the markers are in the tree and the index is whole.
+  await ctx.stage(run('git', ['add', '-A'], { cwd: dir }));
+  return { rel: site.rel, outcome: conflict ? 'conflicted' : 'clean' };
 }
 
 /**
@@ -243,22 +211,29 @@ async function updateSite(
  * The lockfile is what this step writes, so the install is never frozen: pnpm freezes it by default under CI,
  * where the update workflow runs.
  */
-async function refreshLockfile(ctx: Context, consumer: Consumer, dir: string, base: string, summary: Summary) {
-  if ((await ctx.readFile(join(dir, 'pnpm-workspace.yaml')).catch(() => undefined)) === undefined) return;
+async function refreshLockfile(
+  ctx: Context,
+  consumer: Consumer,
+  dir: string,
+  base: string,
+): Promise<Taken['lockfile']> {
+  if ((await ctx.readFile(join(dir, 'pnpm-workspace.yaml')).catch(() => undefined)) === undefined) return undefined;
   const manifests = ['*package.json', 'pnpm-workspace.yaml'];
   const unchanged = await ctx
     .read('git', ['diff', '--quiet', base, '--', ...manifests], { cwd: dir })
     .then(() => true)
     .catch(() => false);
-  if (unchanged) return;
+  if (unchanged) return undefined;
   ctx.say(`→ ${consumer.rel}: pnpm install (manifests changed)`);
   try {
     await ctx.apply([
       run('mise', ['exec', '--', 'pnpm', 'install', '--no-frozen-lockfile', '--reporter=silent'], { cwd: dir }),
     ]);
+    return 'refreshed';
   } catch (error) {
-    ctx.say(`  ✗ pnpm install failed${detail(error)}`);
-    summary.failed.push(`${consumer.rel}/pnpm-lock.yaml`);
+    const why = detailOf(error);
+    ctx.say(`  ✗ pnpm install failed${why ? `: ${why}` : ''}`);
+    return 'failed';
   }
 }
 
@@ -291,20 +266,27 @@ export async function openPullUrl(ctx: Context, consumer: Consumer, dir: string,
  * consumer's branch: opened once, found again on a re-run. The branch is plx's
  * own, so a re-run may move it, with a lease on what it fetched. Hooks are
  * skipped: the checks are the pull request's job, and the mount's own
- * checkout may carry the repo's hooks.
+ * checkout may carry the repo's hooks. The body says what needs a hand,
+ * from what the sites and the lockfile came to.
  */
-async function openPull(ctx: Context, consumer: Consumer, dir: string, take: Take, summary: Summary) {
+async function openPull(
+  ctx: Context,
+  consumer: Consumer,
+  dir: string,
+  take: Take,
+  taken: Taken,
+): Promise<Pick<Taken, 'pull' | 'failed'>> {
   const { version } = take;
   const branch = versionBranch(version);
   if (ctx.dryRun) {
     ctx.say(
       `  (preview) ${consumer.rel}: would commit, push ${branch} and open a pull request against ${consumer.branch}`,
     );
-    return;
+    return {};
   }
   if ((await ctx.read('git', ['status', '--porcelain'], { cwd: dir })).trim() === '') {
     ctx.say(`• ${consumer.rel}: nothing changed — no pull request`);
-    return;
+    return {};
   }
   const head = `${consumer.origin ?? 'origin'} ${branch}`;
   try {
@@ -324,26 +306,24 @@ async function openPull(ctx: Context, consumer: Consumer, dir: string, take: Tak
       }),
     ]);
   } catch (error) {
-    ctx.say(`  ✗ FAILED — push to ${head}${detail(error)}`);
-    summary.failed.push(consumer.rel);
-    return;
+    const why = detailOf(error);
+    ctx.say(`  ✗ FAILED — push to ${head}${why ? `: ${why}` : ''}`);
+    return { failed: `push to ${head}${why ? `: ${why}` : ''}` };
   }
-  const conflicted = ofConsumer(summary.conflicted, consumer);
-  const failed = ofConsumer(summary.failed, consumer);
-  const clean = conflicted.length === 0 && failed.length === 0;
   const existing = await openPullUrl(ctx, consumer, dir, version);
   if (existing) {
     ctx.say(`• ${consumer.rel}: pull request updated: ${existing}`);
-    summary.pulls.push(existing);
-    if (clean) summary.mergeable.push(existing);
-    return;
+    return { pull: { branch, url: existing } };
   }
+  const of = (outcome: SiteResult['outcome']) => taken.sites.filter((s) => s.outcome === outcome).map((s) => s.rel);
+  const conflicted = of('conflicted');
+  const failed = [...of('failed'), ...(taken.lockfile === 'failed' ? [`${consumer.rel}/pnpm-lock.yaml`] : [])];
   const sites = consumer.sites.map((s) => s.rel);
   const body = [
     `Plexus ${version} (§ 1.5 PLX): \`copier update\` at ${sites.join(', ')}, the lockfile where manifests moved, and the workflow refs.`,
     ...(conflicted.length > 0 ? [`Conflicts to resolve, committed with their markers: ${conflicted.join(', ')}.`] : []),
     ...(failed.length > 0 ? [`Failed, and left as it was: ${failed.join(', ')}.`] : []),
-    ...(clean ? [CLEAN_BODY] : []),
+    ...(needsHand(taken) ? [] : [CLEAN_BODY]),
     `Opened by ${take.opener}${take.why ? `: ${take.why}` : ''}.`,
   ].join('\n\n');
   try {
@@ -366,18 +346,30 @@ async function openPull(ctx: Context, consumer: Consumer, dir: string, take: Tak
       ),
     ]);
   } catch (error) {
-    ctx.say(`  ✗ FAILED — pull request${detail(error)}`);
-    summary.failed.push(consumer.rel);
-    return;
+    const why = detailOf(error);
+    ctx.say(`  ✗ FAILED — pull request${why ? `: ${why}` : ''}`);
+    return { failed: `pull request${why ? `: ${why}` : ''}` };
   }
   const url = await openPullUrl(ctx, consumer, dir, version);
   ctx.say(`• ${consumer.rel}: pull request opened${url ? `: ${url}` : ''}`);
-  summary.pulls.push(url || `${consumer.rel} ${branch}`);
-  if (url && clean) summary.mergeable.push(url);
+  return { pull: { branch, ...(url ? { url } : {}) } };
 }
 
-export const detail = (error: unknown): string => {
+/**
+ * What went wrong, in one line, from the error itself: a tool's last line of
+ * output on stderr, else its exit code; a time limit as such; any other
+ * error's message. Empty when there is nothing to say.
+ */
+export function detailOf(error: unknown): string {
+  if (error instanceof TimeoutError) return `did not finish within ${error.limit} ms`;
+  if (error instanceof ExecError) {
+    const last = error.stderr
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .at(-1);
+    return last ?? (error.code === null ? '' : `exit code ${error.code}`);
+  }
   const message = error instanceof Error ? error.message : String(error);
-  const last = message.trim().split('\n').at(-1) ?? '';
-  return last && !/exited with/.test(last) ? `: ${last}` : '';
-};
+  return message.trim().split('\n')[0] ?? '';
+}
