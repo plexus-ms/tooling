@@ -12,8 +12,8 @@
 // The branch is never moved by any run, and plx never pushes to it again: it
 // is the human's from the moment it is on origin. A later run, scheduled or
 // manual, reads it as origin has it (a fetch into the remote-tracking ref; no
-// checkout is touched), runs the detector over its tracked files, rewrites the
-// body to that present state, and marks the pull request ready when no marker
+// checkout is touched), runs the detector over its tracked files, writes the
+// body afresh for that present state (it never reads the body), and marks the pull request ready when no marker
 // remains, or a draft again while one does. It does not check the lockfile:
 // that is the human's, and the repo's CI catches a stale one. Whether the pull
 // request is ready to merge is read from its draft state and the detector,
@@ -190,17 +190,11 @@ export async function revisit(ctx: Context, consumer: Consumer, pull: OpenPull, 
       ? `• ${name}: ${branch} is on origin (${pull.url}); no conflict marker remains${pull.draft ? ' — ready for review' : ''}`
       : `• ${name}: ${branch} is on origin (${pull.url}); ${marked.length} file${marked.length === 1 ? '' : 's'} still hold${marked.length === 1 ? 's' : ''} conflict markers${pull.draft ? '' : ' — a draft again'}`,
   );
-  const current = await ctx
-    .read('gh', ['pr', 'view', pull.url, '--json', 'body', '--jq', '.body'], { cwd: repo })
-    .catch(() => undefined);
+  // The body is written, never read: what it says decides nothing.
   const steps = [
-    ...(current?.trim() === body.trim()
-      ? []
-      : [
-          run('gh', ['api', `repos/{owner}/{repo}/pulls/${pull.number}`, '--method', 'PATCH', '-f', `body=${body}`], {
-            cwd: repo,
-          }),
-        ]),
+    run('gh', ['api', `repos/{owner}/{repo}/pulls/${pull.number}`, '--method', 'PATCH', '-f', `body=${body}`], {
+      cwd: repo,
+    }),
     ...(ready && pull.draft ? [run('gh', ['pr', 'ready', pull.url], { cwd: repo })] : []),
     ...(!ready && !pull.draft ? [run('gh', ['pr', 'ready', pull.url, '--undo'], { cwd: repo })] : []),
   ];

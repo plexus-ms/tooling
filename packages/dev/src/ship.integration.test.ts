@@ -838,7 +838,8 @@ test('update --recursive: a second run finds the version branches on origin and 
   assert.match(pull('acme-web', '0.2.0', '.body'), /^Nothing needs a hand/, 'the body rewritten to the present state');
   const patched = fakeLog().filter((l) => has(l, '--method PATCH')).length;
   await runRecursive({ yes: true }, { now: true });
-  assert.equal(fakeLog().filter((l) => has(l, '--method PATCH')).length, patched, 'a body already current is left');
+  assert.equal(fakeLog().filter((l) => has(l, '--method PATCH')).length, patched + 2, 'the body is written each run');
+  assert.ok(!fakeLog().some((l) => has(l, 'pr view')), 'and never read');
   assert.equal(git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0'), tip, 'the branch is where it was');
   assert.equal(copierRuns().length, 3, 'copier not run again');
   assert.deepEqual(second.result?.pulls, ['https://forge/acme-platform/pull/1', 'https://forge/acme-web/pull/1']);
