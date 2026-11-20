@@ -1,10 +1,10 @@
 // Where a run's candidates live (§ 8 PLX-Delivery), behind one shape. `own`
-// is the registry pair: `registry:2` on 127.0.0.1:5000 for this month's
-// bucket, read-write, and on 127.0.0.1:5001 for the previous month's,
+// is the registry pair: `registry:2` on 127.0.0.1:5000 for this week's
+// bucket, read-write, and on 127.0.0.1:5001 for the previous week's,
 // read-only; both the same registry API over the tenant's object storage,
 // nothing reads the bucket layout directly. A runner host keeps the pair
 // running; a forge runner, a launched instance or a large slot starts it for
-// the length of its job. In the first month the previous bucket does not
+// the length of its job. In the first week the previous bucket does not
 // exist and registry:2 answers 503 (its storage health check fails): that
 // sidecar is optional, and a build names it as a cache source only when it
 // answers 200. `ghcr` is the forge's registry itself, where the published
@@ -99,16 +99,16 @@ export async function answers(ctx: Context, port: number): Promise<boolean> {
 export interface Sidecars {
   current: string;
   previous: string;
-  /** Whether the previous month's sidecar answers. */
+  /** Whether the previous week's sidecar answers. */
   previousAnswers: boolean;
 }
 
 /**
- * Create this month's bucket when it does not exist yet (the ci-storage key
+ * Create this week's bucket when it does not exist yet (the ci-storage key
  * may), start both sidecars, wait for the current one and briefly for the
  * previous one. Where the current one answers already, the machine runs the
  * pair for its jobs (a slot of a runner host, actions_runners, which keeps
- * the pair on this month's buckets and gives the slot no Docker socket):
+ * the pair on this week's buckets and gives the slot no Docker socket):
  * nothing is started and no bucket is touched.
  */
 export async function startSidecars(
@@ -194,8 +194,8 @@ const head = (ctx: Context, port: number, app: string, tag: string, absent = cur
   );
 
 /**
- * The port of the sidecar that holds `app:tag`, or undefined. This month's
- * sidecar has to answer; the previous month's is optional (see the top), so
+ * The port of the sidecar that holds `app:tag`, or undefined. This week's
+ * sidecar has to answer; the previous week's is optional (see the top), so
  * any failure there is absence.
  */
 export async function tagExists(ctx: Context, app: string, tag: string): Promise<number | undefined> {
@@ -234,7 +234,7 @@ export async function layers(
 const layersIn = (manifest: string): Layer[] =>
   ((JSON.parse(manifest) as { layers?: Layer[] }).layers ?? []).map((l) => ({ digest: l.digest, size: l.size }));
 
-/** Where a run writes `app:tag`: this month's sidecar, or the forge's registry. */
+/** Where a run writes `app:tag`: this week's sidecar, or the forge's registry. */
 export function candidateRef(registry: Registry, app: string, tag: string): string {
   return registry.kind === 'own'
     ? `localhost:${CURRENT_PORT}/${app}:${tag}`
@@ -294,15 +294,15 @@ export async function loggedIn(ctx: Context, host: string, env: NodeJS.ProcessEn
 }
 
 export interface Rotation {
-  /** This month's bucket, when it had to be created. */
+  /** This week's bucket, when it had to be created. */
   created?: string;
-  /** The bucket from two months ago, when it was still there. */
+  /** The bucket from two weeks ago, when it was still there. */
   removed?: string;
 }
 
 /**
- * Retention by rotation: this month's bucket exists, the one from two months
- * ago is deleted whole. Writes go to the current month, reads consult the
+ * Retention by rotation: this week's bucket exists, the one from two weeks
+ * ago is deleted whole. Writes go to the current week, reads consult the
  * current and the previous, so nothing reads what goes.
  */
 export async function rotateBuckets(
@@ -320,7 +320,7 @@ export async function rotateBuckets(
     result.created = buckets.current;
   }
   if (await s3.bucketExists(buckets.expired)) {
-    ctx.say(`rotate: the registry bucket ${buckets.expired} is two months old`);
+    ctx.say(`rotate: the registry bucket ${buckets.expired} is two weeks old`);
     await s3.removeBucket(buckets.expired);
     result.removed = buckets.expired;
   }

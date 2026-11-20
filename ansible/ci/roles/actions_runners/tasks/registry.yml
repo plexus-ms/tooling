@@ -44,7 +44,7 @@
 
 # A new key reaches running containers only when they are created anew; the
 # refresh otherwise leaves a container on the right bucket and image alone.
-- name: Start the pair on this month's buckets
+- name: Start the pair on this week's buckets
   ansible.builtin.command:
     cmd: /usr/local/sbin/ci-registry-refresh
   environment:

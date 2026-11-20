@@ -8,8 +8,8 @@
 set -eu
 : "${IMAGE:?}" "${PULL:?}" "${REGISTRY:?}" "${REGISTRY_IMAGE:?}" "${DISK_ALERT_PERCENT:?}"
 
-# The registry pair onto this month's buckets, first: a failure here is the
-# one that costs every run of the month a cold cache.
+# The registry pair onto this week's buckets, first: a failure here is the
+# one that costs every run of the week a cold cache.
 [ "$REGISTRY" != true ] || /usr/local/sbin/ci-registry-refresh
 
 # The pinned image, present before the next slot container needs it.

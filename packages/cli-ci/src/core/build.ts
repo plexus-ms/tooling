@@ -167,11 +167,11 @@ export async function build(ctx: Context, options: BuildOptions): Promise<Build>
   const pruneSeconds = Math.round((Date.now() - t) / 1000);
   ctx.say(`build: prune ${pruneSeconds}s`);
 
-  // The previous month's sidecar exists only when its bucket does, and only
+  // The previous week's sidecar exists only when its bucket does, and only
   // with a registry of the tenant's own.
   const previousAnswers = options.registry.kind === 'own' && (ctx.dryRun ? true : await answers(ctx, PREVIOUS_PORT));
   if (options.registry.kind === 'own' && !previousAnswers)
-    ctx.say(`build: no previous-month registry on ${PREVIOUS_REGISTRY}`);
+    ctx.say(`build: no previous-week registry on ${PREVIOUS_REGISTRY}`);
   const metadataFile = join(out, 'metadata.json');
   t = Date.now();
   await ctx.apply([run('docker', buildArgs(options, context, metadataFile, previousAnswers), { env })]);

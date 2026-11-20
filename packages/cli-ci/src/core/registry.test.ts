@@ -34,8 +34,8 @@ test('where :5000 answers already, nothing is started and no key is needed', asy
   });
   const sidecars = await startSidecars(new Context({}, io), undefined, 'acme', november);
   assert.deepEqual(sidecars, {
-    current: 'acme-ci-registry-2026-11',
-    previous: 'acme-ci-registry-2026-10',
+    current: 'acme-ci-registry-2026-w45',
+    previous: 'acme-ci-registry-2026-w44',
     previousAnswers: false,
   });
   assert.deepEqual(commands, ['curl http://127.0.0.1:5000/v2/', 'curl http://127.0.0.1:5001/v2/']);
@@ -53,7 +53,7 @@ test('the image name is the lower-cased prefix and the app', () => {
   assert.equal(imageName('ghcr.io/Acme/', 'website'), 'ghcr.io/acme/website');
 });
 
-test('a candidate is written to this month’s sidecar, or to the forge’s registry', () => {
+test('a candidate is written to this week’s sidecar, or to the forge’s registry', () => {
   assert.equal(candidateRef(registryOf('own', ''), 'website', 'build-0f2a'), 'localhost:5000/website:build-0f2a');
   assert.equal(
     candidateRef(registryOf('ghcr', 'ghcr.io/Plexus-MS-Tenant'), 'website', 'build-0f2a'),
@@ -119,7 +119,7 @@ test('only the registry’s “not there” is a missing tag; a refused login or
     digestOf(new Context({}, down('5000')), { kind: 'own' }, 'website', 'build-x'),
     /Failed to connect/,
   );
-  // Last month's sidecar is optional: its silence is absence.
+  // Last week's sidecar is optional: its silence is absence.
   assert.equal(await findTag(new Context({}, down('5001')), { kind: 'own' }, 'website', 'build-x'), undefined);
 });
 
@@ -152,7 +152,7 @@ test('a login is an entry for the host in the Docker config, or a credential sto
   assert.equal(await loggedIn(new Context({}, fakeIo({})), 'ghcr.io', env), false);
 });
 
-test('rotate creates this month’s bucket when it is missing and removes the one from two months ago, objects first', async () => {
+test('rotate creates this week’s bucket when it is missing and removes the one from two weeks ago, objects first', async () => {
   const calls: string[] = [];
   let objects = ['docker/registry/v2/a', 'docker/registry/v2/b&c'];
   const io = fakeIo({}, undefined, {
@@ -162,8 +162,8 @@ test('rotate creates this month’s bucket when it is missing and removes the on
       calls.push(`${method} ${url}`);
       assert.match(input, /aws-sigv4 = "aws:amz:r1:s3"/);
       assert.match(input, /user = "k:s"/);
-      // 2026-11 is missing, 2026-09 is still there.
-      if (method === 'HEAD') return url.endsWith('2026-09') ? '\n200' : '\n404';
+      // 2026-w45 is missing, 2026-w43 is still there.
+      if (method === 'HEAD') return url.endsWith('2026-w43') ? '\n200' : '\n404';
       if (method === 'GET' && url.includes('list-type=2')) {
         const xml = `<ListBucketResult>${objects.map((k) => `<Contents><Key>${k.replace('&', '&amp;')}</Key></Contents>`).join('')}</ListBucketResult>`;
         return `${xml}\n200`;
@@ -181,17 +181,17 @@ test('rotate creates this month’s bucket when it is missing and removes the on
   });
   const storage = { endpoint: 'https://s3.example/', region: 'r1', accessKey: 'k', secretKey: 's' };
   const result = await rotateBuckets(new Context({}, io), storage, 'acme', november);
-  assert.deepEqual(result, { created: 'acme-ci-registry-2026-11', removed: 'acme-ci-registry-2026-09' });
+  assert.deepEqual(result, { created: 'acme-ci-registry-2026-w45', removed: 'acme-ci-registry-2026-w43' });
   assert.deepEqual(calls, [
-    'HEAD /acme-ci-registry-2026-11',
-    'PUT /acme-ci-registry-2026-11',
-    'HEAD /acme-ci-registry-2026-09',
-    'GET /acme-ci-registry-2026-09?list-type=2&max-keys=1000',
-    'POST /acme-ci-registry-2026-09?delete=',
-    'GET /acme-ci-registry-2026-09?list-type=2&max-keys=1000',
-    'GET /acme-ci-registry-2026-09?uploads=',
-    'DELETE /acme-ci-registry-2026-09/docker/x%20y?uploadId=u1',
-    'DELETE /acme-ci-registry-2026-09',
+    'HEAD /acme-ci-registry-2026-w45',
+    'PUT /acme-ci-registry-2026-w45',
+    'HEAD /acme-ci-registry-2026-w43',
+    'GET /acme-ci-registry-2026-w43?list-type=2&max-keys=1000',
+    'POST /acme-ci-registry-2026-w43?delete=',
+    'GET /acme-ci-registry-2026-w43?list-type=2&max-keys=1000',
+    'GET /acme-ci-registry-2026-w43?uploads=',
+    'DELETE /acme-ci-registry-2026-w43/docker/x%20y?uploadId=u1',
+    'DELETE /acme-ci-registry-2026-w43',
   ]);
 });
 
@@ -212,6 +212,6 @@ test('a dry run of rotate lists once and deletes nothing; an answer outside 2xx 
   assert.deepEqual(calls, ['HEAD', 'HEAD', 'GET']);
   await assert.rejects(
     rotateBuckets(new Context({}, io('403')), storage, 'acme', november),
-    /deleting 1 objects of acme-ci-registry-2026-09 answered 403/,
+    /deleting 1 objects of acme-ci-registry-2026-w43 answered 403/,
   );
 });

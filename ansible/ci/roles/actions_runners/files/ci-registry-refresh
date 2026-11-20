@@ -1,9 +1,9 @@
 #!/bin/sh
-# Keeps the registry pair of a CI runner host on this month's buckets:
+# Keeps the registry pair of a CI runner host on this week's buckets:
 # the CNCF distribution registry on 127.0.0.1:5000 against
-# <owner>-ci-registry-<this month>, read-write, and on :5001 against the
-# previous month's, read-only — the pair `plx-ci registry` starts for itself
-# where none answers (§ 8 PLX-Delivery). Creates this month's bucket when it
+# <owner>-ci-registry-<this week>, read-write, and on :5001 against the
+# previous week's, read-only — the pair `plx-ci registry` starts for itself
+# where none answers (§ 8 PLX-Delivery). Creates this week's bucket when it
 # is missing; a container already on the right bucket and image is left
 # running. Managed by Ansible (actions_runners), run by the hourly
 # housekeeping. Hand-runnable as root: ci-registry-refresh; with
@@ -20,9 +20,10 @@ value() { sed -n "s/^$1=//p" "$env_file"; }
 endpoint=$(value REGISTRY_STORAGE_S3_REGIONENDPOINT)
 region=$(value REGISTRY_STORAGE_S3_REGION)
 
-month() { date -u -d "$(date -u +%Y-%m-15) $1 month" +%Y-%m; }
-current="$OWNER-ci-registry-$(month 0)"
-previous="$OWNER-ci-registry-$(month -1)"
+# The ISO week in UTC, as plx-ci names it: 2026-w47.
+week() { date -u -d "$1 week" +%G-w%V; }
+current="$OWNER-ci-registry-$(week 0)"
+previous="$OWNER-ci-registry-$(week -1)"
 
 # The bucket, through the storage's S3 API, signed with the key.
 s3() {
@@ -40,9 +41,9 @@ case "$status" in
   *) echo "looking up the bucket $current answered $status" >&2; exit 1 ;;
 esac
 
-# One registry container on one bucket. In a strategy's first month the
-# previous month's bucket does not exist and that registry answers 503, which
-# the jobs read as no previous cache; the month change moves it to a bucket
+# One registry container on one bucket. In a strategy's first week the
+# previous week's bucket does not exist and that registry answers 503, which
+# the jobs read as no previous cache; the week change moves it to a bucket
 # that does.
 ensure() {
   name=$1 port=$2 bucket=$3 mode=$4

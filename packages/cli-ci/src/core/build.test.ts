@@ -23,7 +23,7 @@ test('a no-cache build has no cache arguments and carries the extra tags', () =>
   assert.match(args, /--tag localhost:5000\/website:repro-41-1/);
 });
 
-test('in the forge’s registry a build pushes no commit tag and names no previous month', () => {
+test('in the forge’s registry a build pushes no commit tag and names no previous week', () => {
   const ghcr = { ...options, registry: { kind: 'ghcr', prefix: 'ghcr.io/plexus-ms-tenant' } as const };
   assert.deepEqual(tagsOf(ghcr), ['build-0f2a']);
   assert.deepEqual(tagsOf(options), ['build-0f2a', 'abc']);
