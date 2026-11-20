@@ -18,6 +18,12 @@
 // that is the human's, and the repo's CI catches a stale one. Whether the pull
 // request is ready to merge is read from its draft state and the detector,
 // never from its body.
+//
+// The review is requested once, when plx opens the pull request, draft or
+// not, from the users the repo's root answers name (`pr_reviewers`, a
+// comma-separated string of GitHub user logins, empty or absent for none), or
+// those `--reviewer` names instead; nothing more when it is marked ready.
+// Users only: a team is refused.
 import { relative } from 'node:path';
 import { filesWithConflictMarkers } from './conflicts.ts';
 import type { Consumer } from './consumers.ts';
@@ -26,6 +32,47 @@ import { run } from './effects.ts';
 import { detailOf } from './io.ts';
 
 export const versionBranch = (version: string): string => `plexus/${version}`;
+
+/** The answer of the repo templates that names who reviews the version's pull requests. */
+export const REVIEWERS_ANSWER = 'pr_reviewers';
+
+/**
+ * The user logins a comma-separated value names, in order, once each; blank
+ * for none. plx takes letters, digits and hyphens; a team (`org/team`) and
+ * anything else is refused, naming where it came from.
+ */
+export function parseReviewers(value: string, what: string): string[] {
+  const logins = value
+    .split(',')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  for (const login of logins) {
+    if (login.includes('/')) throw new Error(`${what} names \`${login}\`, a team; only users are requested`);
+    if (!/^[A-Za-z0-9-]+$/.test(login)) throw new Error(`${what} names \`${login}\`, not a GitHub user login`);
+  }
+  return [...new Set(logins)];
+}
+
+/** The reviewers a repo's root answers name; none when they name none. */
+export function reviewersOf(answers: Record<string, unknown>): string[] {
+  const value = answers[REVIEWERS_ANSWER];
+  if (value === undefined || value === null) return [];
+  return parseReviewers(String(value), `the answer ${REVIEWERS_ANSWER}`);
+}
+
+/** The request for reviews from users on a pull request, by its number, in the repo `cwd` belongs to. */
+export const requestReviews = (number: number, logins: string[], cwd: string) =>
+  run(
+    'gh',
+    [
+      'api',
+      `repos/{owner}/{repo}/pulls/${number}/requested_reviewers`,
+      '--method',
+      'POST',
+      ...logins.flatMap((l) => ['-f', `reviewers[]=${l}`]),
+    ],
+    { cwd },
+  );
 
 /** An open pull request as the forge lists it. */
 export interface OpenPull {

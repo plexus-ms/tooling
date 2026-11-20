@@ -133,8 +133,12 @@ export {
   type OpenPull,
   openPullOf,
   type PullState,
+  parseReviewers,
   pullBody,
+  REVIEWERS_ANSWER,
   type Revisited,
+  requestReviews,
+  reviewersOf,
   revisit,
   versionBranch,
 } from './pull.ts';

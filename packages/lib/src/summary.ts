@@ -16,7 +16,7 @@ export interface Summary {
   clean: string[];
   /** Sites left with conflicts, and the files of a version branch on origin that still hold conflict markers. */
   conflicted: string[];
-  /** Sites whose update exited nonzero, consumers that could not be cloned or pushed, and lockfiles that failed to refresh. */
+  /** Sites whose update exited nonzero, consumers that could not be cloned or pushed, lockfiles that failed to refresh, and review requests the forge refused. */
   failed: string[];
   /** Consumers left untouched, with the reason. */
   skipped: { path: string; reason: string }[];
@@ -79,6 +79,8 @@ export function summarize(
         if (t.failed !== undefined) s.failed.push(t.rel);
         if (t.pull) s.pulls.push(t.pull.url ?? `${t.rel} ${t.pull.branch}`);
         if (t.pull?.url && !t.pull.draft && !needsHand(t)) s.mergeable.push(t.pull.url);
+        // The pull request stands; who was to review it needs a human to ask.
+        if (t.review && 'failed' in t.review) s.failed.push(`${t.rel} (review request)`);
         break;
       }
     }

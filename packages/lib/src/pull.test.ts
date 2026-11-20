@@ -50,3 +50,15 @@ test('the open pull request is read from the forge as JSON: its URL, number and 
   assert.equal(await openPullOf(listed('[]'), consumer, '/r', '0.2.0'), undefined);
   assert.equal(await openPullOf(listed('not json'), consumer, '/r', '0.2.0'), undefined);
 });
+
+test('reviewers: a comma-separated string of user logins, blank for none; a team is refused', async () => {
+  const { parseReviewers, reviewersOf } = await import('./pull.ts');
+  assert.deepEqual(parseReviewers(' alice, bob ,,alice', 'x'), ['alice', 'bob']);
+  assert.deepEqual(parseReviewers('', 'x'), []);
+  assert.throws(() => parseReviewers('alice,acme/ops', '--reviewer'), /--reviewer names `acme\/ops`, a team/);
+  assert.throws(() => parseReviewers('@alice', '--reviewer'), /not a GitHub user login/);
+  assert.deepEqual(reviewersOf({}), []);
+  assert.deepEqual(reviewersOf({ pr_reviewers: null }), []);
+  assert.deepEqual(reviewersOf({ pr_reviewers: 'alice' }), ['alice']);
+  assert.deepEqual(reviewersOf({ renovate_reviewers: 'alice' }), [], 'the old name is not read');
+});

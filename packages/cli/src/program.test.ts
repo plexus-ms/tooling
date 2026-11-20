@@ -37,6 +37,7 @@ test('update runs in many repos with -r; no command named propagate is left', ()
   const update = program.commands.find((c) => c.name() === 'update');
   assert.ok(update);
   assert.match(update.helpInformation(), /-r, --recursive/);
+  assert.match(update.helpInformation(), /^ {2}--reviewer <login> /m, '--reviewer has no short form');
   assert.equal(
     program.commands.find((c) => c.name() === 'propagate'),
     undefined,

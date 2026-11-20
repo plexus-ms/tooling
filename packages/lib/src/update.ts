@@ -36,6 +36,10 @@
 // A repo whose every site already records the newest version does nothing at
 // all.
 //
+// The pull request it opens asks for a review from the users the repo's root
+// answers name (`pr_reviewers`), or from those `reviewers` names instead
+// (pull.ts), once, when it is opened.
+//
 //   plx update                      # the version the repo's schedule takes, if any
 //   plx update --now                # the newest version, whatever its step
 //   plx -n update --now             # preview in a worktree, push nothing
@@ -49,7 +53,7 @@ import { run } from './effects.ts';
 import { detailOf, ExecError } from './io.ts';
 import { maxAgeOf, type Need, needOf, type Release } from './need.ts';
 import { overview } from './overview.ts';
-import { openPullOf, revisit, versionBranch } from './pull.ts';
+import { openPullOf, reviewersOf, revisit, versionBranch } from './pull.ts';
 import { type Taken, takeVersion } from './take.ts';
 import { TEMPLATES, templateSource } from './templates.ts';
 import { COMPENDIUM, compareVersions, isPlexusVersion, preflightForge, UsageError } from './version.ts';
@@ -67,6 +71,8 @@ export interface UpdateOptions {
   maxAge?: number;
   /** The clock the interval is measured against, as a date; default: now. */
   today?: string;
+  /** The users asked to review the pull request it opens; default: the repo's answer `pr_reviewers`, else none. */
+  reviewers?: string[];
 }
 
 /**
@@ -148,6 +154,7 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
         now: options.today === undefined ? new Date() : new Date(options.today),
       });
   if (need.held) ctx.say(`• ${name}: ${need.held} (plx update --now takes it)`);
+  const reviewers = options.reviewers ?? reviewersOf(answers[consumer.sites.indexOf(root)]?.answers ?? {});
   // A repo that rests is looked at for the newest version: one asked for earlier may be on origin.
   const version = need.take ? need.version : newest;
 
@@ -196,6 +203,7 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
       ref: version,
       opener: '`plx update`',
       why: need.why,
+      reviewers,
     });
     return { repo: name, version, kind: 'taken', taken };
   } finally {

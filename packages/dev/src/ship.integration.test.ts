@@ -20,10 +20,12 @@
 // version to the fake registry. A pull request is pr-<branch> (its URL) with
 // .body, .base and .draft beside it; `pr list` answers as JSON, `pr ready`
 // (--undo) sets .draft, and `api repos/{owner}/{repo}/pulls/<n> --method
-// PATCH -f body=…` rewrites .body. Knobs:
+// PATCH -f body=…` rewrites .body, and `api …/pulls/<n>/requested_reviewers
+// --method POST -f reviewers[]=…` appends the logins to .reviewers. Knobs:
 //   FAKE_GH_LOGGED_OUT=1              `gh auth status` fails
 //   FAKE_GH_MUTABLE=1                 releases are created mutable
 //   FAKE_GH_CREATE_FAIL=<repo>        `gh release create` fails in that repo
+//   FAKE_GH_REVIEW_FAIL=1             a review request fails
 // `api repos/<o>/<r>/releases` lists that repo's releases as "<tag> <date>",
 // the date from `versionCut` (default: 2026-01-01, the fixture's epoch).
 // Fake npm: `npm view <pkg>@<v> version` answers once tooling's release of
@@ -176,6 +178,11 @@ case "$1 $2" in
   "api "*)
     case "$2" in
       *"/releases/tags/"*) cat "$dir/release-\${2##*/}" ;;
+      *"/requested_reviewers")
+        [ -z "\${FAKE_GH_REVIEW_FAIL:-}" ] || { echo "fake gh: a reviewer is not a collaborator" >&2; exit 1; }
+        n="\${2%/requested_reviewers}"; n="\${n##*/}"
+        for f in $(prs); do [ "$(sed 's|.*/||' "$f")" = "$n" ] || continue
+          for a in "$@"; do case "$a" in "reviewers[]="*) echo "\${a#reviewers[]=}" >> "$f.reviewers" ;; esac; done; done ;;
       *"/pulls/"*)
         for f in $(prs); do [ "$(sed 's|.*/||' "$f")" = "\${2##*/}" ] || continue; b="$(arg -f "$@")"; printf '%s' "\${b#body=}" > "$f.body"; done ;;
       *"/releases") for f in "$dir"/release-*; do [ -f "$f" ] || continue; v="\${f##*/release-}"; echo "$v $(cat "$dir/date-$v" 2>/dev/null || echo 2026-01-01T00:00:00Z)"; done ;;
@@ -1634,6 +1641,65 @@ test('update: a pending minor rests inside the interval; past it the newest is t
   assert.equal(git(remote('acme-web'), 'rev-list', '--count', 'develop..plexus/0.3.0'), '1', 'one commit');
   assert.match(pull('acme-web', '0.3.0', '.body'), /interval: 7 days; 2 newer versions/);
   assert.deepEqual(due.result?.resting, []);
+});
+
+test('update: the review is asked of the users pr_reviewers names, or --reviewer instead, once, draft or not', async () => {
+  fixture('update-reviewers');
+  versionCut('0.2.0');
+  const plat = join(WS, 'acme/platform');
+  put(
+    join(plat, '.copier-answers.yml'),
+    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\npr_reviewers: alice, bob\n',
+  );
+  commit(plat, 'reviewers');
+  git(plat, 'push', '--quiet', 'origin', 'main');
+  const requests = () => fakeLog().filter((l) => has(l, '/requested_reviewers'));
+
+  const answered = await runUpdate({ yes: true }, { repo: plat });
+  assert.equal(answered.error, undefined, answered.out);
+  assert.equal(pull('acme-platform', '0.2.0', '.reviewers'), 'alice\nbob', 'the answer names them');
+  assert.equal(requests().length, 1);
+  assert.ok(requests()[0]?.includes('api repos/{owner}/{repo}/pulls/1/requested_reviewers --method POST'));
+
+  // A later run, which marks nothing ready here, asks nobody again; nor would marking it ready.
+  await runUpdate({ yes: true }, { repo: plat });
+  assert.equal(requests().length, 1, 'requested once');
+
+  // --reviewer overrides the answer, on a draft as on any other; a recursive run passes it through.
+  process.env.FAKE_COPIER_CONFLICT = '/web';
+  const asked = await runRecursive({ yes: true }, { dir: join(WS, 'acme'), reviewers: ['carol'] });
+  delete process.env.FAKE_COPIER_CONFLICT;
+  assert.equal(asked.error, undefined, asked.out);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true');
+  assert.equal(pull('acme-web', '0.2.0', '.reviewers'), 'carol', 'requested on the draft');
+  assert.equal(requests().length, 2, 'the platform repo, found on origin, is not asked again');
+
+  // An answer that names a team is refused before anything is made.
+  const bad = join(WS, 'acme/platform');
+  put(
+    join(bad, '.copier-answers.yml'),
+    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\npr_reviewers: acme/ops\n',
+  );
+  commit(bad, 'a team');
+  git(bad, 'push', '--quiet', 'origin', 'main');
+  const team = await runUpdate({ yes: true }, { repo: bad, to: '0.2.0' });
+  assert.match(team.error ?? '', /the answer pr_reviewers names `acme\/ops`, a team; only users are requested/);
+});
+
+test('update: a refused review request leaves the pull request open and the run nonzero', async () => {
+  fixture('update-review-refused');
+  versionCut('0.2.0');
+  process.env.FAKE_GH_REVIEW_FAIL = '1';
+  const { result, error, out } = await runUpdate(
+    { yes: true },
+    { repo: join(WS, 'acme/platform'), reviewers: ['dave'] },
+  );
+  delete process.env.FAKE_GH_REVIEW_FAIL;
+  assert.equal(error, undefined, out);
+  assert.ok(has(out, '✗ FAILED — review request from dave: fake gh: a reviewer is not a collaborator'), out);
+  assert.deepEqual(result?.pulls, ['https://forge/acme-platform/pull/1']);
+  assert.deepEqual(result?.mergeable, ['https://forge/acme-platform/pull/1'], 'the pull request itself is fine');
+  assert.deepEqual(result?.failed, ['platform (review request)']);
 });
 
 test('update: asking takes the version whatever its age, by --now or by naming it', async () => {
