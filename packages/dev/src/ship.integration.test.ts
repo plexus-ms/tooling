@@ -14,6 +14,7 @@
 // package.json at a web root (so the lockfile refresh triggers). Knobs:
 //   FAKE_COPIER_FAIL=<substring>      exit 1 at a site whose path matches
 //   FAKE_COPIER_CONFLICT=<substring>  leave <<<<<<< markers at a matching site
+//   FAKE_COPIER_UNMERGED=<path>       in a site whose path contains it, leave unmerged index entries, then fail
 //   FAKE_COPIER_RENAME_REVIEWERS=1    rename the answer renovate_reviewers to pr_reviewers, as the templates do
 // Fake gh: releases and pull requests are files under the forge, keyed by the
 // repo (the basename of origin); `release create` checks the tag is on origin,
@@ -130,6 +131,12 @@ echo "$PWD $src $*" >> "$FAKE_LOG"
 ref="latest-tag"
 while [ $# -gt 0 ]; do [ "$1" = --vcs-ref ] && ref="$2"; shift; done
 [ -z "\${FAKE_COPIER_FAIL:-}" ] || case "$PWD" in *"$FAKE_COPIER_FAIL"*) echo "fake copier: failing on purpose" >&2; exit 1 ;; esac
+# A three-way apply that stops half way: template-owned.txt unmerged in the index, then a failure.
+[ -z "\${FAKE_COPIER_UNMERGED:-}" ] || case "$PWD" in *"$FAKE_COPIER_UNMERGED"*)
+  p="$(git rev-parse --show-prefix)template-owned.txt"; b="$(echo theirs | git hash-object -w --stdin)"
+  git update-index --force-remove template-owned.txt
+  printf '100644 %s 1\t%s\n100644 %s 2\t%s\n100644 %s 3\t%s\n' "$b" "$p" "$b" "$p" "$b" "$p" | git update-index --index-info
+  echo "fake copier: stopped mid-merge" >&2; exit 1 ;; esac
 echo "updated from $ref" > template-owned.txt
 sed -i.bak "s/^_commit: .*/_commit: $ref/" .copier-answers.yml && rm -f .copier-answers.yml.bak
 [ -z "\${FAKE_COPIER_RENAME_REVIEWERS:-}" ] || { sed -i.bak 's/^renovate_reviewers:/pr_reviewers:/' .copier-answers.yml && rm -f .copier-answers.yml.bak; }
@@ -1856,6 +1863,22 @@ test("update: in CI's shallow checkout a later run fetches the tip alone and ask
   const again = await runUpdate({ yes: true }, { repo: web });
   assert.equal(again.error, undefined, again.out);
   assert.equal(git(web, 'rev-parse', '--is-shallow-repository'), 'false');
+});
+
+test('update: a site whose copier run failed mid-merge leaves unmerged entries; the pull request is opened all the same', async () => {
+  fixture('update-unmerged');
+  versionCut('0.2.0');
+  const web = join(WS, 'acme/web');
+  process.env.FAKE_COPIER_UNMERGED = 'apps/site';
+  const first = await runUpdate({ yes: true }, { repo: web });
+  delete process.env.FAKE_COPIER_UNMERGED;
+  assert.equal(first.error, undefined, first.out);
+  assert.ok(has(first.out, 'fake copier: stopped mid-merge'), first.out);
+  assert.doesNotMatch(first.out, /soft reset/, first.out);
+  assert.equal(pull('acme-web', '0.2.0'), 'https://forge/acme-web/pull/1', 'opened');
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true');
+  assert.equal(git(remote('acme-web'), 'rev-list', '--count', 'develop..plexus/0.2.0'), '1', 'one commit');
+  assert.deepEqual(first.result?.failed, ['web/apps/site']);
 });
 
 test('update: a pending minor rests inside the interval; past it the newest is taken, the versions skipped in one pull', async () => {

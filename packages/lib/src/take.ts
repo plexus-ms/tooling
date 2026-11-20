@@ -304,9 +304,10 @@ async function openPull(
   const head = `${consumer.origin ?? 'origin'} ${branch}`;
   try {
     await ctx.apply([
+      // Staged first: a site whose copier run failed mid-merge can leave unmerged entries, which a reset refuses.
+      run('git', ['add', '-A'], { cwd: dir }),
       // One commit on the branch, the scratch ones folded in: a later run tells it from a human's by the count.
       run('git', ['reset', '--quiet', '--soft', base], { cwd: dir }),
-      run('git', ['add', '-A'], { cwd: dir }),
       run('git', ['commit', '--quiet', '--no-verify', '-m', `chore: Plexus ${version}`], { cwd: dir }),
       // An empty expected value: the branch must not exist on origin yet.
       run(
