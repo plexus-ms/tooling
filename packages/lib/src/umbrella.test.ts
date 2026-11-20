@@ -184,6 +184,10 @@ test('readUmbrella takes the git roots that are pnpm workspaces, narrowed by onl
     [['@x/web', '@x/kit', true]],
   );
   await assert.rejects(
+    readUmbrella(new Context({}, fakeIo(tree())), '/', ['u/shelf', 'u/shop']),
+    /--only takes the names of repos directly under the directory, not paths \(u\/shelf, u\/shop\)/,
+  );
+  await assert.rejects(
     readUmbrella(new Context({}, fakeIo(tree())), '/u', ['shelf', 'nowhere']),
     /no pnpm workspace in a git repo at nowhere/,
   );

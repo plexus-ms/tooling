@@ -350,6 +350,11 @@ export async function readUmbrella(ctx: Context, dir: string, only?: string[]): 
     if (!names.includes('.git') || !names.includes(WORKSPACE)) continue;
     repos.push(await readRepo(ctx, dir, entry.name, await ctx.readFile(join(dir, entry.name, WORKSPACE))));
   }
+  const paths = (only ?? []).filter((name) => name.includes('/'));
+  if (paths.length > 0)
+    throw new UsageError(
+      `--only takes the names of repos directly under the directory, not paths (${paths.join(', ')}); pass the directory that holds the clones as the argument`,
+    );
   const missing = (only ?? []).filter((name) => !repos.some((r) => r.name === name));
   if (missing.length > 0) throw new UsageError(`no pnpm workspace in a git repo at ${missing.join(', ')} under ${dir}`);
   if (repos.length < 2) throw new UsageError(`an umbrella needs at least two repos with a ${WORKSPACE} under ${dir}`);
