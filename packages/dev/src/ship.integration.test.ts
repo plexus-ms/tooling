@@ -14,6 +14,7 @@
 // package.json at a web root (so the lockfile refresh triggers). Knobs:
 //   FAKE_COPIER_FAIL=<substring>      exit 1 at a site whose path matches
 //   FAKE_COPIER_CONFLICT=<substring>  leave <<<<<<< markers at a matching site
+//   FAKE_COPIER_NOOP=1                change nothing
 //   FAKE_COPIER_UNMERGED=<path>       in a site whose path contains it, leave unmerged index entries, then fail
 //   FAKE_COPIER_RENAME_REVIEWERS=1    rename the answer renovate_reviewers to pr_reviewers, as the templates do
 // Fake gh: releases and pull requests are files under the forge, keyed by the
@@ -131,6 +132,7 @@ echo "$PWD $src $*" >> "$FAKE_LOG"
 ref="latest-tag"
 while [ $# -gt 0 ]; do [ "$1" = --vcs-ref ] && ref="$2"; shift; done
 [ -z "\${FAKE_COPIER_FAIL:-}" ] || case "$PWD" in *"$FAKE_COPIER_FAIL"*) echo "fake copier: failing on purpose" >&2; exit 1 ;; esac
+[ -z "\${FAKE_COPIER_NOOP:-}" ] || exit 0
 # A three-way apply that stops half way: template-owned.txt unmerged in the index, then a failure.
 [ -z "\${FAKE_COPIER_UNMERGED:-}" ] || case "$PWD" in *"$FAKE_COPIER_UNMERGED"*)
   p="$(git rev-parse --show-prefix)template-owned.txt"; b="$(echo theirs | git hash-object -w --stdin)"
@@ -1916,6 +1918,70 @@ test("update: the opening run updates the sites origin's branch holds, not the c
   assert.ok(has(later.out, 'no conflict marker remains, and every site is at 0.2.0'), later.out);
   assert.deepEqual(later.result?.failed, [], 'nothing behind a day later');
   assert.deepEqual(later.result?.mergeable, ['https://forge/acme-web/pull/1']);
+});
+
+test('update: a later run opening the missing pull request makes it a draft for a site not at the version, markers or not', async () => {
+  fixture('update-late-behind');
+  versionCut('0.2.0');
+  const web = join(WS, 'acme/web');
+  process.env.FAKE_COPIER_FAIL = 'apps/site';
+  process.env.FAKE_GH_PR_CREATE_FAIL = '1';
+  const first = await runUpdate({ yes: true }, { repo: web });
+  delete process.env.FAKE_COPIER_FAIL;
+  delete process.env.FAKE_GH_PR_CREATE_FAIL;
+  assert.equal(first.error, undefined, first.out);
+  assert.throws(() => pull('acme-web', '0.2.0'), 'no pull request');
+  const second = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(second.error, undefined, second.out);
+  assert.ok(has(second.out, 'web: plexus/0.2.0 is on origin with no pull request — opening it as a draft'), second.out);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'no marker, but a site behind: a draft');
+  assert.deepEqual(second.result?.failed, ['web/apps/site (not at 0.2.0)']);
+  assert.deepEqual(second.result?.mergeable, []);
+});
+
+test("update: answers that do not parse are a site behind; another template's answers are no site", async () => {
+  fixture('update-answers-kinds');
+  versionCut('0.2.0');
+  const web = join(WS, 'acme/web');
+  put(join(web, 'tools/gen/.copier-answers.yml'), '_commit: 1.0.0\n_src_path: gh:someone/else\n');
+  put(join(web, 'tools/gen/README.md'), 'x\n');
+  commit(web, 'a project of another template');
+  git(web, 'push', '--quiet', 'origin', 'develop');
+  const first = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(first.error, undefined, first.out);
+  const later = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(later.error, undefined, later.out);
+  assert.ok(has(later.out, 'every site is at 0.2.0'), "another template's answers are not counted behind");
+  assert.deepEqual(later.result?.mergeable, ['https://forge/acme-web/pull/1']);
+
+  // Somebody breaks the app's answers: no marker in them, but no version can be read.
+  const human = join(WS, 'human');
+  git(WS, 'clone', '--quiet', '--branch', 'plexus/0.2.0', remote('acme-web'), human);
+  put(join(human, 'apps/site/.copier-answers.yml'), '- not a mapping\n');
+  commit(human, 'oops');
+  git(human, 'push', '--quiet', 'origin', 'plexus/0.2.0');
+  const broken = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(broken.error, undefined, broken.out);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'a draft again');
+  assert.deepEqual(broken.result?.failed, ['web/apps/site (not at 0.2.0)']);
+});
+
+test('update: a template rename is a pull request of its own when copier changes nothing else', async () => {
+  fixture('update-rename-only');
+  versionCut('0.2.0');
+  const plat = join(WS, 'acme/platform');
+  put(join(plat, '.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/preset-repo-platform\n');
+  git(plat, 'rm', '--quiet', '-r', '.github');
+  commit(plat, 'old template name, no workflow refs');
+  git(plat, 'push', '--quiet', 'origin', 'main');
+  process.env.FAKE_COPIER_NOOP = '1';
+  const first = await runUpdate({ yes: true }, { repo: plat });
+  delete process.env.FAKE_COPIER_NOOP;
+  assert.equal(first.error, undefined, first.out);
+  assert.doesNotMatch(first.out, /nothing changed/, first.out);
+  assert.equal(pull('acme-platform', '0.2.0'), 'https://forge/acme-platform/pull/1');
+  assert.match(onVersion('acme-platform', '0.2.0', '.copier-answers.yml'), /template-repo-operations/);
+  assert.equal(git(remote('acme-platform'), 'rev-list', '--count', 'main..plexus/0.2.0'), '1');
 });
 
 test('update: a pending minor rests inside the interval; past it the newest is taken, the versions skipped in one pull', async () => {
