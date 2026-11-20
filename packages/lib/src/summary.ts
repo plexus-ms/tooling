@@ -5,6 +5,7 @@
 // human: one line per site, the pull requests, the line that merges the
 // clean ones, then the verdict. Every tool that prints a Summary prints it
 // this way.
+import { versionBranch } from './pull.ts';
 import { needsHand } from './take.ts';
 import type { Outcome } from './update.ts';
 
@@ -26,6 +27,8 @@ export interface Summary {
   pulls: string[];
   /** Those of `pulls` that are no draft and need no hand: ready to merge once their checks pass. */
   mergeable: string[];
+  /** The version branches on origin with no pull request that a dry run would open one of. */
+  opening: string[];
 }
 
 /** A repo's file as the run names it: under the repo's name, `.` for a repo run from inside. */
@@ -54,6 +57,7 @@ export function summarize(
     resting: [],
     pulls: [],
     mergeable: [],
+    opening: [],
   };
   for (const o of outcomes) {
     switch (o.kind) {
@@ -76,6 +80,7 @@ export function summarize(
           s.failed.push(`${site === '.' ? o.repo : inRun(o.repo, site)} (not at ${o.version})`);
         if (o.failed !== undefined) s.failed.push(o.repo);
         if (o.pull) s.pulls.push(o.pull);
+        if (o.opening) s.opening.push(`${o.repo} ${versionBranch(o.version)}`);
         if (o.pull && o.mergeable) s.mergeable.push(o.pull);
         if (o.review && 'failed' in o.review) s.failed.push(`${o.repo} (review request)`);
         break;
@@ -125,11 +130,12 @@ export function renderSummary(s: Summary, realCommand: string, verb = 'update'):
   for (const { path, reason } of s.skipped) lines.push(`  ⚠ skipped:    ${path} (${reason})`);
   for (const { path, reason } of s.resting) lines.push(`  • resting:    ${path} (${reason})`);
   for (const url of s.pulls) lines.push(`  → pull:       ${url}`);
+  for (const branch of s.opening) lines.push(`  → to open:    ${branch}`);
   const merge = s.preview ? '' : mergeLine(s.mergeable);
   if (merge) lines.push('  the clean ones, to merge once their checks pass:', `  ${merge}`);
   const clean = isClean(s);
-  // A run that took no version (resting, already there, its branch on origin already) has nothing to run for real.
-  const idle = clean && s.clean.length === 0;
+  // A run that took no version and opens nothing (resting, already there, its pull request found) has nothing to run for real.
+  const idle = clean && s.clean.length === 0 && s.opening.length === 0;
   if (s.preview && !idle) {
     lines.push('  (preview only — nothing was changed)');
     if (clean) lines.push(`✓ dry run clean — run it for real: ${realCommand}`);

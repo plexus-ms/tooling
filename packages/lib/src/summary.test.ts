@@ -14,6 +14,7 @@ test('renderSummary lists every site and ends with the verdict', () => {
     resting: [] as { path: string; reason: string }[],
     pulls: ['https://github.com/acme/web/pull/7'],
     mergeable: [] as string[],
+    opening: [] as string[],
   };
   assert.equal(
     renderSummary(base, 'plx-dev -y ship --to 0.2.0 .').split('\n').slice(1).join('\n'),
@@ -71,6 +72,7 @@ test('the summary ends the pull requests with one line that merges the clean one
       'https://github.com/acme/docs/pull/3',
     ],
     mergeable: ['https://github.com/acme/web/pull/7', 'https://github.com/acme/platform/pull/12'],
+    opening: [],
   };
   const out = renderSummary(s, '');
   assert.match(out, /^ {2}the clean ones, to merge once their checks pass:$/m);
@@ -182,6 +184,7 @@ test('summarize folds what each repo came to, in order, without touching the out
       'https://forge/acme/clean/pull/1',
     ],
     mergeable: ['https://forge/acme/found/pull/2', 'https://forge/acme/clean/pull/1'],
+    opening: [],
   });
   assert.equal(JSON.stringify(outcomes), before, 'the outcomes are as they were');
   assert.equal(summarize([], true, '0.3.0').version, '0.3.0', "a version given is the summary's");
@@ -221,4 +224,17 @@ test('a file holding a marker outside any conflicted site makes the opening run 
     ['acme/web/apps/site', 'acme/web/apps/sitex/b.txt'],
     'a file in a conflicted site is that site',
   );
+});
+
+test('a dry run that would open the missing pull request of a branch on origin previews it like any other', () => {
+  const s = summarize(
+    [{ repo: 'web', version: '0.2.0', kind: 'found', marked: [], behind: [], mergeable: false, opening: true }],
+    true,
+  );
+  assert.deepEqual(s.opening, ['web plexus/0.2.0']);
+  const out = renderSummary(s, 'plx -y update');
+  assert.match(out, /^ {2}→ to open: {4}web plexus\/0\.2\.0$/m);
+  assert.match(out, /^ {2}\(preview only — nothing was changed\)$/m);
+  assert.match(out, /^✓ dry run clean — run it for real: plx -y update$/m);
+  assert.doesNotMatch(out, /no pull request/);
 });

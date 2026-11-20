@@ -115,6 +115,8 @@ export type Outcome = { repo: string; version: string } & (
   | {
       kind: 'found';
       pull?: string;
+      /** A dry run would open the missing pull request. */
+      opening?: true;
       marked: string[];
       behind: string[];
       mergeable: boolean;
@@ -201,6 +203,7 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
           version,
           kind: 'found',
           ...(late.pull ? { pull: late.pull.url } : {}),
+          ...(late.previewed ? { opening: true as const } : {}),
           marked: late.marked,
           behind: late.behind,
           mergeable: late.pull !== undefined && !late.pull.draft && late.ready,

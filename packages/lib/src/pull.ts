@@ -454,10 +454,11 @@ export interface Revisited {
 }
 
 /**
- * A later run over the version's pull request, open on origin: the branch
- * read as origin has it, the detector over it, the body rewritten to the
- * present state, ready or draft by the markers. Under a dry run it changes
- * nothing and says what it would do.
+ * A later run over the version's pull request, open on origin: the branch's
+ * tip read as origin has it (`readTip`), the body rewritten to what it found
+ * there, and the pull request ready when no tracked file holds a conflict
+ * marker and every site records the version, a draft again while either
+ * fails. Under a dry run it changes nothing and says what it would do.
  */
 export async function revisit(
   ctx: Context,
@@ -479,12 +480,10 @@ export async function revisit(
     checked: true,
     note: REVISITED,
   });
-  const found = foundAt(at, version);
-  ctx.say(
-    ready
-      ? `• ${name}: ${branch} is on origin (${pull.url}); ${found}${pull.draft ? ' — ready for review' : ''}`
-      : `• ${name}: ${branch} is on origin (${pull.url}); ${found}${pull.draft ? '' : ' — a draft again'}`,
-  );
+  const line = `• ${name}: ${branch} is on origin (${pull.url}); ${foundAt(at, version)}`;
+  // Back to a draft is said once the forge has answered: a forge without drafts leaves it ordinary.
+  const undo = !ready && !pull.draft;
+  if (!undo) ctx.say(ready && pull.draft ? `${line} — ready for review` : line);
   // The body is written, never read: what it says decides nothing.
   try {
     await ctx.apply([
@@ -494,14 +493,18 @@ export async function revisit(
       ...(ready && pull.draft ? [run('gh', ['pr', 'ready', pull.url], { cwd: repo })] : []),
     ]);
   } catch (error) {
+    if (undo) ctx.say(line);
     return { url: pull.url, marked, behind, mergeable: false, failed: `pull request ${pull.url}: ${detailOf(error)}` };
   }
   // A forge that refuses the draft leaves the pull request ordinary: what needs a hand keeps the run nonzero.
-  if (!ready && !pull.draft)
-    await ctx.apply([run('gh', ['pr', 'ready', pull.url, '--undo'], { cwd: repo })]).catch((error) => {
-      const why = detailOf(error);
-      ctx.say(`  ${name}: still no draft: the forge refused one${why ? ` (${why})` : ''}`);
-    });
+  if (undo)
+    await ctx.apply([run('gh', ['pr', 'ready', pull.url, '--undo'], { cwd: repo })]).then(
+      () => ctx.say(`${line} — a draft again`),
+      (error) => {
+        const why = detailOf(error);
+        ctx.say(`${line} — no draft: the forge refused one${why ? ` (${why})` : ''}`);
+      },
+    );
   // A dry run left the state as it was.
   const draft = ctx.dryRun ? pull.draft : !ready;
   return { url: pull.url, marked, behind, mergeable: ready && !draft };
@@ -514,6 +517,8 @@ const OPENED_LATE = 'Opened by `plx update`: a later run found the branch on ori
 export interface OpenedLate {
   /** Undefined under a dry run, or when the forge did not list what it opened. */
   pull?: Pull;
+  /** A dry run: the pull request it would have opened. */
+  previewed?: true;
   marked: string[];
   behind: string[];
   /** No marker, and every site at the version. */
@@ -523,9 +528,11 @@ export interface OpenedLate {
 }
 
 /**
- * A later run that finds the version branch on origin and no pull request for
- * it in any state opens it: the branch read as origin has it, a draft when a
- * tracked file holds a conflict marker, with the review request.
+ * A later run that finds the version branch on origin and no pull request of
+ * it opens one: the branch's tip read as origin has it (`readTip`), a draft
+ * unless no tracked file holds a conflict marker and every site records the
+ * version, with the review request. Under a dry run it opens nothing and says
+ * that it would.
  */
 export async function openLate(
   ctx: Context,
@@ -562,7 +569,10 @@ export async function openLate(
     ctx.say(`  ✗ FAILED — pull request${why ? `: ${why}` : ''}`);
     return { marked, behind, ready, failed: `pull request: ${why}` };
   }
-  if (ctx.dryRun) return { marked, behind, ready };
+  if (ctx.dryRun) {
+    ctx.say(`  (preview) ${name}: would open a pull request of ${branch} against ${consumer.branch}`);
+    return { marked, behind, ready, previewed: true };
+  }
   const pull = await pullOf(ctx, consumer, repo, version);
   if (!pull) return { marked, behind, ready, failed: 'pull request: the forge did not list it after opening it' };
   ctx.say(`• ${name}: ${draft ? 'draft ' : ''}pull request opened: ${pull.url}`);

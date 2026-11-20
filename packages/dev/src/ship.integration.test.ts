@@ -650,6 +650,7 @@ test('dry run previews both phases and the consumers in scratch clones, and chan
     resting: [],
     pulls: [],
     mergeable: [],
+    opening: [],
     released: true,
   });
 });
@@ -760,6 +761,7 @@ test('happy path: tooling first, the npm wait, the rest, and no pull request in 
     resting: [],
     pulls: [],
     mergeable: [],
+    opening: [],
     released: true,
   });
 });
@@ -837,6 +839,7 @@ test('update --recursive: every repo under the directory takes the version in a 
     resting: [],
     pulls: ['https://forge/acme-platform/pull/1', 'https://forge/acme-web/pull/1'],
     mergeable: ['https://forge/acme-platform/pull/1', 'https://forge/acme-web/pull/1'],
+    opening: [],
   });
 });
 
@@ -1518,6 +1521,7 @@ test('update: a repo takes the newest version itself, in a worktree, and leaves 
     resting: [],
     pulls: ['https://forge/acme-web/pull/1'],
     mergeable: ['https://forge/acme-web/pull/1'],
+    opening: [],
   });
 
   // The next day: the branch is on origin, so nothing moves it.
@@ -1719,7 +1723,14 @@ test('update: where the forge refuses a draft the pull request is an ordinary on
     fakeLog().some((l) => l === `gh[acme-web] pr ready ${url} --undo`),
     'a draft is asked for',
   );
-  assert.ok(has(second.out, 'web: still no draft: the forge refused one'), second.out);
+  assert.ok(
+    has(
+      second.out,
+      `• web: plexus/0.2.0 is on origin (${url}); 1 file still holds conflict markers — no draft: the forge refused one`,
+    ),
+    second.out,
+  );
+  assert.doesNotMatch(second.out, /a draft again/, 'one true thing said');
   assert.match(pull('acme-web', '0.2.0', '.body'), /^\*\*Needs a hand\.\*\*/, 'the body is rewritten all the same');
   assert.deepEqual(second.result?.failed, [], 'the refusal is no failure');
   assert.deepEqual(second.result?.conflicted, ['web/apps/site/template-owned.txt'], 'the markers keep it nonzero');
@@ -1967,6 +1978,13 @@ test('update: a version branch on origin with no pull request gets one from a la
   assert.ok(first.result?.failed.includes('web'), 'the run needs a human');
   assert.throws(() => pull('acme-web', '0.2.0'), 'no pull request');
   const tip = git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0');
+
+  // A dry run previews the pull request it would open, like any other.
+  const preview = await runUpdate({ yes: true, dryRun: true }, { repo: web });
+  assert.equal(preview.error, undefined, preview.out);
+  assert.ok(has(preview.out, '(preview) web: would open a pull request of plexus/0.2.0 against develop'), preview.out);
+  assert.deepEqual(preview.result?.opening, ['web plexus/0.2.0']);
+  assert.throws(() => pull('acme-web', '0.2.0'), 'nothing opened');
 
   const second = await runUpdate({ yes: true }, { repo: web });
   assert.equal(second.error, undefined, second.out);
