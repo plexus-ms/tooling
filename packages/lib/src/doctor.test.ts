@@ -946,3 +946,43 @@ test('PLX-App/NoCommittedValues: a tracked .env is one finding, on the app that 
   );
   assert.deepEqual(findings(repo({ tracked: ['.env'], apps: [] })), [], 'a repo with no app is no source repo');
 });
+
+test('a tracked file holding a conflict marker is a finding of the repo, of no requirement, that no deviation silences', () => {
+  const marked = repo({ conflicted: ['apps/a/page.tsx', 'mise.toml'] });
+  assert.deepEqual(findings(marked), [
+    { problem: '`apps/a/page.tsx` holds a conflict marker' },
+    { problem: '`mise.toml` holds a conflict marker' },
+  ]);
+  const deviating = repo({
+    conflicted: ['mise.toml'],
+    marker: { declaration: { deviations: ['PLX-Repo/Verbs'], body: reasoned(['PLX-Repo/Verbs']) } },
+  });
+  assert.deepEqual(findings(deviating), [{ problem: '`mise.toml` holds a conflict marker' }]);
+  assert.deepEqual(findings(app('stateless', { repo: marked })), [], 'reported once, on the repo');
+  assert.equal(diagnose([marked]).failed, 1);
+});
+
+test('doctor reads which tracked files hold a conflict marker, and fails the repo for each', async () => {
+  const open = '<'.repeat(7);
+  const tree = ws();
+  const web = tree.web as Tree;
+  web['mise.toml'] = `${open} ours\n[tools]\n`;
+  web['README.md'] = `Title\n${'='.repeat(7)}\n`;
+  const git = (cwd: string, args: string[]) => {
+    if (cwd !== '/ws/web') return undefined;
+    if (args[0] === 'ls-files') return 'PLEXUS.md\0mise.toml\0README.md\0apps/site/docker/compose.yaml\0';
+    if (args[0] === 'grep') return 'mise.toml\0';
+    return undefined;
+  };
+  const mise = miseTasks({ '/ws/web': VERBS });
+  const ctx = new Context({}, fakeIo({ ws: tree }, git, { mise: (cwd) => mise(cwd) }));
+  const { facts } = await examine(ctx, '/ws/web');
+  const report = diagnose(facts);
+  assert.deepEqual(
+    report.units.map((u) => [u.path, u.findings]),
+    [
+      ['.', [{ problem: '`mise.toml` holds a conflict marker' }]],
+      ['apps/site', []],
+    ],
+  );
+});

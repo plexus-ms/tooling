@@ -90,3 +90,22 @@ test('renderReport gives a hint as a line of its own, which -q leaves out', () =
   );
   assert.equal(renderReport(report, style(false), false), '✓ 1 unit passes every check');
 });
+
+test('renderReport prints a file holding a conflict marker as the repo and the file, with no requirement', () => {
+  const report: DoctorReport = {
+    ...at,
+    units: [
+      {
+        path: 'web',
+        kind: 'repo',
+        deviations: [],
+        findings: [{ problem: '`mise.toml` holds a conflict marker' }],
+      },
+    ],
+    failed: 1,
+  };
+  assert.equal(
+    renderReport(report, style(false), true),
+    ['✗ web: `mise.toml` holds a conflict marker', '✗ 1 of 1 unit fails a check'].join('\n'),
+  );
+});

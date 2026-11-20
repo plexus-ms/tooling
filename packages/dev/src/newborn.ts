@@ -296,7 +296,7 @@ function renderOutcome(o: TemplateOutcome): string[] {
   }
   for (const n of o.doctor) {
     lines.push(`    ✗ newborn ${n.newborn} fails plx doctor: ${count(n.findings.length, 'finding')}`);
-    lines.push(...n.findings.map((f) => `      ✗ ${f.requirement}: ${f.problem}`));
+    lines.push(...n.findings.map((f) => `      ✗ ${f.requirement ? `${f.requirement}: ` : ''}${f.problem}`));
   }
   const passing = o.examined.filter((n) => !o.doctor.some((d) => d.newborn === n));
   if (passing.length > 0) lines.push(`    ✓ plx doctor passes ${passing.join(', ')}`);

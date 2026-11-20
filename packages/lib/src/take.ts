@@ -13,7 +13,8 @@
 // many repos. The maintainers' preview of an unreleased version (preview.ts of
 // @plexus-ms/dev) uses the same steps against the local template checkouts, and opens nothing.
 import { join, relative } from 'node:path';
-import { bumpWorkflowRefs, hasConflictMarkers, hasUnmergedEntries, WORKFLOW_REF } from './bookkeeping.ts';
+import { bumpWorkflowRefs, WORKFLOW_REF } from './bookkeeping.ts';
+import { hasConflictMarkers, hasUnmergedEntries } from './conflicts.ts';
 import type { Consumer, Site } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, copierVia } from './copier.ts';

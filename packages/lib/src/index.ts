@@ -11,7 +11,7 @@
 // file shapes (marker.ts, copier.ts) live here, once, for every verb.
 // Conventions: compendium/miscellaneous/cli-design.md.
 export { BASELINE_FILE, type Compared, compareBaseline, parseBaseline, renderBaseline } from './baseline.ts';
-export { bumpWorkflowRefs, hasConflictMarkers, hasUnmergedEntries, WORKFLOW_REF } from './bookkeeping.ts';
+export { bumpWorkflowRefs, WORKFLOW_REF } from './bookkeeping.ts';
 export {
   CHANGESET_DIR,
   type Changeset,
@@ -32,6 +32,7 @@ export {
   type Mapping,
   parseCompose,
 } from './compose.ts';
+export { filesWithConflictMarkers, hasConflictMarkers, hasUnmergedEntries } from './conflicts.ts';
 export { type Consumer, expectedBranch, findConsumers, type Site } from './consumers.ts';
 export { Context, type Options } from './context.ts';
 export { ANSWERS_FILE, type Answers, COPIER_VERSION, copierVia, parseAnswers, TEMPLATE_FILES } from './copier.ts';

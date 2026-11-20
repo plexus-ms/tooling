@@ -3,7 +3,8 @@
 // lib's `examine` reads, `diagnose` checks; this file maps the argument and
 // renders the report: which repo was checked when the directory is inside
 // one; a failing check is one line, `✗ <requirement> <unit>: <what is
-// wrong>`; a unit with none is `✓ <unit>`, with its profile and the
+// wrong>`, and a file holding a conflict marker, which is no requirement's,
+// `✗ <repo>: <file> holds a conflict marker`; a unit with none is `✓ <unit>`, with its profile and the
 // deviations its marker lists; a hint, which fails nothing, as `• <unit>:
 // <hint>`; in a workspace, one line naming the git roots
 // that are not Plexus repos; one naming the symbolic links not followed (an
@@ -48,7 +49,8 @@ export function renderReport(report: DoctorReport, s: Style, showPassing: boolea
       const note = notes.filter(Boolean).join(', ');
       if (showPassing) lines.push(`${s.ok('✓')} ${u.path}${note ? ` ${s.dim(`[${note}]`)}` : ''}`);
     }
-    for (const f of u.findings) lines.push(`${s.warn('✗')} ${f.requirement} ${u.path}: ${f.problem}`);
+    for (const f of u.findings)
+      lines.push(`${s.warn('✗')} ${f.requirement ? `${f.requirement} ` : ''}${u.path}: ${f.problem}`);
     if (showPassing) for (const h of u.hints ?? []) lines.push(s.dim(`• ${u.path}: ${h}`));
   }
   if (report.skipped.length > 0)

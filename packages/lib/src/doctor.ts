@@ -17,6 +17,11 @@
 // its check; a deviation without a reason in the marker's body, or naming no
 // requirement, is a finding of its own. Findings are reported, never fixed.
 //
+// Beside the checks, and part of none of them: a tracked file of a repo that
+// holds a conflict marker (conflicts.ts) is a failing finding of the repo,
+// one per file, whatever the marker lists; it names no requirement, and
+// nothing excludes a file from it.
+//
 //   plx doctor          # this repo and its apps, from anywhere inside it
 //   plx doctor ~/dev    # every Plexus repo beneath, and its apps
 import { realpath } from 'node:fs/promises';
@@ -33,6 +38,7 @@ import {
   parseCompose,
   truthy,
 } from './compose.ts';
+import { filesWithConflictMarkers } from './conflicts.ts';
 import type { Context } from './context.ts';
 import { ExecError } from './io.ts';
 import { REQUIREMENT_NAME } from './lints.ts';
@@ -60,6 +66,8 @@ export interface RepoFacts {
   tasks: { names: string[] } | { problem: string };
   /** The files git tracks, relative to the repo; undefined outside a git checkout. */
   tracked?: string[];
+  /** The tracked files that hold a conflict marker, relative to the repo. */
+  conflicted?: string[];
   /** Its apps' directories, relative to the repo (`apps/<name>`). */
   apps: string[];
 }
@@ -317,8 +325,8 @@ export const CHECKS: Readonly<Record<string, RepoCheck | AppCheck | UnitCheck>> 
 // --- the diagnosis --------------------------------------------------------------
 
 export interface Finding {
-  /** The requirement's name, e.g. `PLX-App/LoopbackPort`. */
-  requirement: string;
+  /** The requirement's name, e.g. `PLX-App/LoopbackPort`; none for a conflict marker, which belongs to no requirement. */
+  requirement?: string;
   problem: string;
 }
 
@@ -370,6 +378,8 @@ function diagnoseUnit(unit: Facts, known: Set<string>): UnitReport {
     if (deviations.includes(name)) continue;
     for (const problem of run(c, unit, profile)) findings.push({ requirement: name, problem });
   }
+  if (unit.kind !== 'app')
+    for (const file of unit.conflicted ?? []) findings.push({ problem: `\`${file}\` holds a conflict marker` });
   const obsolete = (declaration?.obsolete ?? []).map((k) => `\`${k}\``).join(' and ');
   const hints: string[] = [];
   if (obsolete)
@@ -500,7 +510,16 @@ async function readRepo(ctx: Context, dir: Directory, path: string, kind: RepoFa
       if (error instanceof ExecError) return undefined;
       throw error;
     });
-  return { kind, path, ...(marker ? { marker } : {}), tasks: await rootTasks(ctx, dir.path), tracked, apps: [] };
+  const conflicted = tracked === undefined ? undefined : await filesWithConflictMarkers(ctx, dir.path);
+  return {
+    kind,
+    path,
+    ...(marker ? { marker } : {}),
+    tasks: await rootTasks(ctx, dir.path),
+    tracked,
+    ...(conflicted?.length ? { conflicted } : {}),
+    apps: [],
+  };
 }
 
 /**
