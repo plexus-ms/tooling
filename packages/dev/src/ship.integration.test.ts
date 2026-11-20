@@ -1881,6 +1881,32 @@ test('update: a site whose copier run failed mid-merge leaves unmerged entries; 
   assert.deepEqual(first.result?.failed, ['web/apps/site']);
 });
 
+test("update: the opening run updates the sites origin's branch holds, not the checkout's", async () => {
+  fixture('update-origin-sites');
+  versionCut('0.2.0');
+  const web = join(WS, 'acme/web');
+  // An app on origin's develop that the checkout has not pulled yet.
+  const other = join(WS, 'other');
+  git(WS, 'clone', '--quiet', '--branch', 'develop', remote('acme-web'), other);
+  put(join(other, 'apps/blog/.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-app-nextjs\n');
+  put(join(other, 'apps/blog/template-owned.txt'), 'generated\n');
+  commit(other, 'blog');
+  git(other, 'push', '--quiet', 'origin', 'develop');
+  const first = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(first.error, undefined, first.out);
+  assert.ok(has(first.out, '→ web/apps/blog: copier update to 0.2.0'), first.out);
+  assert.match(onVersion('acme-web', '0.2.0', 'apps/blog/.copier-answers.yml'), /^_commit: 0\.2\.0$/m);
+  assert.match(pull('acme-web', '0.2.0', '.body'), /`copier update` at the root, `apps\/blog`, `apps\/site`/);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'false');
+  assert.deepEqual(first.result?.clean, ['web', 'web/apps/blog', 'web/apps/site']);
+
+  const later = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(later.error, undefined, later.out);
+  assert.ok(has(later.out, 'no conflict marker remains, and every site is at 0.2.0'), later.out);
+  assert.deepEqual(later.result?.failed, [], 'nothing behind a day later');
+  assert.deepEqual(later.result?.mergeable, ['https://forge/acme-web/pull/1']);
+});
+
 test('update: a pending minor rests inside the interval; past it the newest is taken, the versions skipped in one pull', async () => {
   fixture('update-rest');
   versionCut('0.1.0', '2026-01-01');

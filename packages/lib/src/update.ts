@@ -20,7 +20,10 @@
 // edits stay as they are, and in CI the worktree shares the checkout's
 // credentials, so the push and the pull request need no second token. Then
 // `takeVersion` (take.ts): copier update at every site, lockfile,
-// workflow refs, one commit on `plexus/<version>`, one pull request.
+// workflow refs, one commit on `plexus/<version>`, one pull request. The
+// sites are those origin's branch holds, by the walk's rule
+// (`sitesOfTree`, consumers.ts), as a later run reads them at the version
+// branch's tip; a site the checkout lacks is updated all the same.
 //
 // What the run came to is returned as data, one `Outcome` for the repo, which
 // the caller folds into the summary (summary.ts). Run over many repos
@@ -53,9 +56,9 @@
 //   plx -y update --to 0.102.0      # unattended, an explicit version
 //   plx update --recursive ~/dev    # every repo under a directory (recursive.ts)
 import { basename, join, relative } from 'node:path';
-import { type Consumer, findConsumers } from './consumers.ts';
+import { type Consumer, findConsumers, sitesOfTree } from './consumers.ts';
 import type { Context } from './context.ts';
-import { ANSWERS_FILE, parseAnswers } from './copier.ts';
+import { ANSWERS_FILE, type Answers, parseAnswers } from './copier.ts';
 import { run } from './effects.ts';
 import { detailOf, ExecError } from './io.ts';
 import { maxAgeOf, type Need, needOf, type Release } from './need.ts';
@@ -143,15 +146,22 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
     return { repo: name, version: newest, kind: 'skipped', reason };
   }
   await ctx.read('git', ['fetch', '--quiet', 'origin', consumer.branch], { cwd: repo }).catch(() => '');
-  const answers = await Promise.all(
-    consumer.sites.map(async (s) => {
-      const file = join(relative(consumer.path, s.path), ANSWERS_FILE);
-      const onOrigin = await ctx
-        .read('git', ['show', `origin/${consumer.branch}:${file}`], { cwd: repo })
-        .catch(() => undefined);
-      return parseAnswers(onOrigin ?? (await ctx.readFile(join(s.path, ANSWERS_FILE))));
-    }),
-  );
+  // The sites origin's branch holds, by the walk's rule; the checkout's, read on origin where they can be, when it cannot be read.
+  const onBranch = await sitesOfTree(ctx, repo, `refs/remotes/origin/${consumer.branch}`).catch(() => undefined);
+  const answers: Answers[] = onBranch
+    ? onBranch.sites.map((s) => s.answers ?? { answers: {} })
+    : await Promise.all(
+        consumer.sites.map(async (s) => {
+          const file = join(relative(consumer.path, s.path), ANSWERS_FILE);
+          const onOrigin = await ctx
+            .read('git', ['show', `origin/${consumer.branch}:${file}`], { cwd: repo })
+            .catch(() => undefined);
+          return parseAnswers(onOrigin ?? (await ctx.readFile(join(s.path, ANSWERS_FILE))));
+        }),
+      );
+  const rootAnswers = onBranch
+    ? onBranch.sites.find((s) => s.dir === '.')?.answers
+    : answers[consumer.sites.indexOf(root)];
   const recorded = answers.map((a) => a.commit);
   if (recorded.every((c) => c === newest)) {
     ctx.say(`• ${name}: already at ${newest}`);
@@ -167,7 +177,7 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
     : needOf({
         recorded,
         releases,
-        maxAge: options.maxAge ?? maxAgeOf(answers[consumer.sites.indexOf(root)]?.answers ?? {}),
+        maxAge: options.maxAge ?? maxAgeOf(rootAnswers?.answers ?? {}),
         now: options.today === undefined ? new Date() : new Date(options.today),
       });
   if (need.held) ctx.say(`• ${name}: ${need.held} (plx update --now takes it)`);
@@ -249,7 +259,14 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
       ctx.say(`  ✗ FAILED — worktree of origin/${consumer.branch}${why ? `: ${why}` : ''}`);
       return { repo: name, version, kind: 'failed', detail: `worktree of origin/${consumer.branch}: ${why}` };
     }
-    const taken = await takeVersion(ctx, consumer, dir, {
+    // The sites the worktree of origin's branch holds, which is what is judged, not the checkout's.
+    const held = (await sitesOfTree(ctx, dir, 'HEAD')).sites;
+    const sites = held.flatMap((s) =>
+      s.template
+        ? [{ path: join(repo, s.dir), rel: s.dir === '.' ? name : join(name, s.dir), template: s.template }]
+        : [],
+    );
+    const taken = await takeVersion(ctx, { ...consumer, sites }, dir, {
       version,
       ref: version,
       opener: '`plx update`',

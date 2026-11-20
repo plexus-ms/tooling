@@ -47,14 +47,12 @@
 // those `--reviewer` names instead; nothing more when it is marked ready.
 // Users only: a team is refused. The request is one call for all of them, so
 // the pull request's author is left out of it, and the run says so.
-import { dirname } from 'node:path';
 import { filesWithConflictMarkers } from './conflicts.ts';
-import type { Consumer } from './consumers.ts';
+import { type Consumer, sitesOfTree } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers } from './copier.ts';
 import { run } from './effects.ts';
 import { detailOf } from './io.ts';
-import { TEMPLATES, templateOf } from './templates.ts';
 
 export const versionBranch = (version: string): string => `plexus/${version}`;
 
@@ -412,23 +410,9 @@ async function readTip(ctx: Context, consumer: Consumer, version: string, tip: s
   const repo = consumer.path;
   await fetchTip(ctx, repo, tip);
   const marked = await filesWithConflictMarkers(ctx, repo, tip);
-  const files = (await ctx.read('git', ['ls-tree', '-r', '-z', '--name-only', tip], { cwd: repo }))
-    .split('\0')
-    .filter(Boolean);
-  const sites: string[] = [];
-  const behind: string[] = [];
-  for (const file of files.filter((f) => f === ANSWERS_FILE || f.endsWith(`/${ANSWERS_FILE}`))) {
-    const text = await ctx.read('git', ['cat-file', 'blob', `${tip}:${file}`], { cwd: repo });
-    let answers: ReturnType<typeof parseAnswers> | undefined;
-    try {
-      answers = parseAnswers(text);
-    } catch {
-      // Unreadable (a conflict in the answers themselves): a site that does not record the version.
-    }
-    if (answers && !(answers.src && templateOf(answers.src, TEMPLATES))) continue;
-    sites.push(dirname(file));
-    if (answers?.commit !== version) behind.push(dirname(file));
-  }
+  const { files, sites: held } = await sitesOfTree(ctx, repo, tip);
+  const sites = held.map((s) => s.dir);
+  const behind = held.filter((s) => s.answers?.commit !== version).map((s) => s.dir);
   const ready = marked.length === 0 && behind.length === 0;
   // Somebody pushed to the branch: more commits than the one plx made. Asked only when it decides something.
   const lockfile = files.includes('pnpm-lock.yaml') && (!ready || (await aheadOf(ctx, consumer, tip)) > 1);

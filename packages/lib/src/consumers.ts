@@ -6,10 +6,12 @@
 // repo (its root answers say `publishes_packages`) is trunk-based on main
 // (§ 5 PLX-Delivery). A repo without a marker is taken on the branch its
 // checkout is on.
-import { relative } from 'node:path';
+import { join, relative } from 'node:path';
 import type { Context } from './context.ts';
+import { ANSWERS_FILE, type Answers, parseAnswers } from './copier.ts';
 import { type Directory, isOperations } from './model.ts';
-import { templateOf } from './templates.ts';
+import { answersDirs } from './overview.ts';
+import { TEMPLATES, templateOf } from './templates.ts';
 
 export interface Site {
   path: string;
@@ -84,4 +86,46 @@ export async function findConsumers(ctx: Context, root: Directory, templates: re
     else c.origin = origin;
   }
   return [...consumers.values()];
+}
+
+/** A site of a tree read from git: its directory relative to the repo (`.` for the root), and its answers. */
+export interface TreeSite {
+  dir: string;
+  /** Undefined when the answers file does not parse (a conflict in the answers themselves). */
+  answers?: Answers;
+  /** The template it is generated from; undefined with the answers. */
+  template?: string;
+}
+
+/**
+ * The sites of a commit's tree (a branch's tip, origin's branch), by the
+ * walk's rule (`answersDirs`): every answers file the walk would reach that
+ * names one of the templates, read from git, root first; and the tree's
+ * paths. An answers file that does not parse is a site all the same: one
+ * whose version cannot be read.
+ */
+export async function sitesOfTree(
+  ctx: Context,
+  repo: string,
+  commit: string,
+): Promise<{ files: string[]; sites: TreeSite[] }> {
+  const files = (await ctx.read('git', ['ls-tree', '-r', '-z', '--name-only', commit], { cwd: repo }))
+    .split('\0')
+    .filter(Boolean);
+  const sites: TreeSite[] = [];
+  for (const dir of answersDirs(files)) {
+    const text = await ctx.read('git', ['cat-file', 'blob', `${commit}:${join(dir, ANSWERS_FILE)}`], { cwd: repo });
+    let answers: Answers | undefined;
+    try {
+      answers = parseAnswers(text);
+    } catch {
+      sites.push({ dir });
+      continue;
+    }
+    const template = answers.src ? templateOf(answers.src, TEMPLATES) : undefined;
+    if (template) sites.push({ dir, answers, template });
+  }
+  // The root before its apps, as the walk yields them.
+  sites.sort((a, b) => Number(b.dir === '.') - Number(a.dir === '.'));
+  return { files, sites };
 }

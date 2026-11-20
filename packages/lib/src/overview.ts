@@ -8,7 +8,7 @@
 //   plx overview            # map the current directory
 //   plx overview ~/dev      # map somewhere else
 //   plx overview --sync     # fetch every repo first, to show what is behind
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers, TEMPLATE_FILES } from './copier.ts';
 import type { DirEntry } from './io.ts';
@@ -48,6 +48,40 @@ export const PRUNED = new Set([
   '.terraform',
   '.gradle',
 ]);
+
+/**
+ * Whether the walk descends into a directory of that name: never `.git`, and
+ * never a pruned one unless it is an app directly in its repo's `apps/`.
+ */
+export const descends = (name: string, app: boolean): boolean => name !== '.git' && (app || !PRUNED.has(name));
+
+/**
+ * The directories of a repo's tree that the walk reaches and that hold an
+ * answers file outside any template directory: where its sites can be, by
+ * the walk's own rule, from the paths of its tracked files relative to its
+ * root (`.` for the root), in the tree's order. A tree read from git (a
+ * branch's tip) has no checkout to walk; this is the walk over its paths.
+ */
+export function answersDirs(files: readonly string[]): string[] {
+  const present = new Set(files);
+  const holdsTemplate = (dir: string) => TEMPLATE_FILES.some((f) => present.has(dir === '.' ? f : `${dir}/${f}`));
+  const namesIn = (dir: string) =>
+    files.filter((f) => f.startsWith(`${dir}/`)).map((f) => ({ name: f.slice(dir.length + 1).split('/')[0] ?? '' }));
+  const dirs: string[] = [];
+  for (const file of files) {
+    if (file !== ANSWERS_FILE && !file.endsWith(`/${ANSWERS_FILE}`)) continue;
+    const dir = dirname(file);
+    const parts = dir === '.' ? [] : dir.split('/');
+    let reached = !holdsTemplate('.');
+    for (let i = 0; reached && i < parts.length; i++) {
+      const at = parts.slice(0, i + 1).join('/');
+      const app = i === 1 && parts[0] === APPS_DIR && holdsApp(namesIn(at));
+      reached = descends(parts[i] ?? '', app) && !holdsTemplate(at);
+    }
+    if (reached) dirs.push(dir);
+  }
+  return dirs;
+}
 
 export interface ScanOptions {
   /** Read the git facets (four git calls per repo); off for verbs that only need markers. */
@@ -198,7 +232,7 @@ async function walk(
       continue;
     }
     const app = apps?.apps.includes(sub) ?? false;
-    if (!entry.directory || entry.name === '.git' || (PRUNED.has(entry.name) && !app)) continue;
+    if (!entry.directory || !descends(entry.name, app)) continue;
     const child = await walk(ctx, sub, entry.name, options, own && entry.name === APPS_DIR ? own : undefined);
     if (app || isNotable(child) || child.children.length > 0) dir.children.push(child);
   }
