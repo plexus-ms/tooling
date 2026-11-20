@@ -1801,7 +1801,7 @@ test('update: a pull request is ready only once every site the branch holds reco
   assert.match(pull('acme-web', '0.2.0', '.body'), /^Ready for review: /);
   assert.match(
     pull('acme-web', '0.2.0', '.body'),
-    /^- Run `pnpm install` once resolved, and commit the lockfile\.$/m,
+    /^- Run `pnpm install`, and commit the lockfile if it changes\.$/m,
     "ready, with a human's commit beyond plx's",
   );
   assert.deepEqual(third.result?.mergeable, [url]);

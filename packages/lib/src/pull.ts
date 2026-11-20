@@ -378,11 +378,13 @@ export function pullBody(p: PullState): string {
   ];
   // A later run cannot know whether the refresh failed; it asks for one where the branch may need it.
   const lockfile = p.lockfile && p.checked ? ['- Run `pnpm install` once resolved, and commit the lockfile.'] : [];
+  // Ready, there is nothing left to resolve: the same request without the condition.
+  const settled = lockfile.length ? ['- Run `pnpm install`, and commit the lockfile if it changes.'] : [];
   const head =
     hand.length > 0
       ? `**Needs a hand.** \`plx update\` marks this pull request ready once no tracked file holds a conflict marker and every site's answers record the version.\n\n${[...hand, ...lockfile].join('\n')}`
       : p.checked
-        ? `Ready for review: no tracked file holds a conflict marker, and every site's answers record ${p.version}.${lockfile.length ? `\n\n${lockfile.join('\n')}` : ''}`
+        ? `Ready for review: no tracked file holds a conflict marker, and every site's answers record ${p.version}.${settled.length ? `\n\n${settled.join('\n')}` : ''}`
         : 'Nothing needs a hand: every site merged clean.';
   return [
     head,

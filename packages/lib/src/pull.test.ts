@@ -172,8 +172,9 @@ test('a body a later run writes says what it checked at the tip, never that ever
   assert.equal(needsAHand(resolved), false, 'the lockfile instruction alone keeps a later run ready');
   assert.match(
     pullBody(resolved),
-    /^Ready for review: .+\n\n- Run `pnpm install` once resolved, and commit the lockfile\.\n\n/,
+    /^Ready for review: .+\n\n- Run `pnpm install`, and commit the lockfile if it changes\.\n\n/,
   );
+  assert.doesNotMatch(pullBody(resolved), /once resolved/, 'ready, nothing is left to resolve');
 
   const behind = { ...later, behind: ['.', 'apps/site'], lockfile: true };
   assert.equal(needsAHand(behind), true);
