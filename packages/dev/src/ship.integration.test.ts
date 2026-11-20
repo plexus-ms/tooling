@@ -129,7 +129,7 @@ ref="latest-tag"
 while [ $# -gt 0 ]; do [ "$1" = --vcs-ref ] && ref="$2"; shift; done
 [ -z "\${FAKE_COPIER_FAIL:-}" ] || case "$PWD" in *"$FAKE_COPIER_FAIL"*) echo "fake copier: failing on purpose" >&2; exit 1 ;; esac
 echo "updated from $ref" > template-owned.txt
-sed -i.bak 's/^_commit: .*/_commit: next/' .copier-answers.yml && rm -f .copier-answers.yml.bak
+sed -i.bak "s/^_commit: .*/_commit: $ref/" .copier-answers.yml && rm -f .copier-answers.yml.bak
 [ -z "\${FAKE_COPIER_RENAME_REVIEWERS:-}" ] || { sed -i.bak 's/^renovate_reviewers:/pr_reviewers:/' .copier-answers.yml && rm -f .copier-answers.yml.bak; }
 [ ! -f package.json ] || echo '{"name": "touched"}' > package.json
 [ -z "\${FAKE_COPIER_CONFLICT:-}" ] || case "$PWD" in *"$FAKE_COPIER_CONFLICT"*) printf '<<<<<<< before\\nx\\n=======\\ny\\n>>>>>>> after\\n' > template-owned.txt ;; esac
@@ -876,7 +876,7 @@ test('update --recursive: a second run finds the version branches on origin and 
     has(second.out, 'acme/web: plexus/0.2.0 is on origin (https://forge/acme-web/pull/1); no conflict marker remains'),
   );
   assert.ok(!fakeLog().some((l) => has(l, 'pr ready')), 'a ready one with no marker stays ready');
-  assert.match(pull('acme-web', '0.2.0', '.body'), /^Nothing needs a hand/, 'the body rewritten to the present state');
+  assert.match(pull('acme-web', '0.2.0', '.body'), /^Ready for review: /, 'the body rewritten to the present state');
   const patched = fakeLog().filter((l) => has(l, '--method PATCH')).length;
   await runRecursive({ yes: true }, { now: true });
   assert.equal(fakeLog().filter((l) => has(l, '--method PATCH')).length, patched + 2, 'the body is written each run');
@@ -1634,9 +1634,16 @@ test('update: a pull request that needs a hand is a draft; later runs follow its
   assert.deepEqual(preview.result?.mergeable, [], 'still a draft, so not ready to merge');
   const third = await runUpdate({ yes: true }, { repo: web });
   assert.equal(third.error, undefined, third.out);
-  assert.ok(has(third.out, `web: plexus/0.2.0 is on origin (${url}); no conflict marker remains — ready for review`));
+  assert.ok(
+    has(
+      third.out,
+      `web: plexus/0.2.0 is on origin (${url}); no conflict marker remains, and every site is at 0.2.0 — ready for review`,
+    ),
+    third.out,
+  );
   assert.equal(pull('acme-web', '0.2.0', '.draft'), 'false', 'marked ready');
-  assert.match(pull('acme-web', '0.2.0', '.body'), /^Nothing needs a hand/);
+  assert.match(pull('acme-web', '0.2.0', '.body'), /^Ready for review: no tracked file holds a conflict marker/);
+  assert.doesNotMatch(pull('acme-web', '0.2.0', '.body'), /merged clean/, 'a later run only says what it checked');
   assert.ok(fakeLog().some((l) => l === `gh[acme-web] pr ready ${url}`));
   assert.deepEqual(third.result?.conflicted, []);
   assert.deepEqual(third.result?.mergeable, [url]);
@@ -1707,6 +1714,84 @@ test('update: where the forge refuses a draft the pull request is an ordinary on
   assert.doesNotMatch(third.out, /draft|refused|FAILED/, third.out);
   assert.deepEqual(third.result?.mergeable, [url]);
   assert.equal(third.result && isClean(third.result), true);
+});
+
+test('update: a pull request is ready only once every site the branch holds records the version', async () => {
+  fixture('update-behind');
+  versionCut('0.2.0');
+  const web = join(WS, 'acme/web');
+  put(join(web, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+  commit(web, 'lockfile');
+  git(web, 'push', '--quiet', 'origin', 'develop');
+  const url = 'https://forge/acme-web/pull/1';
+  process.env.FAKE_COPIER_FAIL = 'apps/site';
+  const first = await runUpdate({ yes: true }, { repo: web });
+  delete process.env.FAKE_COPIER_FAIL;
+  assert.equal(first.error, undefined, first.out);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'a site whose copier run failed: a draft');
+
+  // A site the default branch gained since is none of the branch's.
+  put(join(web, 'apps/blog/.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-app-nextjs\n');
+  commit(web, 'blog');
+  git(web, 'push', '--quiet', 'origin', 'develop');
+  const second = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(second.error, undefined, second.out);
+  assert.ok(
+    has(second.out, `web: plexus/0.2.0 is on origin (${url}); \`apps/site\` not at 0.2.0: copier did not run there`),
+    second.out,
+  );
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'no marker, but a site not at the version: still a draft');
+  const body = pull('acme-web', '0.2.0', '.body');
+  assert.match(
+    body,
+    /^- The answers at `apps\/site` do not record 0\.2\.0: copier did not run here; run `copier update` for it on this branch\.$/m,
+  );
+  assert.match(body, /^- Run `pnpm install` once resolved, and commit the lockfile\.$/m, 'not ready, and a lockfile');
+  assert.doesNotMatch(body, /apps\/blog/, "the tip's sites, not the default branch's");
+  assert.deepEqual(second.result?.failed, ['web/apps/site (not at 0.2.0)'], 'the run needs a human');
+  assert.deepEqual(second.result?.mergeable, []);
+
+  // Somebody runs copier for it on the branch.
+  const human = join(WS, 'human');
+  git(WS, 'clone', '--quiet', '--branch', 'plexus/0.2.0', remote('acme-web'), human);
+  put(join(human, 'apps/site/.copier-answers.yml'), '_commit: 0.2.0\n_src_path: gh:plexus-ms/template-app-nextjs\n');
+  commit(human, 'copier update at apps/site');
+  git(human, 'push', '--quiet', 'origin', 'plexus/0.2.0');
+  const third = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(third.error, undefined, third.out);
+  assert.ok(has(third.out, 'no conflict marker remains, and every site is at 0.2.0 — ready for review'), third.out);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'false', 'marked ready');
+  assert.match(pull('acme-web', '0.2.0', '.body'), /^Ready for review: /);
+  assert.match(
+    pull('acme-web', '0.2.0', '.body'),
+    /^- Run `pnpm install` once resolved, and commit the lockfile\.$/m,
+    "ready, with a human's commit beyond plx's",
+  );
+  assert.deepEqual(third.result?.mergeable, [url]);
+  assert.equal(third.result && isClean(third.result), true);
+});
+
+test("update: plx's pull request is one commit, scratch ones folded in; a later run asks for no lockfile on it", async () => {
+  fixture('update-one-commit');
+  versionCut('0.2.0');
+  const web = join(WS, 'acme/web');
+  put(join(web, '.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/preset-repo-web\n');
+  put(join(web, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+  commit(web, 'old template name, lockfile');
+  git(web, 'push', '--quiet', 'origin', 'develop');
+  const first = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(first.error, undefined, first.out);
+  assert.ok(has(first.out, 'the template is gh:plexus-ms/template-repo-turbo now'), first.out);
+  assert.equal(git(remote('acme-web'), 'rev-list', '--count', 'develop..plexus/0.2.0'), '1', 'one commit');
+  assert.match(onVersion('acme-web', '0.2.0', '.copier-answers.yml'), /template-repo-turbo/, 'the rename in it');
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'false');
+
+  const second = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(second.error, undefined, second.out);
+  assert.match(pull('acme-web', '0.2.0', '.body'), /^Ready for review: /);
+  assert.doesNotMatch(pull('acme-web', '0.2.0', '.body'), /pnpm install/, 'ready, and nobody but plx committed');
+  assert.ok(!fakeLog().some((l) => has(l, 'pr ready')), 'ready already');
+  assert.deepEqual(second.result?.mergeable, ['https://forge/acme-web/pull/1']);
 });
 
 test('update: a pending minor rests inside the interval; past it the newest is taken, the versions skipped in one pull', async () => {

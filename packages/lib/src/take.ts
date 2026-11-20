@@ -117,7 +117,7 @@ export async function takeVersion(ctx: Context, consumer: Consumer, dir: string,
   const lockfile = await refreshLockfile(ctx, consumer, dir, base);
   await bumpConsumerRefs(ctx, consumer, dir, take.version);
   const taken: Taken = { rel: consumer.rel, sites, ...(lockfile ? { lockfile } : {}) };
-  return { ...taken, ...(await openPull(ctx, consumer, dir, take, taken)) };
+  return { ...taken, ...(await openPull(ctx, consumer, dir, base, take, taken)) };
 }
 
 /** A commit of plain plumbing on a scratch checkout: unsigned, no hooks, a stand-in identity. */
@@ -284,6 +284,7 @@ async function openPull(
   ctx: Context,
   consumer: Consumer,
   dir: string,
+  base: string,
   take: Take,
   taken: Taken,
 ): Promise<Pick<Taken, 'pull' | 'failed' | 'marked' | 'review'>> {
@@ -295,13 +296,16 @@ async function openPull(
     );
     return {};
   }
-  if ((await ctx.read('git', ['status', '--porcelain'], { cwd: dir })).trim() === '') {
+  const moved = (await ctx.read('git', ['rev-parse', 'HEAD'], { cwd: dir })).trim() !== base;
+  if (!moved && (await ctx.read('git', ['status', '--porcelain'], { cwd: dir })).trim() === '') {
     ctx.say(`• ${consumer.rel}: nothing changed — no pull request`);
     return {};
   }
   const head = `${consumer.origin ?? 'origin'} ${branch}`;
   try {
     await ctx.apply([
+      // One commit on the branch, the scratch ones folded in: a later run tells it from a human's by the count.
+      run('git', ['reset', '--quiet', '--soft', base], { cwd: dir }),
       run('git', ['add', '-A'], { cwd: dir }),
       run('git', ['commit', '--quiet', '--no-verify', '-m', `chore: Plexus ${version}`], { cwd: dir }),
       // An empty expected value: the branch must not exist on origin yet.

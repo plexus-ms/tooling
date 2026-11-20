@@ -16,7 +16,7 @@ export interface Summary {
   clean: string[];
   /** Sites left with conflicts, and files that hold conflict markers outside them: in a pull request opened, or on a version branch found on origin. */
   conflicted: string[];
-  /** Sites whose update exited nonzero, consumers that could not be cloned or pushed, lockfiles that failed to refresh, and review requests the forge refused. */
+  /** Sites whose update exited nonzero or, on a version branch found on origin, whose answers do not record the version; consumers that could not be cloned or pushed, lockfiles that failed to refresh, and review requests the forge refused. */
   failed: string[];
   /** Consumers left untouched, with the reason. */
   skipped: { path: string; reason: string }[];
@@ -71,6 +71,9 @@ export function summarize(
       case 'found':
         // Files that still hold markers need a human, like a conflicted site.
         for (const file of o.marked) s.conflicted.push(inRun(o.repo, file));
+        // A site copier did not run at needs a human to run it.
+        for (const site of o.behind)
+          s.failed.push(`${site === '.' ? o.repo : inRun(o.repo, site)} (not at ${o.version})`);
         if (o.failed !== undefined) s.failed.push(o.repo);
         if (o.pull) s.pulls.push(o.pull);
         if (o.pull && o.mergeable) s.mergeable.push(o.pull);

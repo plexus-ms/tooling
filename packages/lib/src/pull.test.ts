@@ -120,3 +120,34 @@ test('a draft the forge refuses is asked for once more as an ordinary pull reque
   assert.equal(ordinary.asked.length, 1, 'no draft asked for, none tried');
   assert.ok(!ordinary.asked[0]?.includes('--draft'));
 });
+
+test('a body a later run writes says what it checked at the tip, never that every site merged clean', () => {
+  const later = { ...base, checked: true, note: 'rewritten' };
+  assert.equal(needsAHand(later), false);
+  const ready = pullBody(later);
+  assert.match(
+    ready,
+    /^Ready for review: no tracked file holds a conflict marker, and every site's answers record 0\.2\.0\.\n\n/,
+  );
+  assert.doesNotMatch(ready, /merged clean/);
+  assert.doesNotMatch(ready, /pnpm install/);
+
+  const resolved = { ...later, lockfile: true };
+  assert.equal(needsAHand(resolved), false, 'the lockfile instruction alone keeps a later run ready');
+  assert.match(
+    pullBody(resolved),
+    /^Ready for review: .+\n\n- Run `pnpm install` once resolved, and commit the lockfile\.\n\n/,
+  );
+
+  const behind = { ...later, behind: ['.', 'apps/site'], lockfile: true };
+  assert.equal(needsAHand(behind), true);
+  const body = pullBody(behind);
+  assert.match(body, /^\*\*Needs a hand\.\*\* .+ every site's answers record the version\./);
+  assert.match(
+    body,
+    /^- The answers at the root do not record 0\.2\.0: copier did not run here; run `copier update` for it on this branch\.$/m,
+  );
+  assert.match(body, /^- The answers at `apps\/site` do not record 0\.2\.0:/m);
+  assert.match(body, /^- Run `pnpm install` once resolved, and commit the lockfile\.$/m);
+  assert.doesNotMatch(body, /did not refresh/, 'a later run does not know whether the refresh failed');
+});

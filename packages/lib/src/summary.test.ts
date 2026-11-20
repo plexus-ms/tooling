@@ -101,6 +101,7 @@ test('summarize folds what each repo came to, in order, without touching the out
       kind: 'found',
       pull: 'https://forge/acme/found/pull/2',
       marked: [],
+      behind: [],
       mergeable: true,
     },
     {
@@ -109,9 +110,10 @@ test('summarize folds what each repo came to, in order, without touching the out
       kind: 'found',
       pull: 'https://forge/acme/marked/pull/3',
       marked: ['apps/a/x.ts'],
+      behind: ['.'],
       mergeable: false,
     },
-    { repo: 'acme/gone', version: '0.2.0', kind: 'found', marked: [], mergeable: false },
+    { repo: 'acme/gone', version: '0.2.0', kind: 'found', marked: [], behind: ['apps/a'], mergeable: false },
     { repo: 'acme/broken', version: '0.2.0', kind: 'failed', detail: 'worktree' },
     {
       repo: 'acme/web',
@@ -162,7 +164,14 @@ test('summarize folds what each repo came to, in order, without touching the out
     preview: false,
     clean: ['acme/web', 'acme/platform', 'acme/clean'],
     conflicted: ['acme/marked/apps/a/x.ts', 'acme/web/apps/site'],
-    failed: ['acme/broken', 'acme/web/pnpm-lock.yaml', 'acme/push', 'acme/push'],
+    failed: [
+      'acme/marked (not at 0.2.0)',
+      'acme/gone/apps/a (not at 0.2.0)',
+      'acme/broken',
+      'acme/web/pnpm-lock.yaml',
+      'acme/push',
+      'acme/push',
+    ],
     skipped: [{ path: 'acme/docs', reason: 'no origin remote' }],
     resting: [{ path: 'acme/ops', reason: 'inside the interval' }],
     pulls: [

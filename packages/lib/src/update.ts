@@ -32,7 +32,8 @@
 // never moved, so a daily run never touches a branch somebody is working on;
 // deleting the branch is how a pull is redone. With its pull request open, the
 // run looks at it again (pull.ts): the branch read as origin has it, the body
-// rewritten to what still needs a hand, ready once no conflict marker remains.
+// rewritten to what still needs a hand, ready once no conflict marker remains
+// and every site's answers record the version.
 // With no pull request in any state (opening it failed after the push), the
 // run opens it then; a closed or merged one stays as a human left it.
 // A repo whose every site already records the newest version does nothing at
@@ -98,7 +99,8 @@ export interface Known {
  * untouched, with why. `resting`: needs no version yet (need.ts), with what
  * would end the rest. `found`: its version branch is on origin already, with
  * the pull request found or, when there was none, opened there, the files of
- * the branch that hold conflict markers, whether it is ready to merge, why
+ * the branch that hold conflict markers, its sites whose answers do not
+ * record the version, whether it is ready to merge, why
  * looking at it failed, if it did, and the review request of one opened.
  * A closed or merged one is no pull to list.
  * `taken`: it took the version. `failed`: it could not be worked on, with why.
@@ -107,7 +109,15 @@ export type Outcome = { repo: string; version: string } & (
   | { kind: 'current' }
   | { kind: 'skipped'; reason: string }
   | { kind: 'resting'; reason: string }
-  | { kind: 'found'; pull?: string; marked: string[]; mergeable: boolean; failed?: string; review?: Review }
+  | {
+      kind: 'found';
+      pull?: string;
+      marked: string[];
+      behind: string[];
+      mergeable: boolean;
+      failed?: string;
+      review?: Review;
+    }
   | { kind: 'taken'; taken: Taken }
   | { kind: 'failed'; detail: string }
 );
@@ -180,21 +190,22 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
           kind: 'found',
           ...(late.pull ? { pull: late.pull.url } : {}),
           marked: late.marked,
-          mergeable: late.pull !== undefined && !late.pull.draft && late.marked.length === 0,
+          behind: late.behind,
+          mergeable: late.pull !== undefined && !late.pull.draft && late.ready,
           ...(late.failed ? { failed: late.failed } : {}),
           ...(late.review ? { review: late.review } : {}),
         };
       } catch (error) {
         const why = detailOf(error);
         ctx.say(`  ✗ FAILED — ${branch} as origin has it${why ? `: ${why}` : ''}`);
-        return { repo: name, version, kind: 'found', marked: [], mergeable: false, failed: why };
+        return { repo: name, version, kind: 'found', marked: [], behind: [], mergeable: false, failed: why };
       }
     }
     if (!pull.open) {
       ctx.say(
         `• ${name}: ${branch} is already on origin, its pull request closed (${pull.url}) — nothing to do; delete the branch to pull the version again`,
       );
-      return { repo: name, version, kind: 'found', marked: [], mergeable: false };
+      return { repo: name, version, kind: 'found', marked: [], behind: [], mergeable: false };
     }
     try {
       const { url, ...found } = await revisit(ctx, consumer, pull, version);
@@ -203,7 +214,16 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
     } catch (error) {
       const why = detailOf(error);
       ctx.say(`  ✗ FAILED — ${branch} as origin has it${why ? `: ${why}` : ''}`);
-      return { repo: name, version, kind: 'found', pull: pull.url, marked: [], mergeable: false, failed: why };
+      return {
+        repo: name,
+        version,
+        kind: 'found',
+        pull: pull.url,
+        marked: [],
+        behind: [],
+        mergeable: false,
+        failed: why,
+      };
     }
   }
 

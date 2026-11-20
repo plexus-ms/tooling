@@ -12,22 +12,29 @@
 // same. One that needs none is ready for review.
 //
 // The branch is never moved by any run, and plx never pushes to it again: it
-// is the human's from the moment it is on origin. A later run that finds it
-// with no pull request in any state (opening failed after the push) opens
-// the pull request then (`openLate`), a draft by the detector, with the
-// review request; a closed or merged one is left as it is, a human's
-// decision. A later run, scheduled or
+// is the human's from the moment it is on origin. A later run, scheduled or
 // manual, reads it as origin has it: its tip's hash from `git ls-remote`, and
 // that commit fetched by hash with no ref, no FETCH_HEAD and no
 // remote-tracking ref written, so no checkout and no ref of the repo is
-// touched, under a dry run as in a real one. It runs the detector over its tracked files, writes the
-// body afresh for that present state (it never reads the body), and marks the pull request ready when no marker
-// remains, or a draft again while one does; a forge that refuses the draft
-// leaves it ordinary, which the run says and does not count as a failure of
-// its own. It does not check the lockfile:
-// that is the human's, and the repo's CI catches a stale one. Whether the pull
-// request is ready to merge is read from its draft state and the detector,
-// never from its body.
+// touched, under a dry run as in a real one. At the tip it checks two things:
+// that no tracked file holds a conflict marker, and that every site the tip
+// holds records the version in its answers (`_commit`); a site that does not
+// is one copier did not run at. Both hold: the pull request is ready. It
+// writes the body afresh for what it checked (it never reads the body), and
+// marks the pull request ready, or a draft again while either fails; a forge
+// that refuses the draft leaves it ordinary, which the run says and does not
+// count as a failure of its own. Whether the refresh of the lockfile failed is
+// not known then, so the body asks for `pnpm install` and the lockfile
+// wherever the tip holds one and the pull request is not ready, or the branch
+// holds commits beyond the one plx made (somebody resolved by hand); plx's
+// commit is told from the others by the count of commits since the branch the
+// version lands on. Whether the pull request is ready to merge is read from
+// its draft state and the tip, never from its body.
+//
+// A later run that finds the branch with no pull request in any state
+// (opening failed after the push) opens the pull request then (`openLate`),
+// ready or a draft by the same check, with the review request; a closed or
+// merged one is left as it is, a human's decision.
 //
 // The review is requested once, when plx opens the pull request, draft or
 // not, from the users the root answers name as the pull request's branch has
@@ -36,13 +43,14 @@
 // those `--reviewer` names instead; nothing more when it is marked ready.
 // Users only: a team is refused. The request is one call for all of them, so
 // the pull request's author is left out of it, and the run says so.
-import { relative } from 'node:path';
+import { dirname } from 'node:path';
 import { filesWithConflictMarkers } from './conflicts.ts';
 import type { Consumer } from './consumers.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers } from './copier.ts';
 import { run } from './effects.ts';
 import { detailOf } from './io.ts';
+import { TEMPLATES, templateOf } from './templates.ts';
 
 export const versionBranch = (version: string): string => `plexus/${version}`;
 
@@ -274,15 +282,23 @@ export interface PullState {
   marked: string[];
   /** Sites whose copier run failed, left as they were. */
   failed?: string[];
-  /** The lockfile refresh failed. */
+  /** Sites whose answers do not record the version: copier did not run there. */
+  behind?: string[];
+  /** The opening run: the lockfile refresh failed. A later run: run `pnpm install` and commit the lockfile. */
   lockfile?: boolean;
+  /** Written by a later run from what it checked at the branch's tip, not by the run that opened it. */
+  checked?: boolean;
   /** The last line: who opened it and why, or that a later run rewrote it. */
   note: string;
 }
 
 /** Whether anything in the state needs a hand. */
 export const needsAHand = (p: PullState): boolean =>
-  (p.conflicted?.length ?? 0) > 0 || p.marked.length > 0 || (p.failed?.length ?? 0) > 0 || p.lockfile === true;
+  (p.conflicted?.length ?? 0) > 0 ||
+  p.marked.length > 0 ||
+  (p.failed?.length ?? 0) > 0 ||
+  (p.behind?.length ?? 0) > 0 ||
+  (p.lockfile === true && !p.checked);
 
 const code = (s: string) => `\`${s}\``;
 const site = (s: string) => (s === '.' ? 'the root' : code(s));
@@ -297,32 +313,104 @@ export function pullBody(p: PullState): string {
     ...(p.failed?.length
       ? [`- \`copier update\` failed at ${p.failed.map(site).join(', ')}, left as it was; run it there by hand.`]
       : []),
-    ...(p.lockfile
+    ...(p.behind ?? []).map(
+      (s) =>
+        `- The answers at ${site(s)} do not record ${p.version}: copier did not run here; run \`copier update\` for it on this branch.`,
+    ),
+    ...(p.lockfile && !p.checked
       ? ['- The lockfile did not refresh: run `pnpm install` after resolving, and commit the lockfile.']
       : []),
   ];
+  // A later run cannot know whether the refresh failed; it asks for one where the branch may need it.
+  const lockfile = p.lockfile && p.checked ? ['- Run `pnpm install` once resolved, and commit the lockfile.'] : [];
   const head =
     hand.length > 0
-      ? [
-          `**Needs a hand.** \`plx update\` marks this pull request ready once no tracked file holds a conflict marker.\n\n${hand.join('\n')}`,
-        ]
-      : ['Nothing needs a hand: every site merged clean.'];
+      ? `**Needs a hand.** \`plx update\` marks this pull request ready once no tracked file holds a conflict marker and every site's answers record the version.\n\n${[...hand, ...lockfile].join('\n')}`
+      : p.checked
+        ? `Ready for review: no tracked file holds a conflict marker, and every site's answers record ${p.version}.${lockfile.length ? `\n\n${lockfile.join('\n')}` : ''}`
+        : 'Nothing needs a hand: every site merged clean.';
   return [
-    ...head,
+    head,
     `Plexus ${p.version} (§ 1.5 PLX): \`copier update\` at ${p.sites.map(site).join(', ')}, the lockfile where manifests moved, and the workflow refs.`,
     p.note,
   ].join('\n\n');
 }
 
 /** The last line of a body a later run rewrote. */
-const REVISITED = 'Opened by `plx update`; rewritten by a later run to what still needs a hand.';
+const REVISITED = "Opened by `plx update`; rewritten by a later run from what it found at the branch's tip.";
+
+/** What a later run reads at the version branch's tip, as origin has it. */
+interface AtTip {
+  /** The tip's hash, its objects fetched. */
+  tip: string;
+  /** The sites the tip holds, relative to the repo (`.` for its root). */
+  sites: string[];
+  /** Tracked files that hold a conflict marker. */
+  marked: string[];
+  /** Sites whose answers do not record the version. */
+  behind: string[];
+  /** No marker, and every site at the version. */
+  ready: boolean;
+  /** Whether the body asks for `pnpm install` and the lockfile. */
+  lockfile: boolean;
+}
+
+/**
+ * The version branch's tip, read by hash: the detector over its tracked
+ * files, and its sites, every answers file it holds that names a template,
+ * each at the version or not. The lockfile is asked for where the tip holds
+ * one and the pull request is not ready, or holds commits beyond the one plx
+ * made (somebody resolved by hand), counted from the branch the version lands
+ * on.
+ */
+async function readTip(ctx: Context, consumer: Consumer, version: string): Promise<AtTip> {
+  const repo = consumer.path;
+  const tip = await tipOf(ctx, repo, versionBranch(version));
+  const marked = await filesWithConflictMarkers(ctx, repo, tip);
+  const files = (await ctx.read('git', ['ls-tree', '-r', '-z', '--name-only', tip], { cwd: repo }))
+    .split('\0')
+    .filter(Boolean);
+  const sites: string[] = [];
+  const behind: string[] = [];
+  for (const file of files.filter((f) => f === ANSWERS_FILE || f.endsWith(`/${ANSWERS_FILE}`))) {
+    const text = await ctx.read('git', ['cat-file', 'blob', `${tip}:${file}`], { cwd: repo });
+    let answers: ReturnType<typeof parseAnswers> | undefined;
+    try {
+      answers = parseAnswers(text);
+    } catch {
+      // Unreadable (a conflict in the answers themselves): a site that does not record the version.
+    }
+    if (answers && !(answers.src && templateOf(answers.src, TEMPLATES))) continue;
+    sites.push(dirname(file));
+    if (answers?.commit !== version) behind.push(dirname(file));
+  }
+  const ready = marked.length === 0 && behind.length === 0;
+  const beyond = Number(
+    (
+      await ctx.read('git', ['rev-list', '--count', `refs/remotes/origin/${consumer.branch}..${tip}`], { cwd: repo })
+    ).trim(),
+  );
+  return { tip, sites, marked, behind, ready, lockfile: files.includes('pnpm-lock.yaml') && (!ready || beyond > 1) };
+}
+
+/** What a later run found at the tip, as the run names it. */
+function foundAt(at: AtTip, version: string): string {
+  const n = at.marked.length;
+  const parts = [
+    ...(n > 0 ? [`${n} file${n === 1 ? '' : 's'} still hold${n === 1 ? 's' : ''} conflict markers`] : []),
+    ...(at.behind.length > 0 ? [`${at.behind.map(site).join(', ')} not at ${version}: copier did not run there`] : []),
+  ];
+  return parts.length > 0 ? parts.join('; ') : `no conflict marker remains, and every site is at ${version}`;
+}
 
 /** What a later run found of a pull request on origin, and did to it. */
 export interface Revisited {
   url: string;
   /** Tracked files of the branch that hold a conflict marker. */
   marked: string[];
-  /** Ready to merge once its checks pass: no longer a draft, and no marker left. */
+  /** Sites of the branch whose answers do not record the version. */
+  behind: string[];
+  /** Ready to merge once its checks pass: no longer a draft, no marker left, every site at the version. */
   mergeable: boolean;
   /** Why the rewrite or the change of state failed, when one did. */
   failed?: string;
@@ -337,14 +425,22 @@ export interface Revisited {
 export async function revisit(ctx: Context, consumer: Consumer, pull: Pull, version: string): Promise<Revisited> {
   const { path: repo, rel: name } = consumer;
   const branch = versionBranch(version);
-  const marked = await filesWithConflictMarkers(ctx, repo, await tipOf(ctx, repo, branch));
-  const ready = marked.length === 0;
-  const sites = consumer.sites.map((s) => relative(consumer.path, s.path) || '.');
-  const body = pullBody({ version, sites, marked, note: REVISITED });
+  const at = await readTip(ctx, consumer, version);
+  const { marked, behind, ready } = at;
+  const body = pullBody({
+    version,
+    sites: at.sites,
+    marked,
+    behind,
+    lockfile: at.lockfile,
+    checked: true,
+    note: REVISITED,
+  });
+  const found = foundAt(at, version);
   ctx.say(
     ready
-      ? `• ${name}: ${branch} is on origin (${pull.url}); no conflict marker remains${pull.draft ? ' — ready for review' : ''}`
-      : `• ${name}: ${branch} is on origin (${pull.url}); ${marked.length} file${marked.length === 1 ? '' : 's'} still hold${marked.length === 1 ? 's' : ''} conflict markers${pull.draft ? '' : ' — a draft again'}`,
+      ? `• ${name}: ${branch} is on origin (${pull.url}); ${found}${pull.draft ? ' — ready for review' : ''}`
+      : `• ${name}: ${branch} is on origin (${pull.url}); ${found}${pull.draft ? '' : ' — a draft again'}`,
   );
   // The body is written, never read: what it says decides nothing.
   try {
@@ -355,9 +451,9 @@ export async function revisit(ctx: Context, consumer: Consumer, pull: Pull, vers
       ...(ready && pull.draft ? [run('gh', ['pr', 'ready', pull.url], { cwd: repo })] : []),
     ]);
   } catch (error) {
-    return { url: pull.url, marked, mergeable: false, failed: `pull request ${pull.url}: ${detailOf(error)}` };
+    return { url: pull.url, marked, behind, mergeable: false, failed: `pull request ${pull.url}: ${detailOf(error)}` };
   }
-  // A forge that refuses the draft leaves the pull request ordinary: the markers keep the run nonzero.
+  // A forge that refuses the draft leaves the pull request ordinary: what needs a hand keeps the run nonzero.
   if (!ready && !pull.draft)
     await ctx.apply([run('gh', ['pr', 'ready', pull.url, '--undo'], { cwd: repo })]).catch((error) => {
       const why = detailOf(error);
@@ -365,7 +461,7 @@ export async function revisit(ctx: Context, consumer: Consumer, pull: Pull, vers
     });
   // A dry run left the state as it was.
   const draft = ctx.dryRun ? pull.draft : !ready;
-  return { url: pull.url, marked, mergeable: ready && !draft };
+  return { url: pull.url, marked, behind, mergeable: ready && !draft };
 }
 
 /** The last line of a body a later run opened. */
@@ -376,6 +472,9 @@ export interface OpenedLate {
   /** Undefined under a dry run, or when the forge did not list what it opened. */
   pull?: Pull;
   marked: string[];
+  behind: string[];
+  /** No marker, and every site at the version. */
+  ready: boolean;
   review?: Review;
   failed?: string;
 }
@@ -393,11 +492,18 @@ export async function openLate(
 ): Promise<OpenedLate> {
   const { path: repo, rel: name } = consumer;
   const branch = versionBranch(version);
-  const tip = await tipOf(ctx, repo, branch);
-  const marked = await filesWithConflictMarkers(ctx, repo, tip);
-  const sites = consumer.sites.map((s) => relative(consumer.path, s.path) || '.');
-  const state: PullState = { version, sites, marked, note: OPENED_LATE };
-  const asDraft = needsAHand(state);
+  const at = await readTip(ctx, consumer, version);
+  const { marked, behind, ready } = at;
+  const state: PullState = {
+    version,
+    sites: at.sites,
+    marked,
+    behind,
+    lockfile: at.lockfile,
+    checked: true,
+    note: OPENED_LATE,
+  };
+  const asDraft = !ready;
   ctx.say(`• ${name}: ${branch} is on origin with no pull request — opening it${asDraft ? ' as a draft' : ''}`);
   let draft: boolean;
   try {
@@ -410,16 +516,18 @@ export async function openLate(
   } catch (error) {
     const why = detailOf(error);
     ctx.say(`  ✗ FAILED — pull request${why ? `: ${why}` : ''}`);
-    return { marked, failed: `pull request: ${why}` };
+    return { marked, behind, ready, failed: `pull request: ${why}` };
   }
-  if (ctx.dryRun) return { marked };
+  if (ctx.dryRun) return { marked, behind, ready };
   const pull = await pullOf(ctx, consumer, repo, version);
-  if (!pull) return { marked, failed: 'pull request: the forge did not list it after opening it' };
+  if (!pull) return { marked, behind, ready, failed: 'pull request: the forge did not list it after opening it' };
   ctx.say(`• ${name}: ${draft ? 'draft ' : ''}pull request opened: ${pull.url}`);
   // Unless named, from the root answers as the branch has them.
   const from = reviewers ?? {
-    answersFile: await ctx.read('git', ['cat-file', 'blob', `${tip}:${ANSWERS_FILE}`], { cwd: repo }).catch(() => ''),
+    answersFile: await ctx
+      .read('git', ['cat-file', 'blob', `${at.tip}:${ANSWERS_FILE}`], { cwd: repo })
+      .catch(() => ''),
   };
   const review = await askForReviews(ctx, name, pull, from, repo);
-  return { pull, marked, ...(review ? { review } : {}) };
+  return { pull, marked, behind, ready, ...(review ? { review } : {}) };
 }
