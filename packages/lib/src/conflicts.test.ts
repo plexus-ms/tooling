@@ -41,14 +41,14 @@ test('the tracked files that hold a marker: git grep names candidates, the detec
   };
   const ctx = new Context({}, fakeIo(tree, git));
   assert.deepEqual(await filesWithConflictMarkers(ctx, '/r'), ['a.txt', 'c.txt']);
-  assert.deepEqual(calls, [['grep', '-l', '-z', '-E', '-e', '^(<<<<<<<|>>>>>>>)', '--']]);
+  assert.deepEqual(calls, [['grep', '-l', '-z', '--no-color', '-E', '-e', '^(<<<<<<<|>>>>>>>)', '--']]);
 });
 
 test('the files of a ref are read from git, no checkout needed; no match is none', async () => {
   const shown: Record<string, string> = { 'origin/x:apps/a.txt': `${CLOSE} theirs\n`, 'origin/x:b.txt': 'clean\n' };
   const git = (_cwd: string, args: string[]) => {
     if (args[0] === 'grep') return args.includes('origin/x') ? 'origin/x:apps/a.txt\0origin/x:b.txt\0' : undefined;
-    if (args[0] === 'show') return shown[args[1] ?? ''];
+    if (args[0] === 'cat-file' && args[1] === 'blob') return shown[args[2] ?? ''];
     return undefined;
   };
   const ctx = new Context({}, fakeIo({}, git));

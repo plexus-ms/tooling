@@ -81,6 +81,33 @@ for (const [k, v] of [
 ])
   execFileSync('git', ['config', '--file', gitconfig, k ?? '', v ?? '']);
 
+/**
+ * Run `body` with git's colour forced on, as a user's config can: what plx
+ * parses of git's output must not depend on it. The update runs go through it.
+ */
+async function coloured<T>(body: () => Promise<T>): Promise<T> {
+  const pairs = [
+    ['color.ui', 'always'],
+    ['color.grep', 'always'],
+    ['color.diff', 'always'],
+    ['color.status', 'always'],
+  ];
+  process.env.GIT_CONFIG_COUNT = String(pairs.length);
+  pairs.forEach(([k, v], i) => {
+    process.env[`GIT_CONFIG_KEY_${i}`] = k;
+    process.env[`GIT_CONFIG_VALUE_${i}`] = v;
+  });
+  try {
+    return await body();
+  } finally {
+    delete process.env.GIT_CONFIG_COUNT;
+    pairs.forEach((_, i) => {
+      delete process.env[`GIT_CONFIG_KEY_${i}`];
+      delete process.env[`GIT_CONFIG_VALUE_${i}`];
+    });
+  }
+}
+
 const FAKE_BIN = join(TMP, 'bin');
 mkdirSync(FAKE_BIN);
 const script = (name: string, body: string) => {
@@ -417,7 +444,8 @@ async function runUpdate(options: Options, args: UpdateOptions): Promise<UpdateR
   try {
     // The clock: two months past the fixture's epoch, so a release without a
     // date of its own is older than the interval and the version is taken.
-    return { result: summarize([await update(ctx, { today: '2026-03-01', ...args })], ctx.dryRun), out };
+    const outcome = await coloured(() => update(ctx, { today: '2026-03-01', ...args }));
+    return { result: summarize([outcome], ctx.dryRun), out };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error), out };
   }
@@ -433,7 +461,7 @@ async function runRecursive(options: Options, args: Partial<RecursiveOptions> = 
   const io = { ...realIo(), stdout: new PassThrough(), stderr };
   const ctx = new Context(options, io);
   try {
-    const outcomes = await updateRecursive(ctx, { dir: WS, today: '2026-03-01', ...args });
+    const outcomes = await coloured(() => updateRecursive(ctx, { dir: WS, today: '2026-03-01', ...args }));
     return { result: summarize(outcomes, ctx.dryRun, args.to), out };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error), out };
