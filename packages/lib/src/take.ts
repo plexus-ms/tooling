@@ -88,7 +88,7 @@ export interface Take {
   why?: string;
   /** How each site is updated; default: copier against the published template, at `ref`. */
   update?: SiteUpdate;
-  /** Who is asked to review the pull request when it is opened; nobody by default. */
+  /** Who is asked to review the pull request when it is opened; default: the root answers' `pr_reviewers` after copier ran. */
   reviewers?: Reviewers;
 }
 
@@ -374,7 +374,11 @@ async function openPull(
   ctx.say(`• ${consumer.rel}: ${draft ? 'draft ' : ''}pull request opened${url ? `: ${url}` : ''}`);
   const pull = { branch, draft, ...(url ? { url } : {}) };
   if (!opened) return { marked, pull, failed: 'the forge did not list the pull request it opened' };
-  const review = await askForReviews(ctx, consumer.rel, opened, take.reviewers ?? { named: [] }, dir);
+  // Unless named, from the root answers as copier left them at every site: a renamed or changed answer counts.
+  const from = take.reviewers ?? {
+    answersFile: await ctx.readFile(join(dir, ANSWERS_FILE)).catch(() => ''),
+  };
+  const review = await askForReviews(ctx, consumer.rel, opened, from, dir);
   return { marked, pull, ...(review ? { review } : {}) };
 }
 

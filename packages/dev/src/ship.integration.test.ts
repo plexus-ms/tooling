@@ -14,6 +14,7 @@
 // package.json at a web root (so the lockfile refresh triggers). Knobs:
 //   FAKE_COPIER_FAIL=<substring>      exit 1 at a site whose path matches
 //   FAKE_COPIER_CONFLICT=<substring>  leave <<<<<<< markers at a matching site
+//   FAKE_COPIER_RENAME_REVIEWERS=1    rename the answer renovate_reviewers to pr_reviewers, as the templates do
 // Fake gh: releases and pull requests are files under the forge, keyed by the
 // repo (the basename of origin); `release create` checks the tag is on origin,
 // keeps the release's notes (notes-<tag>) and, on tooling, "publishes" the
@@ -127,6 +128,7 @@ while [ $# -gt 0 ]; do [ "$1" = --vcs-ref ] && ref="$2"; shift; done
 [ -z "\${FAKE_COPIER_FAIL:-}" ] || case "$PWD" in *"$FAKE_COPIER_FAIL"*) echo "fake copier: failing on purpose" >&2; exit 1 ;; esac
 echo "updated from $ref" > template-owned.txt
 sed -i.bak 's/^_commit: .*/_commit: next/' .copier-answers.yml && rm -f .copier-answers.yml.bak
+[ -z "\${FAKE_COPIER_RENAME_REVIEWERS:-}" ] || { sed -i.bak 's/^renovate_reviewers:/pr_reviewers:/' .copier-answers.yml && rm -f .copier-answers.yml.bak; }
 [ ! -f package.json ] || echo '{"name": "touched"}' > package.json
 [ -z "\${FAKE_COPIER_CONFLICT:-}" ] || case "$PWD" in *"$FAKE_COPIER_CONFLICT"*) printf '<<<<<<< before\\nx\\n=======\\ny\\n>>>>>>> after\\n' > template-owned.txt ;; esac
 `,
@@ -1685,9 +1687,15 @@ test('update: a version branch on origin with no pull request gets one from a la
   fixture('update-dead-end');
   versionCut('0.2.0');
   const web = join(WS, 'acme/web');
+  put(
+    join(web, '.copier-answers.yml'),
+    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-turbo\npr_reviewers: erin\n',
+  );
+  commit(web, 'erin reviews');
+  git(web, 'push', '--quiet', 'origin', 'develop');
   process.env.FAKE_COPIER_CONFLICT = 'apps/site';
   process.env.FAKE_GH_PR_CREATE_FAIL = '1';
-  const first = await runUpdate({ yes: true }, { repo: web, reviewers: ['carol'] });
+  const first = await runUpdate({ yes: true }, { repo: web });
   delete process.env.FAKE_COPIER_CONFLICT;
   delete process.env.FAKE_GH_PR_CREATE_FAIL;
   assert.equal(first.error, undefined, first.out);
@@ -1696,7 +1704,7 @@ test('update: a version branch on origin with no pull request gets one from a la
   assert.throws(() => pull('acme-web', '0.2.0'), 'no pull request');
   const tip = git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0');
 
-  const second = await runUpdate({ yes: true }, { repo: web, reviewers: ['carol'] });
+  const second = await runUpdate({ yes: true }, { repo: web });
   assert.equal(second.error, undefined, second.out);
   assert.ok(has(second.out, 'web: plexus/0.2.0 is on origin with no pull request — opening it as a draft'), second.out);
   assert.equal(pull('acme-web', '0.2.0'), 'https://forge/acme-web/pull/1');
@@ -1706,7 +1714,7 @@ test('update: a version branch on origin with no pull request gets one from a la
     /^- Files that hold conflict markers: `apps\/site\/template-owned\.txt`\.$/m,
   );
   assert.match(pull('acme-web', '0.2.0', '.body'), /a later run found the branch on origin with no pull request/);
-  assert.equal(pull('acme-web', '0.2.0', '.reviewers'), 'carol', 'with the review request');
+  assert.equal(pull('acme-web', '0.2.0', '.reviewers'), 'erin', "with the review request, from the branch's answers");
   assert.deepEqual(second.result?.pulls, ['https://forge/acme-web/pull/1']);
   assert.deepEqual(second.result?.conflicted, ['web/apps/site/template-owned.txt']);
   assert.equal(git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0'), tip, 'the branch is where it was');
@@ -1793,6 +1801,28 @@ test('update: the review is asked of the users pr_reviewers names, or --reviewer
   );
   assert.equal(pull('acme-platform', '0.3.0'), 'https://forge/acme-platform/pull/2', 'opened all the same');
   assert.deepEqual(opened.result?.failed, ['platform (review request)'], 'and the run needs a human');
+});
+
+test('update: pr_reviewers is read as copier leaves it, so the pull request that renames the answer already uses it', async () => {
+  fixture('update-reviewers-renamed');
+  versionCut('0.2.0');
+  const plat = join(WS, 'acme/platform');
+  put(
+    join(plat, '.copier-answers.yml'),
+    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\nrenovate_reviewers: dana\n',
+  );
+  commit(plat, 'the old answer');
+  git(plat, 'push', '--quiet', 'origin', 'main');
+  process.env.FAKE_COPIER_RENAME_REVIEWERS = '1';
+  const { error, out } = await runUpdate({ yes: true }, { repo: plat });
+  delete process.env.FAKE_COPIER_RENAME_REVIEWERS;
+  assert.equal(error, undefined, out);
+  assert.match(onVersion('acme-platform', '0.2.0', '.copier-answers.yml'), /^pr_reviewers: dana$/m);
+  assert.equal(
+    pull('acme-platform', '0.2.0', '.reviewers'),
+    'dana',
+    'the renamed answer, in the pull request that renames it',
+  );
 });
 
 test("update: the pull request's author is left out of the review request, and the run says so", async () => {

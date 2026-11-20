@@ -41,8 +41,10 @@
 // The pull request it opens asks for a review from the users the repo's root
 // answers name (`pr_reviewers`), or from those `reviewers` names instead
 // (pull.ts), once, when it is opened. The answer is read and checked only
-// then: a bad one fails no run that opens nothing, and the pull request is
-// opened all the same, with the refused answer reported.
+// then, from the answers as the pull request's branch has them, after copier
+// ran: a renamed or changed answer counts in the very pull request that
+// brings it, a bad one fails no run that opens nothing, and the pull request
+// is opened all the same, with the refused answer reported.
 //
 //   plx update                      # the version the repo's schedule takes, if any
 //   plx update --now                # the newest version, whatever its step
@@ -159,10 +161,8 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
         now: options.today === undefined ? new Date() : new Date(options.today),
       });
   if (need.held) ctx.say(`• ${name}: ${need.held} (plx update --now takes it)`);
-  // Checked only when a pull request is opened: a run that opens none never reads it.
-  const reviewers: Reviewers = options.reviewers
-    ? { named: options.reviewers }
-    : { answers: answers[consumer.sites.indexOf(root)]?.answers ?? {} };
+  // Unless named, read where the pull request is opened, from its branch's answers, and only then.
+  const reviewers: Reviewers | undefined = options.reviewers ? { named: options.reviewers } : undefined;
   // A repo that rests is looked at for the newest version: one asked for earlier may be on origin.
   const version = need.take ? need.version : newest;
 
@@ -232,7 +232,7 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
       ref: version,
       opener: '`plx update`',
       why: need.why,
-      reviewers,
+      ...(reviewers ? { reviewers } : {}),
     });
     return { repo: name, version, kind: 'taken', taken };
   } finally {

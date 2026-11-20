@@ -26,7 +26,8 @@
 // never from its body.
 //
 // The review is requested once, when plx opens the pull request, draft or
-// not, from the users the repo's root answers name (`pr_reviewers`, a
+// not, from the users the root answers name as the pull request's branch has
+// them, after copier ran at every site (`pr_reviewers`, a
 // comma-separated string of GitHub user logins, empty or absent for none), or
 // those `--reviewer` names instead; nothing more when it is marked ready.
 // Users only: a team is refused. The request is one call for all of them, so
@@ -35,6 +36,7 @@ import { relative } from 'node:path';
 import { filesWithConflictMarkers } from './conflicts.ts';
 import type { Consumer } from './consumers.ts';
 import type { Context } from './context.ts';
+import { ANSWERS_FILE, parseAnswers } from './copier.ts';
 import { run } from './effects.ts';
 import { detailOf } from './io.ts';
 
@@ -58,6 +60,16 @@ export function parseReviewers(value: string, what: string): string[] {
     if (!/^[A-Za-z0-9-]+$/.test(login)) throw new Error(`${what} names \`${login}\`, not a GitHub user login`);
   }
   return [...new Set(logins)];
+}
+
+/** A root answers file's answers; a file that is not YAML, or empty, is refused with what it is. */
+function answersOf(text: string): Record<string, unknown> {
+  if (text.trim() === '') throw new Error(`the root ${ANSWERS_FILE} is empty or missing`);
+  try {
+    return parseAnswers(text).answers;
+  } catch (error) {
+    throw new Error(`the root ${ANSWERS_FILE} cannot be read: ${(error as Error).message.split('\n')[0]}`);
+  }
 }
 
 /** The reviewers a repo's root answers name; none when they name none. */
@@ -134,11 +146,12 @@ export async function pullOf(
 export type Review = { requested: string[] } | { failed: string };
 
 /**
- * Who is asked to review: the logins named (`--reviewer`), or the repo's
- * answers, whose `pr_reviewers` is read, and checked, only when a pull
- * request is opened.
+ * Who is asked to review: the logins named (`--reviewer`), or the root
+ * answers file as the pull request's branch has it, after copier ran at every
+ * site, whose `pr_reviewers` is read, and checked, only when a pull request is
+ * opened.
  */
-export type Reviewers = { named: string[] } | { answers: Record<string, unknown> };
+export type Reviewers = { named: string[] } | { answersFile: string };
 
 /**
  * Ask the users for a review of the pull request, once; none asked, nothing
@@ -155,7 +168,7 @@ export async function askForReviews(
 ): Promise<Review | undefined> {
   let named: string[];
   try {
-    named = 'named' in from ? from.named : reviewersOf(from.answers);
+    named = 'named' in from ? from.named : reviewersOf(answersOf(from.answersFile));
   } catch (error) {
     const why = (error as Error).message;
     ctx.say(`  ✗ FAILED — ${name}: no review requested: ${why}`);
@@ -312,11 +325,12 @@ export async function openLate(
   ctx: Context,
   consumer: Consumer,
   version: string,
-  reviewers: Reviewers,
+  reviewers: Reviewers | undefined,
 ): Promise<OpenedLate> {
   const { path: repo, rel: name } = consumer;
   const branch = versionBranch(version);
-  const marked = await filesWithConflictMarkers(ctx, repo, await tipOf(ctx, repo, branch));
+  const tip = await tipOf(ctx, repo, branch);
+  const marked = await filesWithConflictMarkers(ctx, repo, tip);
   const sites = consumer.sites.map((s) => relative(consumer.path, s.path) || '.');
   const state: PullState = { version, sites, marked, note: OPENED_LATE };
   const draft = needsAHand(state);
@@ -350,6 +364,10 @@ export async function openLate(
   const pull = await pullOf(ctx, consumer, repo, version);
   if (!pull) return { marked, failed: 'pull request: the forge did not list it after opening it' };
   ctx.say(`• ${name}: ${draft ? 'draft ' : ''}pull request opened: ${pull.url}`);
-  const review = await askForReviews(ctx, name, pull, reviewers, repo);
+  // Unless named, from the root answers as the branch has them.
+  const from = reviewers ?? {
+    answersFile: await ctx.read('git', ['cat-file', 'blob', `${tip}:${ANSWERS_FILE}`], { cwd: repo }).catch(() => ''),
+  };
+  const review = await askForReviews(ctx, name, pull, from, repo);
   return { pull, marked, ...(review ? { review } : {}) };
 }
