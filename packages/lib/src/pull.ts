@@ -34,7 +34,10 @@
 // A later run that finds the branch with no pull request in any state
 // (opening failed after the push) opens the pull request then (`openLate`),
 // ready or a draft by the same check, with the review request; a closed or
-// merged one is left as it is, a human's decision.
+// merged one is left as it is, a human's decision. A closed one counts only
+// when it was closed at the tip origin has now: one of an earlier branch of
+// the name, deleted and pushed again, is not this branch's, and neither is
+// one from a fork's branch of the name.
 //
 // The review is requested once, when plx opens the pull request, draft or
 // not, from the users the root answers name as the pull request's branch has
@@ -170,21 +173,32 @@ export interface Pull {
   open: boolean;
   /** Who opened it: the App in CI, a maintainer's own login by hand. */
   author?: string;
+  /** Its head commit: the branch's tip while it is open, the tip it had when it was closed. */
+  head?: string;
 }
 
+/** How many pull requests of the version branch plx asks the forge for; none relies on gh's default. */
+const LISTED = 1000;
+
 /**
- * The pull request from the version branch against the consumer's branch, in
- * any state: the open one if there is one, else the newest. Undefined when
- * there is none; a forge that cannot be asked is an error, never "none".
+ * The pull request from the version branch against the consumer's branch:
+ * the open one if there is one, else a closed or merged one whose head commit
+ * is `tip`, the branch's tip on origin, the highest numbered if several are.
+ * A closed one of an earlier branch of the same name, deleted since and
+ * pushed again, is not this branch's; nor is one from another repository (a
+ * fork's branch of that name). Undefined when there is none; a forge that
+ * cannot be asked is an error, never "none".
  */
 export async function pullOf(
   ctx: Context,
   consumer: Consumer,
   dir: string,
   version: string,
+  tip?: string,
 ): Promise<Pull | undefined> {
   const args = ['pr', 'list', '--head', versionBranch(version), '--base', consumer.branch, '--state', 'all'];
-  const out = await ctx.read('gh', [...args, '--json', 'url,number,isDraft,state,author'], { cwd: dir });
+  const fields = 'url,number,isDraft,state,author,headRefOid,isCrossRepository';
+  const out = await ctx.read('gh', [...args, '--limit', String(LISTED), '--json', fields], { cwd: dir });
   let listed: unknown;
   try {
     listed = JSON.parse(out);
@@ -194,8 +208,8 @@ export async function pullOf(
   if (!Array.isArray(listed)) throw new Error(`gh pr list gave no list for ${versionBranch(version)}`);
   const pulls = listed.flatMap((p: unknown) => {
     if (typeof p !== 'object' || p === null) return [];
-    const { url, number, isDraft, state, author } = p as Record<string, unknown>;
-    if (typeof url !== 'string' || typeof number !== 'number') return [];
+    const { url, number, isDraft, state, author, headRefOid, isCrossRepository } = p as Record<string, unknown>;
+    if (typeof url !== 'string' || typeof number !== 'number' || isCrossRepository !== false) return [];
     const login = (author as { login?: unknown } | null)?.login;
     return [
       {
@@ -204,10 +218,13 @@ export async function pullOf(
         draft: isDraft === true,
         open: state === 'OPEN',
         ...(typeof login === 'string' ? { author: login } : {}),
+        ...(typeof headRefOid === 'string' ? { head: headRefOid } : {}),
       },
     ];
   });
-  return pulls.find((p) => p.open) ?? pulls[0];
+  const open = pulls.find((p) => p.open);
+  if (open) return open;
+  return pulls.filter((p) => tip !== undefined && p.head === tip).sort((a, b) => b.number - a.number)[0];
 }
 
 /** What asking for reviews came to. */
@@ -257,18 +274,19 @@ export async function askForReviews(
   }
 }
 
-/**
- * The tip of the version branch as origin has it, its objects fetched by hash
- * with no ref, no FETCH_HEAD and no remote-tracking ref written.
- */
-async function tipOf(ctx: Context, repo: string, branch: string): Promise<string> {
+/** The hash of the branch's tip as origin has it, from `git ls-remote`. */
+export async function tipOnOrigin(ctx: Context, repo: string, branch: string): Promise<string> {
   const tip = (await ctx.read('git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], { cwd: repo }))
     .split('\t')[0]
     ?.trim();
   if (!tip) throw new Error(`origin no longer has ${branch}`);
+  return tip;
+}
+
+/** The commit's objects, fetched by hash with no ref, no FETCH_HEAD and no remote-tracking ref written. */
+async function fetchTip(ctx: Context, repo: string, tip: string): Promise<void> {
   // By hash, with no refmap: only the objects arrive; a fetch by name would move origin's remote-tracking ref.
   await ctx.read('git', ['fetch', '--quiet', '--no-write-fetch-head', '--refmap=', 'origin', tip], { cwd: repo });
-  return tip;
 }
 
 /** What a pull request's body says, as data. */
@@ -363,9 +381,9 @@ interface AtTip {
  * made (somebody resolved by hand), counted from the branch the version lands
  * on.
  */
-async function readTip(ctx: Context, consumer: Consumer, version: string): Promise<AtTip> {
+async function readTip(ctx: Context, consumer: Consumer, version: string, tip: string): Promise<AtTip> {
   const repo = consumer.path;
-  const tip = await tipOf(ctx, repo, versionBranch(version));
+  await fetchTip(ctx, repo, tip);
   const marked = await filesWithConflictMarkers(ctx, repo, tip);
   const files = (await ctx.read('git', ['ls-tree', '-r', '-z', '--name-only', tip], { cwd: repo }))
     .split('\0')
@@ -422,10 +440,16 @@ export interface Revisited {
  * present state, ready or draft by the markers. Under a dry run it changes
  * nothing and says what it would do.
  */
-export async function revisit(ctx: Context, consumer: Consumer, pull: Pull, version: string): Promise<Revisited> {
+export async function revisit(
+  ctx: Context,
+  consumer: Consumer,
+  pull: Pull,
+  version: string,
+  tip: string,
+): Promise<Revisited> {
   const { path: repo, rel: name } = consumer;
   const branch = versionBranch(version);
-  const at = await readTip(ctx, consumer, version);
+  const at = await readTip(ctx, consumer, version, tip);
   const { marked, behind, ready } = at;
   const body = pullBody({
     version,
@@ -489,10 +513,11 @@ export async function openLate(
   consumer: Consumer,
   version: string,
   reviewers: Reviewers | undefined,
+  tip: string,
 ): Promise<OpenedLate> {
   const { path: repo, rel: name } = consumer;
   const branch = versionBranch(version);
-  const at = await readTip(ctx, consumer, version);
+  const at = await readTip(ctx, consumer, version, tip);
   const { marked, behind, ready } = at;
   const state: PullState = {
     version,

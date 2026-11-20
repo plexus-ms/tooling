@@ -50,21 +50,57 @@ test('the pull request is read from the forge as JSON in any state, the open one
         },
       }),
     );
-  const closed = '{"url":"https://forge/o/r/pull/2","number":2,"isDraft":false,"state":"CLOSED"}';
-  const open = '{"url":"https://forge/o/r/pull/3","number":3,"isDraft":true,"state":"OPEN"}';
-  assert.deepEqual(await pullOf(listed(`[${closed},${open}]`), consumer, '/r', '0.2.0'), {
-    url: 'https://forge/o/r/pull/3',
-    number: 3,
-    draft: true,
-    open: true,
-  });
+  const pr = (number: number, state: string, head: string, cross = false) =>
+    JSON.stringify({
+      url: `https://forge/o/r/pull/${number}`,
+      number,
+      isDraft: number === 3,
+      state,
+      headRefOid: head,
+      isCrossRepository: cross,
+    });
+  assert.deepEqual(
+    await pullOf(listed(`[${pr(2, 'CLOSED', 'aaa')},${pr(3, 'OPEN', 'bbb')}]`), consumer, '/r', '0.2.0'),
+    {
+      url: 'https://forge/o/r/pull/3',
+      number: 3,
+      draft: true,
+      open: true,
+      head: 'bbb',
+    },
+  );
   assert.ok(asked[0]?.includes('all'), 'every state is asked for');
-  assert.deepEqual(await pullOf(listed(`[${closed}]`), consumer, '/r', '0.2.0'), {
+  assert.equal(asked[0]?.[asked[0].indexOf('--limit') + 1], '1000', "gh's default of 30 is not relied on");
+  assert.deepEqual(await pullOf(listed(`[${pr(2, 'CLOSED', 'aaa')}]`), consumer, '/r', '0.2.0', 'aaa'), {
     url: 'https://forge/o/r/pull/2',
     number: 2,
     draft: false,
     open: false,
+    head: 'aaa',
   });
+  assert.equal(
+    await pullOf(listed(`[${pr(2, 'CLOSED', 'aaa')}]`), consumer, '/r', '0.2.0', 'ccc'),
+    undefined,
+    'closed at another tip: an earlier branch of the same name',
+  );
+  assert.equal(
+    (
+      await pullOf(
+        listed(`[${pr(4, 'MERGED', 'aaa')},${pr(7, 'CLOSED', 'aaa')},${pr(5, 'CLOSED', 'aaa')}]`),
+        consumer,
+        '/r',
+        '0.2.0',
+        'aaa',
+      )
+    )?.number,
+    7,
+    'the highest numbered of those at the tip, whatever the order listed',
+  );
+  assert.equal(
+    await pullOf(listed(`[${pr(9, 'OPEN', 'ddd', true)}]`), consumer, '/r', '0.2.0', 'ddd'),
+    undefined,
+    "a fork's branch of the same name is not ours",
+  );
   assert.equal(await pullOf(listed('[]'), consumer, '/r', '0.2.0'), undefined);
   await assert.rejects(pullOf(listed('not json'), consumer, '/r', '0.2.0'), /gave no JSON/);
   await assert.rejects(pullOf(listed(undefined), consumer, '/r', '0.2.0'), /fake gh fails/);

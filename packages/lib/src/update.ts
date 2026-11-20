@@ -60,7 +60,7 @@ import { run } from './effects.ts';
 import { detailOf, ExecError } from './io.ts';
 import { maxAgeOf, type Need, needOf, type Release } from './need.ts';
 import { overview } from './overview.ts';
-import { openLate, pullOf, type Review, type Reviewers, revisit, versionBranch } from './pull.ts';
+import { openLate, pullOf, type Review, type Reviewers, revisit, tipOnOrigin, versionBranch } from './pull.ts';
 import { type Taken, takeVersion } from './take.ts';
 import { TEMPLATES, templateSource } from './templates.ts';
 import { COMPENDIUM, compareVersions, isPlexusVersion, preflightForge, UsageError } from './version.ts';
@@ -178,11 +178,13 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
 
   const branch = versionBranch(version);
   if (await onOrigin(ctx, repo, branch)) {
+    // A closed pull request is the branch's only when it was closed at the tip origin has now.
+    const tip = await tipOnOrigin(ctx, repo, branch);
     // A forge that cannot be asked fails the run here: it is never taken for "no pull request".
-    const pull = await pullOf(ctx, consumer, repo, version);
+    const pull = await pullOf(ctx, consumer, repo, version, tip);
     if (!pull) {
       try {
-        const late = await openLate(ctx, consumer, version, reviewers);
+        const late = await openLate(ctx, consumer, version, reviewers, tip);
         if (late.failed) ctx.say(`  ✗ FAILED — ${late.failed}`);
         return {
           repo: name,
@@ -208,7 +210,7 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
       return { repo: name, version, kind: 'found', marked: [], behind: [], mergeable: false };
     }
     try {
-      const { url, ...found } = await revisit(ctx, consumer, pull, version);
+      const { url, ...found } = await revisit(ctx, consumer, pull, version, tip);
       if (found.failed) ctx.say(`  ✗ FAILED — ${found.failed}`);
       return { repo: name, version, kind: 'found', pull: url, ...found };
     } catch (error) {

@@ -29,6 +29,7 @@
 //   FAKE_GH_CREATE_FAIL=<repo>        `gh release create` fails in that repo
 //   FAKE_GH_REVIEW_FAIL=1             a review request fails
 //   FAKE_GH_PR_CREATE_FAIL=1          `gh pr create` fails
+//   FAKE_GH_FORK_PR=1                 `gh pr list` also lists an open pull request from a fork's branch of that name
 //   FAKE_GH_NO_DRAFTS=1               the forge refuses a draft: `gh pr create --draft` and `gh pr ready --undo` fail
 //   FAKE_GH_PR_LIST_FAIL=1            `gh pr list` fails
 //   FAKE_GH_USER=<login>              who `gh pr create` opens as (default plx-bot)
@@ -198,7 +199,7 @@ echo "gh[$repo] $*" >> "$FAKE_LOG"
 dir="$FAKE_FORGE/$repo"; mkdir -p "$dir"
 arg() { local k="$1"; shift; while [ $# -gt 0 ]; do [ "$1" = "$k" ] && { echo "$2"; return; }; shift; done; }
 has() { local k="$1"; shift; for a in "$@"; do [ "$a" = "$k" ] && { echo true; return; }; done; echo false; }
-prs() { for f in "$dir"/pr-*; do case "$f" in *.body|*.base|*.draft|*.reviewers|*.state|*.author) ;; *) [ -f "$f" ] && echo "$f" ;; esac; done; }
+prs() { for f in "$dir"/pr-*; do case "$f" in *.body|*.base|*.draft|*.reviewers|*.state|*.author|*.head) ;; *) [ -f "$f" ] && echo "$f" ;; esac; done; }
 # \`-R <owner>/<repo>\` names the repo whatever the directory.
 named="$(arg -R "$@")"; [ -z "$named" ] || { repo="\${named##*/}"; dir="$FAKE_FORGE/$repo"; mkdir -p "$dir"; }
 case "$1 $2" in
@@ -226,14 +227,26 @@ case "$1 $2" in
   "pr view") for f in $(prs); do [ "$(cat "$f")" = "$3" ] && cat "$f.body"; done; true ;;
   "pr list")
     [ -z "\${FAKE_GH_PR_LIST_FAIL:-}" ] || { echo "fake gh: HTTP 502 on purpose" >&2; exit 1; }
-    f="$dir/pr-$(arg --head "$@" | tr / -)"
-    if [ -f "$f" ]; then printf '[{"url":"%s","number":%s,"isDraft":%s,"state":"%s","author":{"login":"%s"}}]\n' "$(cat "$f")" "$(sed 's|.*/||' "$f")" "$(cat "$f.draft")" "$(cat "$f.state" 2>/dev/null || echo OPEN)" "$(cat "$f.author")"; else echo '[]'; fi ;;
+    head="$(arg --head "$@")"; h="$(echo "$head" | tr / -)"; tip="$(git ls-remote origin "refs/heads/$head" | cut -f1)"; sep=""; printf '['
+    # Closed ones of an earlier branch of the name first, then the current one; an open one is at the tip.
+    for f in "$dir"/old-*-pr-"$h" "$dir/pr-$h"; do [ -f "$f" ] || continue
+      state="$(cat "$f.state" 2>/dev/null || echo OPEN)"; oid="$(cat "$f.head")"; [ "$state" != OPEN ] || oid="$tip"
+      printf '%s{"url":"%s","number":%s,"isDraft":%s,"state":"%s","author":{"login":"%s"},"headRefOid":"%s","isCrossRepository":false}' "$sep" "$(cat "$f")" "$(sed 's|.*/||' "$f")" "$(cat "$f.draft")" "$state" "$(cat "$f.author")" "$oid"; sep=,
+    done
+    [ -z "\${FAKE_GH_FORK_PR:-}" ] || printf '%s{"url":"https://forge/fork/pull/99","number":99,"isDraft":false,"state":"OPEN","author":{"login":"stranger"},"headRefOid":"%s","isCrossRepository":true}' "$sep" "$tip"
+    echo ']' ;;
   "pr create")
     [ -z "\${FAKE_GH_PR_CREATE_FAIL:-}" ] || { echo "fake gh: pr create failed on purpose" >&2; exit 1; }
     [ -z "\${FAKE_GH_NO_DRAFTS:-}" ] || [ "$(has --draft "$@")" = false ] || { echo "fake gh: no drafts here" >&2; exit 1; }
     head="$(arg --head "$@")"; f="$dir/pr-$(echo "$head" | tr / -)"
+    # A closed one of the name is kept aside, as the forge keeps it.
+    if [ -f "$f" ] && [ "$(cat "$f.state" 2>/dev/null || echo OPEN)" != OPEN ]; then
+      for x in "$f" "$f".*; do mv "$x" "$dir/old-$(cat "$dir/count-pr")-\${x##*/}"; done
+    fi
     [ ! -f "$f" ] || { echo "a pull request for $head already exists" >&2; exit 1; }
-    echo "https://forge/$repo/pull/$(( $(prs | wc -l) + 1 ))" > "$f"
+    n=$(( $(cat "$dir/count-pr" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$dir/count-pr"
+    echo "https://forge/$repo/pull/$n" > "$f"
+    git ls-remote origin "refs/heads/$head" | cut -f1 > "$f.head"
     has --draft "$@" > "$f.draft"; echo "\${FAKE_GH_USER:-plx-bot}" > "$f.author"
     arg --body "$@" > "$f.body"; arg --base "$@" > "$f.base"; cat "$f" ;;
   "pr ready")
@@ -1889,6 +1902,38 @@ test('update: a version branch on origin with no pull request gets one from a la
   assert.ok(many.result?.failed.includes('web'), many.out);
   assert.equal(webCreates(), 3, 'nothing opened on a failed list');
   assert.ok(many.result?.failed.includes('platform'), 'the repo that opened one could not list it, and says so');
+});
+
+test("update: a closed pull request of an earlier branch of the same name is not the branch's; nor is a fork's", async () => {
+  fixture('update-redo');
+  versionCut('0.2.0');
+  const web = join(WS, 'acme/web');
+  const first = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(first.error, undefined, first.out);
+  assert.equal(pull('acme-web', '0.2.0'), 'https://forge/acme-web/pull/1');
+
+  // A human closes it and deletes the branch, to pull the version again; opening the new one fails.
+  writeFileSync(join(FORGE(), 'acme-web', 'pr-plexus-0.2.0.state'), 'CLOSED\n');
+  git(remote('acme-web'), 'branch', '--quiet', '-D', 'plexus/0.2.0');
+  put(join(web, 'README.md'), 'later\n');
+  commit(web, 'develop moves on');
+  git(web, 'push', '--quiet', 'origin', 'develop');
+  process.env.FAKE_GH_PR_CREATE_FAIL = '1';
+  const redo = await runUpdate({ yes: true }, { repo: web });
+  delete process.env.FAKE_GH_PR_CREATE_FAIL;
+  assert.equal(redo.error, undefined, redo.out);
+  assert.ok(redo.result?.failed.includes('web'), redo.out);
+
+  // The next run finds the branch with the old pull request closed at another tip, and a fork's open one.
+  process.env.FAKE_GH_FORK_PR = '1';
+  const late = await runUpdate({ yes: true }, { repo: web });
+  delete process.env.FAKE_GH_FORK_PR;
+  assert.equal(late.error, undefined, late.out);
+  assert.doesNotMatch(late.out, /its pull request closed/, late.out);
+  assert.ok(has(late.out, 'web: plexus/0.2.0 is on origin with no pull request — opening it'), late.out);
+  assert.equal(pull('acme-web', '0.2.0'), 'https://forge/acme-web/pull/2', 'a new pull request');
+  assert.deepEqual(late.result?.pulls, ['https://forge/acme-web/pull/2']);
+  assert.ok(!fakeLog().some((l) => has(l, 'fork/pull/99')), "the fork's is left alone");
 });
 
 test('update: the review is asked of the users pr_reviewers names, or --reviewer instead, once, draft or not', async () => {
