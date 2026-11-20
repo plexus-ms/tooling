@@ -11,8 +11,10 @@
 //
 // The branch is never moved by any run, and plx never pushes to it again: it
 // is the human's from the moment it is on origin. A later run, scheduled or
-// manual, reads it as origin has it (a fetch into the remote-tracking ref; no
-// checkout is touched), runs the detector over its tracked files, writes the
+// manual, reads it as origin has it: its tip's hash from `git ls-remote`, and
+// that commit fetched by hash with no ref, no FETCH_HEAD and no
+// remote-tracking ref written, so no checkout and no ref of the repo is
+// touched, under a dry run as in a real one. It runs the detector over its tracked files, writes the
 // body afresh for that present state (it never reads the body), and marks the pull request ready when no marker
 // remains, or a draft again while one does. It does not check the lockfile:
 // that is the human's, and the repo's CI catches a stale one. Whether the pull
@@ -177,11 +179,13 @@ export interface Revisited {
 export async function revisit(ctx: Context, consumer: Consumer, pull: OpenPull, version: string): Promise<Revisited> {
   const { path: repo, rel: name } = consumer;
   const branch = versionBranch(version);
-  const tracking = `origin/${branch}`;
-  await ctx.read('git', ['fetch', '--quiet', 'origin', `+refs/heads/${branch}:refs/remotes/${tracking}`], {
-    cwd: repo,
-  });
-  const marked = await filesWithConflictMarkers(ctx, repo, tracking);
+  const tip = (await ctx.read('git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], { cwd: repo }))
+    .split('\t')[0]
+    ?.trim();
+  if (!tip) throw new Error(`origin no longer has ${branch}`);
+  // By hash, with no refmap: only the objects arrive; a fetch by name would move origin's remote-tracking ref.
+  await ctx.read('git', ['fetch', '--quiet', '--no-write-fetch-head', '--refmap=', 'origin', tip], { cwd: repo });
+  const marked = await filesWithConflictMarkers(ctx, repo, tip);
   const ready = marked.length === 0;
   const sites = consumer.sites.map((s) => relative(consumer.path, s.path) || '.');
   const body = pullBody({ version, sites, marked, note: REVISITED });

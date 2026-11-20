@@ -1584,8 +1584,11 @@ test('update: a pull request that needs a hand is a draft; later runs follow its
   commit(human, 'resolve');
   git(human, 'push', '--quiet', 'origin', 'plexus/0.2.0');
   const resolved = git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0');
+  const refs = git(web, 'for-each-ref');
   const preview = await runUpdate({ dryRun: true, yes: true }, { repo: web });
   assert.equal(preview.error, undefined, preview.out);
+  assert.equal(git(web, 'for-each-ref'), refs, "a dry run writes no ref in the repo's checkout");
+  assert.ok(has(preview.out, 'no conflict marker remains'), 'it read the resolved branch all the same');
   assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'a dry run changes nothing');
   assert.deepEqual(preview.result?.mergeable, [], 'still a draft, so not ready to merge');
   const third = await runUpdate({ yes: true }, { repo: web });
