@@ -129,13 +129,17 @@ export {
 } from './need.ts';
 export { overview, PRUNED, type ScanOptions } from './overview.ts';
 export {
+  askForReviews,
   needsAHand,
-  type OpenPull,
-  openPullOf,
+  type OpenedLate,
+  openLate,
+  type Pull,
   type PullState,
   parseReviewers,
   pullBody,
+  pullOf,
   REVIEWERS_ANSWER,
+  type Review,
   type Revisited,
   requestReviews,
   reviewersOf,

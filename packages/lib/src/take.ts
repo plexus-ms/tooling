@@ -24,7 +24,7 @@ import type { Context } from './context.ts';
 import { ANSWERS_FILE, copierVia, parseAnswers, setAnswer } from './copier.ts';
 import { run, write } from './effects.ts';
 import { detailOf } from './io.ts';
-import { needsAHand, openPullOf, type PullState, pullBody, requestReviews, versionBranch } from './pull.ts';
+import { askForReviews, needsAHand, type PullState, pullBody, pullOf, type Review, versionBranch } from './pull.ts';
 import { namesOldTemplate, templateSource } from './templates.ts';
 
 /** What became of one site: merged clean, left with conflicts, or its copier run failed (`detail` says why). */
@@ -48,7 +48,7 @@ export interface Taken {
   /** Why the commit, the push or the pull request failed, when one did. */
   failed?: string;
   /** The users asked to review the pull request, or why asking them failed. */
-  review?: { requested: string[] } | { failed: string };
+  review?: Review;
 }
 
 /** Whether the consumer needs a hand beyond reviewing its pull request. */
@@ -352,24 +352,21 @@ async function openPull(
     ctx.say(`  ✗ FAILED — pull request${why ? `: ${why}` : ''}`);
     return { marked, failed: `pull request${why ? `: ${why}` : ''}` };
   }
-  const opened = await openPullOf(ctx, consumer, dir, version);
+  // Asking the forge for what it opened is a read like any other: a failure is reported, never "none".
+  let opened: Awaited<ReturnType<typeof pullOf>>;
+  try {
+    opened = await pullOf(ctx, consumer, dir, version);
+  } catch (error) {
+    const why = detailOf(error);
+    ctx.say(`  ✗ FAILED — ${consumer.rel}: the pull request opened, but listing it failed${why ? `: ${why}` : ''}`);
+    return { marked, pull: { branch, draft }, failed: `listing the pull request: ${why}` };
+  }
   const url = opened?.url;
   ctx.say(`• ${consumer.rel}: ${draft ? 'draft ' : ''}pull request opened${url ? `: ${url}` : ''}`);
   const pull = { branch, draft, ...(url ? { url } : {}) };
-  const reviewers = take.reviewers ?? [];
-  if (reviewers.length === 0) return { marked, pull };
-  if (!opened) {
-    ctx.say(`  ✗ FAILED — review request: the forge did not list the pull request`);
-    return { marked, pull, review: { failed: 'the forge did not list the pull request' } };
-  }
-  try {
-    await ctx.apply([requestReviews(opened.number, reviewers, dir)]);
-    return { marked, pull, review: { requested: reviewers } };
-  } catch (error) {
-    const why = detailOf(error);
-    ctx.say(`  ✗ FAILED — review request from ${reviewers.join(', ')}${why ? `: ${why}` : ''}`);
-    return { marked, pull, review: { failed: why || 'the forge refused it' } };
-  }
+  if (!opened) return { marked, pull, failed: 'the forge did not list the pull request it opened' };
+  const review = await askForReviews(ctx, consumer.rel, opened, take.reviewers ?? [], dir);
+  return { marked, pull, ...(review ? { review } : {}) };
 }
 
 /** A site's name in the run, as the repo names it: `.` for its root. */

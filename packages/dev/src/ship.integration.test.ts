@@ -18,7 +18,8 @@
 // repo (the basename of origin); `release create` checks the tag is on origin,
 // keeps the release's notes (notes-<tag>) and, on tooling, "publishes" the
 // version to the fake registry. A pull request is pr-<branch> (its URL) with
-// .body, .base and .draft beside it; `pr list` answers as JSON, `pr ready`
+// .body, .base, .draft and, once a human closes it, .state (CLOSED) beside
+// it; `pr list` answers as JSON, `pr ready`
 // (--undo) sets .draft, and `api repos/{owner}/{repo}/pulls/<n> --method
 // PATCH -f body=…` rewrites .body, and `api …/pulls/<n>/requested_reviewers
 // --method POST -f reviewers[]=…` appends the logins to .reviewers. Knobs:
@@ -26,6 +27,8 @@
 //   FAKE_GH_MUTABLE=1                 releases are created mutable
 //   FAKE_GH_CREATE_FAIL=<repo>        `gh release create` fails in that repo
 //   FAKE_GH_REVIEW_FAIL=1             a review request fails
+//   FAKE_GH_PR_CREATE_FAIL=1          `gh pr create` fails
+//   FAKE_GH_PR_LIST_FAIL=1            `gh pr list` fails
 // `api repos/<o>/<r>/releases` lists that repo's releases as "<tag> <date>",
 // the date from `versionCut` (default: 2026-01-01, the fixture's epoch).
 // Fake npm: `npm view <pkg>@<v> version` answers once tooling's release of
@@ -190,7 +193,7 @@ echo "gh[$repo] $*" >> "$FAKE_LOG"
 dir="$FAKE_FORGE/$repo"; mkdir -p "$dir"
 arg() { local k="$1"; shift; while [ $# -gt 0 ]; do [ "$1" = "$k" ] && { echo "$2"; return; }; shift; done; }
 has() { local k="$1"; shift; for a in "$@"; do [ "$a" = "$k" ] && { echo true; return; }; done; echo false; }
-prs() { for f in "$dir"/pr-*; do case "$f" in *.body|*.base|*.draft|*.reviewers) ;; *) [ -f "$f" ] && echo "$f" ;; esac; done; }
+prs() { for f in "$dir"/pr-*; do case "$f" in *.body|*.base|*.draft|*.reviewers|*.state) ;; *) [ -f "$f" ] && echo "$f" ;; esac; done; }
 # \`-R <owner>/<repo>\` names the repo whatever the directory.
 named="$(arg -R "$@")"; [ -z "$named" ] || { repo="\${named##*/}"; dir="$FAKE_FORGE/$repo"; mkdir -p "$dir"; }
 case "$1 $2" in
@@ -217,9 +220,11 @@ case "$1 $2" in
     esac ;;
   "pr view") for f in $(prs); do [ "$(cat "$f")" = "$3" ] && cat "$f.body"; done; true ;;
   "pr list")
+    [ -z "\${FAKE_GH_PR_LIST_FAIL:-}" ] || { echo "fake gh: HTTP 502 on purpose" >&2; exit 1; }
     f="$dir/pr-$(arg --head "$@" | tr / -)"
-    if [ -f "$f" ]; then printf '[{"url":"%s","number":%s,"isDraft":%s}]\n' "$(cat "$f")" "$(sed 's|.*/||' "$f")" "$(cat "$f.draft")"; else echo '[]'; fi ;;
+    if [ -f "$f" ]; then printf '[{"url":"%s","number":%s,"isDraft":%s,"state":"%s"}]\n' "$(cat "$f")" "$(sed 's|.*/||' "$f")" "$(cat "$f.draft")" "$(cat "$f.state" 2>/dev/null || echo OPEN)"; else echo '[]'; fi ;;
   "pr create")
+    [ -z "\${FAKE_GH_PR_CREATE_FAIL:-}" ] || { echo "fake gh: pr create failed on purpose" >&2; exit 1; }
     head="$(arg --head "$@")"; f="$dir/pr-$(echo "$head" | tr / -)"
     [ ! -f "$f" ] || { echo "a pull request for $head already exists" >&2; exit 1; }
     echo "https://forge/$repo/pull/$(( $(prs | wc -l) + 1 ))" > "$f"
@@ -1675,6 +1680,57 @@ test('update: a pending minor rests inside the interval; past it the newest is t
   assert.deepEqual(due.result?.resting, []);
 });
 
+test('update: a version branch on origin with no pull request gets one from a later run; a closed one stays closed', async () => {
+  fixture('update-dead-end');
+  versionCut('0.2.0');
+  const web = join(WS, 'acme/web');
+  process.env.FAKE_COPIER_CONFLICT = 'apps/site';
+  process.env.FAKE_GH_PR_CREATE_FAIL = '1';
+  const first = await runUpdate({ yes: true }, { repo: web, reviewers: ['carol'] });
+  delete process.env.FAKE_COPIER_CONFLICT;
+  delete process.env.FAKE_GH_PR_CREATE_FAIL;
+  assert.equal(first.error, undefined, first.out);
+  assert.ok(has(first.out, '✗ FAILED — pull request: fake gh: pr create failed on purpose'), first.out);
+  assert.ok(first.result?.failed.includes('web'), 'the run needs a human');
+  assert.throws(() => pull('acme-web', '0.2.0'), 'no pull request');
+  const tip = git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0');
+
+  const second = await runUpdate({ yes: true }, { repo: web, reviewers: ['carol'] });
+  assert.equal(second.error, undefined, second.out);
+  assert.ok(has(second.out, 'web: plexus/0.2.0 is on origin with no pull request — opening it as a draft'), second.out);
+  assert.equal(pull('acme-web', '0.2.0'), 'https://forge/acme-web/pull/1');
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'a draft, by the detector');
+  assert.match(
+    pull('acme-web', '0.2.0', '.body'),
+    /^- Files that hold conflict markers: `apps\/site\/template-owned\.txt`\.$/m,
+  );
+  assert.match(pull('acme-web', '0.2.0', '.body'), /a later run found the branch on origin with no pull request/);
+  assert.equal(pull('acme-web', '0.2.0', '.reviewers'), 'carol', 'with the review request');
+  assert.deepEqual(second.result?.pulls, ['https://forge/acme-web/pull/1']);
+  assert.deepEqual(second.result?.conflicted, ['web/apps/site/template-owned.txt']);
+  assert.equal(git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0'), tip, 'the branch is where it was');
+
+  // A human closes it: that is their decision, and it stays closed.
+  writeFileSync(join(FORGE(), 'acme-web', 'pr-plexus-0.2.0.state'), 'CLOSED\n');
+  const third = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(third.error, undefined, third.out);
+  assert.ok(has(third.out, 'its pull request closed (https://forge/acme-web/pull/1) — nothing to do'), third.out);
+  const webCreates = () => fakeLog().filter((l) => has(l, 'gh[acme-web] pr create')).length;
+  assert.equal(webCreates(), 2, 'not opened again');
+  assert.deepEqual(third.result?.pulls, []);
+  assert.deepEqual(third.result?.failed, []);
+
+  // A forge that cannot be asked is a failure, never "no pull request".
+  process.env.FAKE_GH_PR_LIST_FAIL = '1';
+  const unasked = await runUpdate({ yes: true }, { repo: web });
+  const many = await runRecursive({ yes: true }, { dir: join(WS, 'acme'), to: '0.2.0' });
+  delete process.env.FAKE_GH_PR_LIST_FAIL;
+  assert.match(unasked.error ?? '', /fake gh: HTTP 502 on purpose|gh pr list/, unasked.out);
+  assert.ok(many.result?.failed.includes('web'), many.out);
+  assert.equal(webCreates(), 2, 'nothing opened on a failed list');
+  assert.ok(many.result?.failed.includes('platform'), 'the repo that opened one could not list it, and says so');
+});
+
 test('update: the review is asked of the users pr_reviewers names, or --reviewer instead, once, draft or not', async () => {
   fixture('update-reviewers');
   versionCut('0.2.0');
@@ -1728,7 +1784,7 @@ test('update: a refused review request leaves the pull request open and the run 
   );
   delete process.env.FAKE_GH_REVIEW_FAIL;
   assert.equal(error, undefined, out);
-  assert.ok(has(out, '✗ FAILED — review request from dave: fake gh: a reviewer is not a collaborator'), out);
+  assert.ok(has(out, '✗ FAILED — platform: review request from dave: fake gh: a reviewer is not a collaborator'), out);
   assert.deepEqual(result?.pulls, ['https://forge/acme-platform/pull/1']);
   assert.deepEqual(result?.mergeable, ['https://forge/acme-platform/pull/1'], 'the pull request itself is fine');
   assert.deepEqual(result?.failed, ['platform (review request)']);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Context } from './context.ts';
-import { needsAHand, openPullOf, pullBody } from './pull.ts';
+import { needsAHand, pullBody, pullOf } from './pull.ts';
 import { fakeIo } from './testing/fakeIo.ts';
 
 const base = { version: '0.2.0', sites: ['.', 'apps/site'], marked: [], note: 'Opened by `plx update`.' };
@@ -36,19 +36,37 @@ test('a body that needs a hand opens with every reason, the lockfile with what t
     assert.equal(needsAHand({ ...base, ...one }), true, JSON.stringify(one));
 });
 
-test('the open pull request is read from the forge as JSON: its URL, number and draft state', async () => {
+test('the pull request is read from the forge as JSON in any state, the open one first; a failure to ask is an error', async () => {
   const consumer = { path: '/r', rel: 'r', branch: 'develop', sites: [] };
-  const listed = (out: string) =>
+  const asked: string[][] = [];
+  const listed = (out: string | undefined) =>
     new Context(
       {},
-      fakeIo({}, () => undefined, { gh: (_cwd, args) => (args.includes('list') ? out : undefined) }),
+      fakeIo({}, () => undefined, {
+        gh: (_cwd, args) => {
+          asked.push(args);
+          return out;
+        },
+      }),
     );
-  assert.deepEqual(
-    await openPullOf(listed('[{"url":"https://forge/o/r/pull/3","number":3,"isDraft":true}]'), consumer, '/r', '0.2.0'),
-    { url: 'https://forge/o/r/pull/3', number: 3, draft: true },
-  );
-  assert.equal(await openPullOf(listed('[]'), consumer, '/r', '0.2.0'), undefined);
-  assert.equal(await openPullOf(listed('not json'), consumer, '/r', '0.2.0'), undefined);
+  const closed = '{"url":"https://forge/o/r/pull/2","number":2,"isDraft":false,"state":"CLOSED"}';
+  const open = '{"url":"https://forge/o/r/pull/3","number":3,"isDraft":true,"state":"OPEN"}';
+  assert.deepEqual(await pullOf(listed(`[${closed},${open}]`), consumer, '/r', '0.2.0'), {
+    url: 'https://forge/o/r/pull/3',
+    number: 3,
+    draft: true,
+    open: true,
+  });
+  assert.ok(asked[0]?.includes('all'), 'every state is asked for');
+  assert.deepEqual(await pullOf(listed(`[${closed}]`), consumer, '/r', '0.2.0'), {
+    url: 'https://forge/o/r/pull/2',
+    number: 2,
+    draft: false,
+    open: false,
+  });
+  assert.equal(await pullOf(listed('[]'), consumer, '/r', '0.2.0'), undefined);
+  await assert.rejects(pullOf(listed('not json'), consumer, '/r', '0.2.0'), /gave no JSON/);
+  await assert.rejects(pullOf(listed(undefined), consumer, '/r', '0.2.0'), /fake gh fails/);
 });
 
 test('reviewers: a comma-separated string of user logins, blank for none; a team is refused', async () => {

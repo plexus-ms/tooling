@@ -74,6 +74,7 @@ export function summarize(
         if (o.failed !== undefined) s.failed.push(o.repo);
         if (o.pull) s.pulls.push(o.pull);
         if (o.pull && o.mergeable) s.mergeable.push(o.pull);
+        if (o.review && 'failed' in o.review) s.failed.push(`${o.repo} (review request)`);
         break;
       case 'taken': {
         const t = o.taken;

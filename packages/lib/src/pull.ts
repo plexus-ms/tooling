@@ -10,7 +10,11 @@
 // One that needs none is ready for review.
 //
 // The branch is never moved by any run, and plx never pushes to it again: it
-// is the human's from the moment it is on origin. A later run, scheduled or
+// is the human's from the moment it is on origin. A later run that finds it
+// with no pull request in any state (opening failed after the push) opens
+// the pull request then (`openLate`), a draft by the detector, with the
+// review request; a closed or merged one is left as it is, a human's
+// decision. A later run, scheduled or
 // manual, reads it as origin has it: its tip's hash from `git ls-remote`, and
 // that commit fetched by hash with no ref, no FETCH_HEAD and no
 // remote-tracking ref written, so no checkout and no ref of the repo is
@@ -76,33 +80,78 @@ export const requestReviews = (number: number, logins: string[], cwd: string) =>
     { cwd },
   );
 
-/** An open pull request as the forge lists it. */
-export interface OpenPull {
+/** The version's pull request as the forge lists it, in any state. */
+export interface Pull {
   url: string;
   number: number;
   draft: boolean;
+  /** Open, or closed or merged by a human: a closed one stays closed. */
+  open: boolean;
 }
 
-/** The open pull request from the version branch against the consumer's branch, if any. */
-export async function openPullOf(
+/**
+ * The pull request from the version branch against the consumer's branch, in
+ * any state: the open one if there is one, else the newest. Undefined when
+ * there is none; a forge that cannot be asked is an error, never "none".
+ */
+export async function pullOf(
   ctx: Context,
   consumer: Consumer,
   dir: string,
   version: string,
-): Promise<OpenPull | undefined> {
-  const args = ['pr', 'list', '--head', versionBranch(version), '--base', consumer.branch, '--state', 'open'];
-  const out = await ctx.read('gh', [...args, '--json', 'url,number,isDraft'], { cwd: dir }).catch(() => '');
+): Promise<Pull | undefined> {
+  const args = ['pr', 'list', '--head', versionBranch(version), '--base', consumer.branch, '--state', 'all'];
+  const out = await ctx.read('gh', [...args, '--json', 'url,number,isDraft,state'], { cwd: dir });
   let listed: unknown;
   try {
-    listed = JSON.parse(out || '[]');
+    listed = JSON.parse(out);
   } catch {
-    return undefined;
+    throw new Error(`gh pr list gave no JSON for ${versionBranch(version)}`);
   }
-  const first: unknown = Array.isArray(listed) ? listed[0] : undefined;
-  if (typeof first !== 'object' || first === null) return undefined;
-  const { url, number, isDraft } = first as Record<string, unknown>;
-  if (typeof url !== 'string' || typeof number !== 'number') return undefined;
-  return { url, number, draft: isDraft === true };
+  if (!Array.isArray(listed)) throw new Error(`gh pr list gave no list for ${versionBranch(version)}`);
+  const pulls = listed.flatMap((p: unknown) => {
+    if (typeof p !== 'object' || p === null) return [];
+    const { url, number, isDraft, state } = p as Record<string, unknown>;
+    if (typeof url !== 'string' || typeof number !== 'number') return [];
+    return [{ url, number, draft: isDraft === true, open: state === 'OPEN' }];
+  });
+  return pulls.find((p) => p.open) ?? pulls[0];
+}
+
+/** What asking for reviews came to. */
+export type Review = { requested: string[] } | { failed: string };
+
+/** Ask the users for a review of the pull request, once; none asked, nothing done. */
+export async function askForReviews(
+  ctx: Context,
+  name: string,
+  pull: Pull,
+  reviewers: string[],
+  cwd: string,
+): Promise<Review | undefined> {
+  if (reviewers.length === 0) return undefined;
+  try {
+    await ctx.apply([requestReviews(pull.number, reviewers, cwd)]);
+    return { requested: reviewers };
+  } catch (error) {
+    const why = detailOf(error);
+    ctx.say(`  ✗ FAILED — ${name}: review request from ${reviewers.join(', ')}${why ? `: ${why}` : ''}`);
+    return { failed: why || 'the forge refused it' };
+  }
+}
+
+/**
+ * The tip of the version branch as origin has it, its objects fetched by hash
+ * with no ref, no FETCH_HEAD and no remote-tracking ref written.
+ */
+async function tipOf(ctx: Context, repo: string, branch: string): Promise<string> {
+  const tip = (await ctx.read('git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], { cwd: repo }))
+    .split('\t')[0]
+    ?.trim();
+  if (!tip) throw new Error(`origin no longer has ${branch}`);
+  // By hash, with no refmap: only the objects arrive; a fetch by name would move origin's remote-tracking ref.
+  await ctx.read('git', ['fetch', '--quiet', '--no-write-fetch-head', '--refmap=', 'origin', tip], { cwd: repo });
+  return tip;
 }
 
 /** What a pull request's body says, as data. */
@@ -176,16 +225,10 @@ export interface Revisited {
  * present state, ready or draft by the markers. Under a dry run it changes
  * nothing and says what it would do.
  */
-export async function revisit(ctx: Context, consumer: Consumer, pull: OpenPull, version: string): Promise<Revisited> {
+export async function revisit(ctx: Context, consumer: Consumer, pull: Pull, version: string): Promise<Revisited> {
   const { path: repo, rel: name } = consumer;
   const branch = versionBranch(version);
-  const tip = (await ctx.read('git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], { cwd: repo }))
-    .split('\t')[0]
-    ?.trim();
-  if (!tip) throw new Error(`origin no longer has ${branch}`);
-  // By hash, with no refmap: only the objects arrive; a fetch by name would move origin's remote-tracking ref.
-  await ctx.read('git', ['fetch', '--quiet', '--no-write-fetch-head', '--refmap=', 'origin', tip], { cwd: repo });
-  const marked = await filesWithConflictMarkers(ctx, repo, tip);
+  const marked = await filesWithConflictMarkers(ctx, repo, await tipOf(ctx, repo, branch));
   const ready = marked.length === 0;
   const sites = consumer.sites.map((s) => relative(consumer.path, s.path) || '.');
   const body = pullBody({ version, sites, marked, note: REVISITED });
@@ -210,4 +253,67 @@ export async function revisit(ctx: Context, consumer: Consumer, pull: OpenPull, 
   // A dry run left the state as it was.
   const draft = ctx.dryRun ? pull.draft : !ready;
   return { url: pull.url, marked, mergeable: ready && !draft };
+}
+
+/** The last line of a body a later run opened. */
+const OPENED_LATE = 'Opened by `plx update`: a later run found the branch on origin with no pull request.';
+
+/** What a later run that opened the missing pull request came to. */
+export interface OpenedLate {
+  /** Undefined under a dry run, or when the forge did not list what it opened. */
+  pull?: Pull;
+  marked: string[];
+  review?: Review;
+  failed?: string;
+}
+
+/**
+ * A later run that finds the version branch on origin and no pull request for
+ * it in any state opens it: the branch read as origin has it, a draft when a
+ * tracked file holds a conflict marker, with the review request.
+ */
+export async function openLate(
+  ctx: Context,
+  consumer: Consumer,
+  version: string,
+  reviewers: string[],
+): Promise<OpenedLate> {
+  const { path: repo, rel: name } = consumer;
+  const branch = versionBranch(version);
+  const marked = await filesWithConflictMarkers(ctx, repo, await tipOf(ctx, repo, branch));
+  const sites = consumer.sites.map((s) => relative(consumer.path, s.path) || '.');
+  const state: PullState = { version, sites, marked, note: OPENED_LATE };
+  const draft = needsAHand(state);
+  ctx.say(`• ${name}: ${branch} is on origin with no pull request — opening it${draft ? ' as a draft' : ''}`);
+  try {
+    await ctx.apply([
+      run(
+        'gh',
+        [
+          'pr',
+          'create',
+          ...(draft ? ['--draft'] : []),
+          '--base',
+          consumer.branch,
+          '--head',
+          branch,
+          '--title',
+          `chore: Plexus ${version}`,
+          '--body',
+          pullBody(state),
+        ],
+        { cwd: repo },
+      ),
+    ]);
+  } catch (error) {
+    const why = detailOf(error);
+    ctx.say(`  ✗ FAILED — pull request${why ? `: ${why}` : ''}`);
+    return { marked, failed: `pull request: ${why}` };
+  }
+  if (ctx.dryRun) return { marked };
+  const pull = await pullOf(ctx, consumer, repo, version);
+  if (!pull) return { marked, failed: 'pull request: the forge did not list it after opening it' };
+  ctx.say(`• ${name}: ${draft ? 'draft ' : ''}pull request opened: ${pull.url}`);
+  const review = await askForReviews(ctx, name, pull, reviewers, repo);
+  return { pull, marked, ...(review ? { review } : {}) };
 }

@@ -33,6 +33,8 @@
 // deleting the branch is how a pull is redone. With its pull request open, the
 // run looks at it again (pull.ts): the branch read as origin has it, the body
 // rewritten to what still needs a hand, ready once no conflict marker remains.
+// With no pull request in any state (opening it failed after the push), the
+// run opens it then; a closed or merged one stays as a human left it.
 // A repo whose every site already records the newest version does nothing at
 // all.
 //
@@ -53,7 +55,7 @@ import { run } from './effects.ts';
 import { detailOf, ExecError } from './io.ts';
 import { maxAgeOf, type Need, needOf, type Release } from './need.ts';
 import { overview } from './overview.ts';
-import { openPullOf, reviewersOf, revisit, versionBranch } from './pull.ts';
+import { openLate, pullOf, type Review, reviewersOf, revisit, versionBranch } from './pull.ts';
 import { type Taken, takeVersion } from './take.ts';
 import { TEMPLATES, templateSource } from './templates.ts';
 import { COMPENDIUM, compareVersions, isPlexusVersion, preflightForge, UsageError } from './version.ts';
@@ -91,16 +93,17 @@ export interface Known {
  * would take. `current`: every site records it already. `skipped`: left
  * untouched, with why. `resting`: needs no version yet (need.ts), with what
  * would end the rest. `found`: its version branch is on origin already, with
- * the pull request found there, if any, the files of the branch that hold
- * conflict markers, whether it is ready to merge, and why looking at it
- * failed, if it did.
+ * the pull request found or, when there was none, opened there, the files of
+ * the branch that hold conflict markers, whether it is ready to merge, why
+ * looking at it failed, if it did, and the review request of one opened.
+ * A closed or merged one is no pull to list.
  * `taken`: it took the version. `failed`: it could not be worked on, with why.
  */
 export type Outcome = { repo: string; version: string } & (
   | { kind: 'current' }
   | { kind: 'skipped'; reason: string }
   | { kind: 'resting'; reason: string }
-  | { kind: 'found'; pull?: string; marked: string[]; mergeable: boolean; failed?: string }
+  | { kind: 'found'; pull?: string; marked: string[]; mergeable: boolean; failed?: string; review?: Review }
   | { kind: 'taken'; taken: Taken }
   | { kind: 'failed'; detail: string }
 );
@@ -160,10 +163,31 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
 
   const branch = versionBranch(version);
   if (await onOrigin(ctx, repo, branch)) {
-    const pull = await openPullOf(ctx, consumer, repo, version);
+    // A forge that cannot be asked fails the run here: it is never taken for "no pull request".
+    const pull = await pullOf(ctx, consumer, repo, version);
     if (!pull) {
+      try {
+        const late = await openLate(ctx, consumer, version, reviewers);
+        if (late.failed) ctx.say(`  ✗ FAILED — ${late.failed}`);
+        return {
+          repo: name,
+          version,
+          kind: 'found',
+          ...(late.pull ? { pull: late.pull.url } : {}),
+          marked: late.marked,
+          mergeable: late.pull !== undefined && !late.pull.draft && late.marked.length === 0,
+          ...(late.failed ? { failed: late.failed } : {}),
+          ...(late.review ? { review: late.review } : {}),
+        };
+      } catch (error) {
+        const why = detailOf(error);
+        ctx.say(`  ✗ FAILED — ${branch} as origin has it${why ? `: ${why}` : ''}`);
+        return { repo: name, version, kind: 'found', marked: [], mergeable: false, failed: why };
+      }
+    }
+    if (!pull.open) {
       ctx.say(
-        `• ${name}: ${branch} is already on origin, with no open pull request — nothing to do; delete the branch to pull the version again`,
+        `• ${name}: ${branch} is already on origin, its pull request closed (${pull.url}) — nothing to do; delete the branch to pull the version again`,
       );
       return { repo: name, version, kind: 'found', marked: [], mergeable: false };
     }
