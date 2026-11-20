@@ -29,6 +29,7 @@
 //   FAKE_GH_REVIEW_FAIL=1             a review request fails
 //   FAKE_GH_PR_CREATE_FAIL=1          `gh pr create` fails
 //   FAKE_GH_PR_LIST_FAIL=1            `gh pr list` fails
+//   FAKE_GH_USER=<login>              who `gh pr create` opens as (default plx-bot)
 // `api repos/<o>/<r>/releases` lists that repo's releases as "<tag> <date>",
 // the date from `versionCut` (default: 2026-01-01, the fixture's epoch).
 // Fake npm: `npm view <pkg>@<v> version` answers once tooling's release of
@@ -193,7 +194,7 @@ echo "gh[$repo] $*" >> "$FAKE_LOG"
 dir="$FAKE_FORGE/$repo"; mkdir -p "$dir"
 arg() { local k="$1"; shift; while [ $# -gt 0 ]; do [ "$1" = "$k" ] && { echo "$2"; return; }; shift; done; }
 has() { local k="$1"; shift; for a in "$@"; do [ "$a" = "$k" ] && { echo true; return; }; done; echo false; }
-prs() { for f in "$dir"/pr-*; do case "$f" in *.body|*.base|*.draft|*.reviewers|*.state) ;; *) [ -f "$f" ] && echo "$f" ;; esac; done; }
+prs() { for f in "$dir"/pr-*; do case "$f" in *.body|*.base|*.draft|*.reviewers|*.state|*.author) ;; *) [ -f "$f" ] && echo "$f" ;; esac; done; }
 # \`-R <owner>/<repo>\` names the repo whatever the directory.
 named="$(arg -R "$@")"; [ -z "$named" ] || { repo="\${named##*/}"; dir="$FAKE_FORGE/$repo"; mkdir -p "$dir"; }
 case "$1 $2" in
@@ -222,13 +223,13 @@ case "$1 $2" in
   "pr list")
     [ -z "\${FAKE_GH_PR_LIST_FAIL:-}" ] || { echo "fake gh: HTTP 502 on purpose" >&2; exit 1; }
     f="$dir/pr-$(arg --head "$@" | tr / -)"
-    if [ -f "$f" ]; then printf '[{"url":"%s","number":%s,"isDraft":%s,"state":"%s"}]\n' "$(cat "$f")" "$(sed 's|.*/||' "$f")" "$(cat "$f.draft")" "$(cat "$f.state" 2>/dev/null || echo OPEN)"; else echo '[]'; fi ;;
+    if [ -f "$f" ]; then printf '[{"url":"%s","number":%s,"isDraft":%s,"state":"%s","author":{"login":"%s"}}]\n' "$(cat "$f")" "$(sed 's|.*/||' "$f")" "$(cat "$f.draft")" "$(cat "$f.state" 2>/dev/null || echo OPEN)" "$(cat "$f.author")"; else echo '[]'; fi ;;
   "pr create")
     [ -z "\${FAKE_GH_PR_CREATE_FAIL:-}" ] || { echo "fake gh: pr create failed on purpose" >&2; exit 1; }
     head="$(arg --head "$@")"; f="$dir/pr-$(echo "$head" | tr / -)"
     [ ! -f "$f" ] || { echo "a pull request for $head already exists" >&2; exit 1; }
     echo "https://forge/$repo/pull/$(( $(prs | wc -l) + 1 ))" > "$f"
-    has --draft "$@" > "$f.draft"
+    has --draft "$@" > "$f.draft"; echo "\${FAKE_GH_USER:-plx-bot}" > "$f.author"
     arg --body "$@" > "$f.body"; arg --base "$@" > "$f.base"; cat "$f" ;;
   "pr ready") for f in $(prs); do [ "$(cat "$f")" = "$3" ] && has --undo "$@" > "$f.draft"; done; true ;;
   *) echo "fake gh: unexpected $*" >&2; exit 1 ;;
@@ -1772,6 +1773,25 @@ test('update: the review is asked of the users pr_reviewers names, or --reviewer
   git(bad, 'push', '--quiet', 'origin', 'main');
   const team = await runUpdate({ yes: true }, { repo: bad, to: '0.2.0' });
   assert.match(team.error ?? '', /the answer pr_reviewers names `acme\/ops`, a team; only users are requested/);
+});
+
+test("update: the pull request's author is left out of the review request, and the run says so", async () => {
+  fixture('update-review-author');
+  versionCut('0.2.0');
+  process.env.FAKE_GH_USER = 'alice';
+  const { result, error, out } = await runUpdate(
+    { yes: true },
+    { repo: join(WS, 'acme/platform'), reviewers: ['Alice', 'bob'] },
+  );
+  const alone = await runUpdate({ yes: true }, { repo: join(WS, 'acme/web'), reviewers: ['alice'] });
+  delete process.env.FAKE_GH_USER;
+  assert.equal(error, undefined, out);
+  assert.ok(has(out, '• platform: alice opened the pull request and is not asked to review it'), out);
+  assert.equal(pull('acme-platform', '0.2.0', '.reviewers'), 'bob');
+  assert.deepEqual(result?.failed, []);
+  assert.equal(alone.error, undefined, alone.out);
+  assert.throws(() => pull('acme-web', '0.2.0', '.reviewers'), 'nobody left to ask, no request');
+  assert.ok(!fakeLog().some((l) => has(l, 'gh[acme-web] api') && has(l, 'requested_reviewers')));
 });
 
 test('update: a refused review request leaves the pull request open and the run nonzero', async () => {

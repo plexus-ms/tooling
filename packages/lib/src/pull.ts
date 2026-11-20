@@ -29,7 +29,8 @@
 // not, from the users the repo's root answers name (`pr_reviewers`, a
 // comma-separated string of GitHub user logins, empty or absent for none), or
 // those `--reviewer` names instead; nothing more when it is marked ready.
-// Users only: a team is refused.
+// Users only: a team is refused. The request is one call for all of them, so
+// the pull request's author is left out of it, and the run says so.
 import { relative } from 'node:path';
 import { filesWithConflictMarkers } from './conflicts.ts';
 import type { Consumer } from './consumers.ts';
@@ -87,6 +88,8 @@ export interface Pull {
   draft: boolean;
   /** Open, or closed or merged by a human: a closed one stays closed. */
   open: boolean;
+  /** Who opened it: the App in CI, a maintainer's own login by hand. */
+  author?: string;
 }
 
 /**
@@ -101,7 +104,7 @@ export async function pullOf(
   version: string,
 ): Promise<Pull | undefined> {
   const args = ['pr', 'list', '--head', versionBranch(version), '--base', consumer.branch, '--state', 'all'];
-  const out = await ctx.read('gh', [...args, '--json', 'url,number,isDraft,state'], { cwd: dir });
+  const out = await ctx.read('gh', [...args, '--json', 'url,number,isDraft,state,author'], { cwd: dir });
   let listed: unknown;
   try {
     listed = JSON.parse(out);
@@ -111,9 +114,18 @@ export async function pullOf(
   if (!Array.isArray(listed)) throw new Error(`gh pr list gave no list for ${versionBranch(version)}`);
   const pulls = listed.flatMap((p: unknown) => {
     if (typeof p !== 'object' || p === null) return [];
-    const { url, number, isDraft, state } = p as Record<string, unknown>;
+    const { url, number, isDraft, state, author } = p as Record<string, unknown>;
     if (typeof url !== 'string' || typeof number !== 'number') return [];
-    return [{ url, number, draft: isDraft === true, open: state === 'OPEN' }];
+    const login = (author as { login?: unknown } | null)?.login;
+    return [
+      {
+        url,
+        number,
+        draft: isDraft === true,
+        open: state === 'OPEN',
+        ...(typeof login === 'string' ? { author: login } : {}),
+      },
+    ];
   });
   return pulls.find((p) => p.open) ?? pulls[0];
 }
@@ -121,14 +133,23 @@ export async function pullOf(
 /** What asking for reviews came to. */
 export type Review = { requested: string[] } | { failed: string };
 
-/** Ask the users for a review of the pull request, once; none asked, nothing done. */
+/**
+ * Ask the users for a review of the pull request, once; none asked, nothing
+ * done. The request is one call for every login, so its author, who opened
+ * it (a maintainer running the verb by hand who is among the reviewers), is
+ * left out first, and the narration says so.
+ */
 export async function askForReviews(
   ctx: Context,
   name: string,
   pull: Pull,
-  reviewers: string[],
+  named: string[],
   cwd: string,
 ): Promise<Review | undefined> {
+  const author = pull.author?.toLowerCase();
+  const reviewers = named.filter((l) => l.toLowerCase() !== author);
+  if (reviewers.length < named.length)
+    ctx.say(`• ${name}: ${pull.author} opened the pull request and is not asked to review it`);
   if (reviewers.length === 0) return undefined;
   try {
     await ctx.apply([requestReviews(pull.number, reviewers, cwd)]);
