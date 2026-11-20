@@ -17,7 +17,7 @@
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Context } from '@plexus-ms/lib';
+import type { Context, Step } from '@plexus-ms/lib';
 import { run, UsageError } from '@plexus-ms/lib';
 import { packageName, turboOf } from './plan.ts';
 import { answers, candidateRef, PREVIOUS_PORT, type Registry } from './registry.ts';
@@ -114,6 +114,15 @@ export function buildArgs(
   ];
 }
 
+/**
+ * The build as a step. BuildKit's output is the job's log, inherited and not
+ * captured: which layers came from the cache and what each step cost is read
+ * there, at every verbosity.
+ */
+export function buildStep(args: string[], env: NodeJS.ProcessEnv): Step {
+  return run('docker', args, { env, interactive: true });
+}
+
 /** The builder, created where the machine has none of the name yet. */
 async function ensureBuilder(ctx: Context, name: string): Promise<void> {
   if (!ctx.dryRun) {
@@ -174,7 +183,7 @@ export async function build(ctx: Context, options: BuildOptions): Promise<Build>
     ctx.say(`build: no previous-week registry on ${PREVIOUS_REGISTRY}`);
   const metadataFile = join(out, 'metadata.json');
   t = Date.now();
-  await ctx.apply([run('docker', buildArgs(options, context, metadataFile, previousAnswers), { env })]);
+  await ctx.apply([buildStep(buildArgs(options, context, metadataFile, previousAnswers), env)]);
   const buildSeconds = Math.round((Date.now() - t) / 1000);
   ctx.say(`build: build${options.noCache ? ' no-cache' : ''} ${buildSeconds}s`);
 

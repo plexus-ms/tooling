@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildArgs, tagsOf } from './build.ts';
+import { buildArgs, buildStep, tagsOf } from './build.ts';
 
 const options = { app: 'website', hash: '0f2a', sha: 'abc', encryptionKey: 'k', registry: { kind: 'own' } as const };
 
@@ -38,4 +38,11 @@ test('the private registry’s npmrc is a secret of the build only where the job
   assert.doesNotMatch(buildArgs(options, '/c', '/m', false).join(' '), /id=npmrc/);
   const args = buildArgs({ ...options, npmrc: '/tmp/npmrc' }, '/c', '/m', false).join(' ');
   assert.match(args, /--secret id=npmrc,src=\/tmp\/npmrc/);
+});
+
+test('the build passes the output of BuildKit through to the log at every verbosity', () => {
+  const step = buildStep(buildArgs(options, '/c', '/m', false), { BUILDX_BUILDER: 'ci' });
+  assert.equal(step.kind, 'run');
+  assert.equal(step.kind === 'run' && step.interactive, true);
+  assert.match(buildArgs(options, '/c', '/m', false).join(' '), /--progress plain/);
 });
