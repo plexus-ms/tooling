@@ -27,9 +27,10 @@
 // not known then, so the body asks for `pnpm install` and the lockfile
 // wherever the tip holds one and the pull request is not ready, or the branch
 // holds commits beyond the one plx made (somebody resolved by hand); plx's
-// commit is told from the others by the count of commits since the branch the
-// version lands on. Whether the pull request is ready to merge is read from
-// its draft state and the tip, never from its body.
+// commit is told from the others by the count of commits the forge says the
+// branch is ahead of the one the version lands on. Whether the pull request is
+// ready to merge is read from its draft state and the tip, never from its
+// body.
 //
 // A later run that finds the branch with no pull request in any state
 // (opening failed after the push) opens the pull request then (`openLate`),
@@ -283,10 +284,37 @@ export async function tipOnOrigin(ctx: Context, repo: string, branch: string): P
   return tip;
 }
 
-/** The commit's objects, fetched by hash with no ref, no FETCH_HEAD and no remote-tracking ref written. */
+/**
+ * The commit's objects, fetched by hash with no ref, no FETCH_HEAD and no
+ * remote-tracking ref written. A later run needs the tip's tree only: in a
+ * shallow clone (CI's checkout) the tip comes alone, never the branch's
+ * history; a full clone is never made shallow by it.
+ */
 async function fetchTip(ctx: Context, repo: string, tip: string): Promise<void> {
+  const shallow = (await ctx.read('git', ['rev-parse', '--is-shallow-repository'], { cwd: repo })).trim() === 'true';
   // By hash, with no refmap: only the objects arrive; a fetch by name would move origin's remote-tracking ref.
-  await ctx.read('git', ['fetch', '--quiet', '--no-write-fetch-head', '--refmap=', 'origin', tip], { cwd: repo });
+  await ctx.read(
+    'git',
+    ['fetch', '--quiet', '--no-write-fetch-head', '--refmap=', ...(shallow ? ['--depth', '1'] : []), 'origin', tip],
+    { cwd: repo },
+  );
+}
+
+/**
+ * How many commits the tip is ahead of the branch it is to land on, as the
+ * forge counts them (`ahead_by` of its compare, from their merge base, the
+ * count a pull request lists), never from local history, which a shallow or
+ * single-branch clone does not hold.
+ */
+async function aheadOf(ctx: Context, consumer: Consumer, tip: string): Promise<number> {
+  const out = await ctx.read(
+    'gh',
+    ['api', `repos/{owner}/{repo}/compare/${consumer.branch}...${tip}`, '--jq', '.ahead_by'],
+    { cwd: consumer.path },
+  );
+  const ahead = Number(out.trim());
+  if (out.trim() === '' || !Number.isInteger(ahead)) throw new Error(`the forge gave no count of commits for ${tip}`);
+  return ahead;
 }
 
 /** What a pull request's body says, as data. */
@@ -378,8 +406,7 @@ interface AtTip {
  * files, and its sites, every answers file it holds that names a template,
  * each at the version or not. The lockfile is asked for where the tip holds
  * one and the pull request is not ready, or holds commits beyond the one plx
- * made (somebody resolved by hand), counted from the branch the version lands
- * on.
+ * made (somebody resolved by hand), as the forge counts them (`aheadOf`).
  */
 async function readTip(ctx: Context, consumer: Consumer, version: string, tip: string): Promise<AtTip> {
   const repo = consumer.path;
@@ -403,12 +430,9 @@ async function readTip(ctx: Context, consumer: Consumer, version: string, tip: s
     if (answers?.commit !== version) behind.push(dirname(file));
   }
   const ready = marked.length === 0 && behind.length === 0;
-  const beyond = Number(
-    (
-      await ctx.read('git', ['rev-list', '--count', `refs/remotes/origin/${consumer.branch}..${tip}`], { cwd: repo })
-    ).trim(),
-  );
-  return { tip, sites, marked, behind, ready, lockfile: files.includes('pnpm-lock.yaml') && (!ready || beyond > 1) };
+  // Somebody pushed to the branch: more commits than the one plx made. Asked only when it decides something.
+  const lockfile = files.includes('pnpm-lock.yaml') && (!ready || (await aheadOf(ctx, consumer, tip)) > 1);
+  return { tip, sites, marked, behind, ready, lockfile };
 }
 
 /** What a later run found at the tip, as the run names it. */

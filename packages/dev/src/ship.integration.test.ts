@@ -22,7 +22,8 @@
 // .body, .base, .draft and, once a human closes it, .state (CLOSED) beside
 // it; `pr list` answers as JSON, `pr ready`
 // (--undo) sets .draft, and `api repos/{owner}/{repo}/pulls/<n> --method
-// PATCH -f body=…` rewrites .body, and `api …/pulls/<n>/requested_reviewers
+// PATCH -f body=…` rewrites .body, `api …/compare/<base>...<sha> --jq .ahead_by`
+// counts in the bare remote, and `api …/pulls/<n>/requested_reviewers
 // --method POST -f reviewers[]=…` appends the logins to .reviewers. Knobs:
 //   FAKE_GH_LOGGED_OUT=1              `gh auth status` fails
 //   FAKE_GH_MUTABLE=1                 releases are created mutable
@@ -214,6 +215,9 @@ case "$1 $2" in
   "api "*)
     case "$2" in
       *"/releases/tags/"*) cat "$dir/release-\${2##*/}" ;;
+      *"/compare/"*)
+        # The forge counts from the merge base, in the repository itself, whatever the clone holds.
+        range="\${2##*/compare/}"; git -C "$(git remote get-url origin | sed 's|^file://||')" rev-list --count "\${range%%...*}..\${range##*...}" ;;
       *"/requested_reviewers")
         [ -z "\${FAKE_GH_REVIEW_FAIL:-}" ] || { echo "fake gh: a reviewer is not a collaborator" >&2; exit 1; }
         n="\${2%/requested_reviewers}"; n="\${n##*/}"
@@ -1805,6 +1809,53 @@ test("update: plx's pull request is one commit, scratch ones folded in; a later 
   assert.doesNotMatch(pull('acme-web', '0.2.0', '.body'), /pnpm install/, 'ready, and nobody but plx committed');
   assert.ok(!fakeLog().some((l) => has(l, 'pr ready')), 'ready already');
   assert.deepEqual(second.result?.mergeable, ['https://forge/acme-web/pull/1']);
+});
+
+test("update: in CI's shallow checkout a later run fetches the tip alone and asks the forge how far ahead it is", async () => {
+  fixture('update-shallow');
+  versionCut('0.2.0');
+  const web = join(WS, 'acme/web');
+  put(join(web, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+  commit(web, 'lockfile');
+  git(web, 'push', '--quiet', 'origin', 'develop');
+  const first = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(first.error, undefined, first.out);
+  const url = 'https://forge/acme-web/pull/1';
+  const tip = git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0');
+
+  // The branch the version lands on moves on, and CI checks it out at depth 1, that branch alone.
+  put(join(web, 'README.md'), 'later\n');
+  commit(web, 'develop moves on');
+  git(web, 'push', '--quiet', 'origin', 'develop');
+  const ci = join(WS, 'ci/web');
+  git(
+    WS,
+    'clone',
+    '--quiet',
+    '--depth',
+    '1',
+    '--single-branch',
+    '--branch',
+    'develop',
+    `file://${remote('acme-web')}`,
+    ci,
+  );
+  const later = await runUpdate({ yes: true }, { repo: ci, name: 'web' });
+  assert.equal(later.error, undefined, later.out);
+  assert.match(pull('acme-web', '0.2.0', '.body'), /^Ready for review: /);
+  assert.doesNotMatch(pull('acme-web', '0.2.0', '.body'), /pnpm install/, 'one commit ahead, as the forge counts');
+  assert.ok(
+    fakeLog().some((l) => has(l, `compare/develop...${tip}`)),
+    'the count is asked of the forge',
+  );
+  assert.deepEqual(later.result?.mergeable, [url]);
+  assert.equal(git(ci, 'rev-list', '--count', tip), '1', "the tip alone, not the branch's history");
+  assert.equal(git(ci, 'for-each-ref', '--format=%(refname)'), 'refs/heads/develop\nrefs/remotes/origin/develop');
+
+  // In a full clone the same run makes nothing shallow.
+  const again = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(again.error, undefined, again.out);
+  assert.equal(git(web, 'rev-parse', '--is-shallow-repository'), 'false');
 });
 
 test('update: a pending minor rests inside the interval; past it the newest is taken, the versions skipped in one pull', async () => {
