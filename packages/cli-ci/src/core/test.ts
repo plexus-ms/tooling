@@ -117,7 +117,7 @@ export async function test(ctx: Context, options: TestOptions): Promise<TestResu
     await ctx.apply([compose(['--profile', 'migrate', 'down', '--volumes', '--remove-orphans', '--timeout', '10'])]);
   }
 
-  // The tag goes on the manifest that was tested, copied into this month's
+  // The tag goes on the manifest that was tested, copied into this week's
   // registry when the candidate came from the previous one.
   await ctx.apply([
     run('docker', ['buildx', 'imagetools', 'create', '--tag', candidateRef(registry, app, tag), image]),

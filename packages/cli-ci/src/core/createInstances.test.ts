@@ -36,11 +36,11 @@ const options: LaunchOptions = {
   sleep: async () => {},
 };
 
-test('the user-data is rendered with the run’s facts and the month’s buckets, and fits the API', () => {
+test('the user-data is rendered with the run’s facts and the week’s buckets, and fits the API', () => {
   const text = renderUserData(options, 'JIT', now);
   assert.match(text, /^hostname: exo-large-41-website-1$/m);
-  assert.match(text, /REGISTRY_BUCKET=acme-ci-registry-2026-11/);
-  assert.match(text, /REGISTRY_PREVIOUS_BUCKET=acme-ci-registry-2026-10/);
+  assert.match(text, /REGISTRY_BUCKET=acme-ci-registry-2026-w45/);
+  assert.match(text, /REGISTRY_PREVIOUS_BUCKET=acme-ci-registry-2026-w44/);
   assert.match(text, /SELF_LAYERS=off/);
   assert.match(text, /content: "JIT"/);
   assert.ok(encodeUserData(text).length < DEFAULTS.userDataLimit);

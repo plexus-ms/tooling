@@ -84,13 +84,13 @@ actions_runners_app_client_id: "{{ lookup('env', 'CI_APP_CLIENT_ID') | default('
 actions_runners_app_private_key: "{{ lookup('env', 'CI_APP_PRIVATE_KEY') | default('', true) }}"
 
 # The registry pair (`ci_registry: own`): the CNCF distribution registry on
-# 127.0.0.1:5000 against this month's bucket, read-write, and on :5001
-# against the previous month's, read-only, as a job elsewhere starts them
+# 127.0.0.1:5000 against this week's bucket, read-write, and on :5001
+# against the previous week's, read-only, as a job elsewhere starts them
 # for itself (`plx-ci registry`, which finds them answering here and starts
 # nothing; a large slot, with a network of its own, starts its own pair on
-# the same buckets). The buckets are `<owner>-ci-registry-<YYYY-MM>`; the
-# housekeeping creates this month's when it is missing and moves the pair to
-# the new buckets at the month change. Set false for a tenant on GHCR alone.
+# the same buckets). The buckets are `<owner>-ci-registry-<YYYY-wWW>`; the
+# housekeeping creates this week's when it is missing and moves the pair to
+# the new buckets at the week change. Set false for a tenant on GHCR alone.
 actions_runners_registry: true
 actions_runners_registry_owner: "{{ actions_runners_org }}"
 actions_runners_registry_image: registry:2
@@ -133,7 +133,7 @@ actions_runners_connect_uid: 999
 # The API's port on loopback and on the Docker bridge's gateway.
 actions_runners_connect_port: 8080
 
-# Housekeeping, hourly: the registry pair onto this month's buckets, the
+# Housekeeping, hourly: the registry pair onto this week's buckets, the
 # pinned image pulled, stopped containers, unused images and volumes removed; fails,
 # and so mails through mail, when the root file system is fuller
 # than this afterwards.

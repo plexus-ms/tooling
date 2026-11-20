@@ -7,7 +7,7 @@ name: _housekeeping
 #   hybrid          the last layer under the instances: delete every one that is stopped or
 #                   past its death deadline and mail about it; one kept after a missed boot
 #                   is spared, mailed about again after seven days, deleted after fourteen
-#   registry own    the month's buckets: this month's exists, the one from two months ago goes
+#   registry own    the week's buckets: this week's exists, the one from two weeks ago goes
 #   registry ghcr   the candidates of this repo's apps older than thirty days go
 #
 # The instances and the buckets are the tenant's, not one app repo's, so the

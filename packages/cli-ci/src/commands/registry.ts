@@ -2,7 +2,7 @@
 // candidates live in (§ 8 PLX-Delivery). With a registry of the tenant's own
 // (CI_REGISTRY=own), that is the pair on localhost: nothing where :5000
 // answers already (a slot of a runner host), else the two sidecars are
-// started, creating this month's bucket when it is missing. With the forge's
+// started, creating this week's bucket when it is missing. With the forge's
 // registry (CI_REGISTRY=ghcr) it is a check that the job has logged in.
 // `exists` asks whether a tag is there; `rotate` is the retention, run daily.
 // From the environment: CI_STRATEGY, CI_REGISTRY; for the pair
@@ -59,7 +59,7 @@ export function register(program: Command): void {
     });
   withStrategy(registry.command('rotate'))
     .description(
-      'the retention: this month’s bucket exists and the one from two months ago goes; in the forge’s registry, candidates older than thirty days go',
+      'the retention: this week’s bucket exists and the one from two weeks ago goes; in the forge’s registry, candidates older than thirty days go',
     )
     .argument('[apps...]', 'under ghcr: the apps whose packages are pruned (default: every directory under apps/)')
     .option('-C, --dir <dir>', 'the checkout to read', '.')
