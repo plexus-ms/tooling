@@ -1768,7 +1768,7 @@ test('update: a pull request is ready only once every site the branch holds reco
   const body = pull('acme-web', '0.2.0', '.body');
   assert.match(
     body,
-    /^- The answers at `apps\/site` do not record 0\.2\.0: copier did not run here; run `copier update` for it on this branch\.$/m,
+    /^- The answers at `apps\/site` do not record 0\.2\.0: copier did not run here\. On this branch, in `apps\/site`, run `mise exec copier@[0-9.]+ -- copier update --trust --skip-answered --vcs-ref 0\.2\.0` and commit what it changes\.$/m,
   );
   assert.match(body, /^- Run `pnpm install` once resolved, and commit the lockfile\.$/m, 'not ready, and a lockfile');
   assert.doesNotMatch(body, /apps\/blog/, "the tip's sites, not the default branch's");

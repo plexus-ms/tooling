@@ -50,7 +50,7 @@
 import { filesWithConflictMarkers } from './conflicts.ts';
 import { type Consumer, sitesOfTree } from './consumers.ts';
 import type { Context } from './context.ts';
-import { ANSWERS_FILE, parseAnswers } from './copier.ts';
+import { ANSWERS_FILE, copierVia, parseAnswers } from './copier.ts';
 import { run } from './effects.ts';
 import { detailOf } from './io.ts';
 
@@ -345,6 +345,17 @@ export const needsAHand = (p: PullState): boolean =>
   (p.lockfile === true && !p.checked);
 
 const code = (s: string) => `\`${s}\``;
+
+/**
+ * The copier update a human runs at a site to bring it to the version: the
+ * copier plx pins, at that version, never the newest tag (which, once a newer
+ * version is cut, would leave the site behind for good); trusted, as plx runs
+ * it; the questions answered already not asked again. Unlike plx's own run,
+ * new questions are asked and the template's tasks run: it is a developer's
+ * checkout.
+ */
+export const byHand = (version: string): string =>
+  ['mise', ...copierVia(['update', '--trust', '--skip-answered', '--vcs-ref', version])].join(' ');
 const site = (s: string) => (s === '.' ? 'the root' : code(s));
 
 /** The body: what needs a hand first, then what the pull request is. */
@@ -359,7 +370,7 @@ export function pullBody(p: PullState): string {
       : []),
     ...(p.behind ?? []).map(
       (s) =>
-        `- The answers at ${site(s)} do not record ${p.version}: copier did not run here; run \`copier update\` for it on this branch.`,
+        `- The answers at ${site(s)} do not record ${p.version}: copier did not run here. On this branch, in ${site(s)}, run \`${byHand(p.version)}\` and commit what it changes.`,
     ),
     ...(p.lockfile && !p.checked
       ? ['- The lockfile did not refresh: run `pnpm install` after resolving, and commit the lockfile.']

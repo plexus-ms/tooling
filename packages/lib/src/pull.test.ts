@@ -181,7 +181,7 @@ test('a body a later run writes says what it checked at the tip, never that ever
   assert.match(body, /^\*\*Needs a hand\.\*\* .+ every site's answers record the version\./);
   assert.match(
     body,
-    /^- The answers at the root do not record 0\.2\.0: copier did not run here; run `copier update` for it on this branch\.$/m,
+    /^- The answers at the root do not record 0\.2\.0: copier did not run here\. On this branch, in the root, run `mise exec copier@[0-9.]+ -- copier update --trust --skip-answered --vcs-ref 0\.2\.0` and commit what it changes\.$/m,
   );
   assert.match(body, /^- The answers at `apps\/site` do not record 0\.2\.0:/m);
   assert.match(body, /^- Run `pnpm install` once resolved, and commit the lockfile\.$/m);
