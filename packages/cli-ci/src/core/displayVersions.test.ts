@@ -79,7 +79,7 @@ test('the next version counts the minor up, starts a raised major at .0, and nev
   assert.throws(() => nextVersion(parseVersion('2.3'), 1), UsageError);
 });
 
-test('production: a changed app cuts the next version and shows it, an unchanged one shows the version it was first released in', async () => {
+test('production: a changed app cuts the next version, which every app is handed; only the last version is looked at', async () => {
   const r = repo({
     tags: ['1.0', '1.1', '1.2'],
     major: 1,
@@ -96,13 +96,12 @@ test('production: a changed app cuts the next version and shows it, an unchanged
     environment: 'production',
     previous: '1.2',
     version: '1.3',
-    apps: { web: '1.1', api: '1.3' },
+    apps: { web: '1.3', api: '1.3' },
   });
-  // The walk stops at the first version with another image.
-  assert.ok(!r.crane.includes('ghcr.io/acme/api:c-1.1'));
+  assert.ok(!r.crane.some((ref) => ref.endsWith(':c-1.1') || ref.endsWith(':c-1.0')));
 });
 
-test('production: nothing changed, no version; every app keeps the version it shows', async () => {
+test('production: nothing changed, no version; every app is handed the last one', async () => {
   const r = repo({
     tags: ['1.0', '1.1'],
     major: 1,
@@ -112,7 +111,7 @@ test('production: nothing changed, no version; every app keeps the version it sh
     environment: 'production',
     previous: '1.1',
     version: '',
-    apps: { web: '1.0', api: '1.1' },
+    apps: { web: '1.1', api: '1.1' },
   });
 });
 
@@ -130,7 +129,7 @@ test('production: a raised major starts at .0; the first version is <major>.0; a
     major: 1,
     digests: { [`web:${SHA}`]: 'W', 'web:c-1.0': 'W', [`new:${SHA}`]: 'N' },
   });
-  assert.deepEqual((await run(added, 'production', ['web', 'new'])).apps, { web: '1.0', new: '1.1' });
+  assert.deepEqual((await run(added, 'production', ['web', 'new'])).apps, { web: '1.1', new: '1.1' });
 });
 
 test('production: a marker without a whole-number major is a usage error, asked only when a version is cut', async () => {
