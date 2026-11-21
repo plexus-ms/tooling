@@ -11,13 +11,16 @@
 //                when its published image (`<prefix>/<app>:<sha>`) is not
 //                the one published under the last version's commit. The next
 //                version is the last one's minor plus one, or `<major>.0`
-//                when the marker's `major` is above the last one's. A changed
-//                app shows the new version; an unchanged one shows the oldest
-//                version in the unbroken run of versions with its image, the
-//                version it was first released in. Nothing changed, no version.
+//                when the marker's `major` is above the last one's. Every app
+//                is handed that version, or the last one when nothing changed
+//                and no version is cut.
 //   elsewhere    the last version in the commit's history and the short sha,
 //                `1.4+a1b2c3d`, or the short sha alone before the first
 //                version; no version is cut.
+//
+// An app whose image is already live keeps the version it shows: the deploy
+// verb restarts nothing for a display version alone (§ 6 PLX-Delivery), so an
+// unchanged app goes on showing the version it was released in.
 //
 // The marker's `major` (PLEXUS.md frontmatter) is the human's decision; the
 // minor counts up by itself. The tag itself, with its GitHub Release, is
@@ -115,41 +118,22 @@ export async function displayVersions(ctx: Context, options: DisplayVersionsOpti
     return { ...base, version: '', apps: Object.fromEntries(apps.map((app) => [app, shown])) };
   }
 
-  // Each version's commit and each app's image under it, looked up once and
-  // only as far back as an app's image stays the same.
-  const commits = new Map<string, string>();
-  const commit = async (v: Version): Promise<string> => {
-    let c = commits.get(v.tag);
-    if (c === undefined) {
-      c = await commitOf(ctx, dir, v.tag);
-      commits.set(v.tag, c);
-    }
-    return c;
-  };
-  const since: Record<string, string | undefined> = {};
+  const lastCommit = last ? await commitOf(ctx, dir, last.tag) : undefined;
+  const changed: string[] = [];
   for (const app of apps) {
     const image = imageName(prefix, app);
     const current = await craneDigest(ctx, `${image}:${sha}`);
     if (current === undefined && !ctx.dryRun) throw new Error(`${image}:${sha} is not published; publish runs first`);
-    let first: string | undefined;
-    for (const v of versions) {
-      if ((await craneDigest(ctx, `${image}:${await commit(v)}`)) !== current) break;
-      first = v.tag;
-    }
-    // Unchanged when the last version had this image (the walk starts at
-    // it), and then shown as the version it was first released in.
-    since[app] = first;
-    ctx.say(`${app}: ${since[app] === undefined ? 'changed since the last version' : `unchanged since ${since[app]}`}`);
+    const before = lastCommit ? await craneDigest(ctx, `${image}:${lastCommit}`) : undefined;
+    const same = before !== undefined && before === current;
+    ctx.say(`${app}: ${same ? `unchanged since ${last?.tag}` : 'changed since the last version'}`);
+    if (!same) changed.push(app);
   }
-  const changed = apps.filter((app) => since[app] === undefined);
   const version = changed.length > 0 ? nextVersion(last, await majorOf(ctx, dir)) : '';
   if (version) ctx.say(`production changed: ${changed.join(', ')}; the release cuts ${version}`);
-  else ctx.say(`production is unchanged since ${last?.tag ?? 'ever'}; the release cuts no version`);
-  return {
-    ...base,
-    version,
-    apps: Object.fromEntries(apps.map((app) => [app, since[app] ?? version])),
-  };
+  else ctx.say(`production is unchanged since ${last?.tag}; the release cuts no version`);
+  const shown = version || (last?.tag as string);
+  return { ...base, version, apps: Object.fromEntries(apps.map((app) => [app, shown])) };
 }
 
 /** The release notes of `version`: the subjects of the commits since the previous version, merges left out. */

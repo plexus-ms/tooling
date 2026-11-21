@@ -3,7 +3,16 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { declaresHealthcheck, healthcheckOf, parseCompose } from './compose.ts';
 import { Context, type Options } from './context.ts';
-import { defaultAppDir, deploy, q, renderCompose, renderDisplayVersion, seconds, slowStart } from './deploy.ts';
+import {
+  defaultAppDir,
+  deploy,
+  q,
+  renderCompose,
+  renderDisplayVersion,
+  seconds,
+  shownBy,
+  slowStart,
+} from './deploy.ts';
 import { fakeIo, type Tree } from './testing/fakeIo.ts';
 import { UsageError } from './version.ts';
 
@@ -201,6 +210,68 @@ test('a display version is pinned into the staged file and reported; a file with
   assert.equal(plain.staged, `services:\n  web:\n    image: ghcr.io/x/web:new\n${HEALTHCHECK}`);
   assert.equal(unused.displayVersion, undefined);
   assert.equal(unused.healthy, true);
+});
+
+test('shownBy reads the display version a served file pins, and tells another run shape apart', () => {
+  const shape =
+    'services:\n  web:\n    image: i\n    environment:\n      V: ${PLEXUS_DISPLAY_VERSION:-}\n      L: "app ${PLEXUS_DISPLAY_VERSION}"\n';
+  const served = (v: string) => renderDisplayVersion(shape, v, 'c');
+  assert.equal(shownBy(shape, '1.3', served('1.1')), '1.1');
+  assert.equal(shownBy(shape, '1.3', served('1.4+a1b2c3d')), '1.4+a1b2c3d');
+  // Two places, two versions: not a file this verb wrote.
+  assert.equal(shownBy(shape, '1.3', served('1.1').replace('app 1.1', 'app 1.2')), undefined);
+  // Written before display versions: the placeholder itself, another file.
+  assert.equal(shownBy(shape, '1.3', shape), undefined);
+  assert.equal(shownBy(shape, '1.3', served('1.1').replace('image: i', 'image: j')), undefined);
+  // Without a display version, or a file without the placeholder: the file as it is.
+  assert.equal(shownBy(shape, undefined, shape), '');
+  assert.equal(shownBy(COMPOSE, '1.3', COMPOSE), '');
+  assert.equal(shownBy(COMPOSE, '1.3', PINNED), undefined);
+});
+
+test('the image already live, showing another display version, restarts nothing and keeps the version it shows', async () => {
+  const env = '    environment:\n      PLEXUS_DISPLAY_VERSION: ${PLEXUS_DISPLAY_VERSION:-}\n';
+  const source = COMPOSE + env + HEALTHCHECK;
+  const tree: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': source } } } } };
+  const serving = renderDisplayVersion(renderCompose(source, 'ghcr.io/x/web:old', 'c'), '1.1', 'c');
+  const { ctx, commands, err } = harness(tree, host('ghcr.io/x/web:old', { sameImage: true, serving }));
+  const result = await deploy(ctx, {
+    host: 'deploy@h',
+    app: 'web',
+    image: 'ghcr.io/x/web:new',
+    displayVersion: '1.3',
+    dir: '/repo',
+  });
+  assert.equal(result.unchanged, true);
+  assert.equal(result.displayVersion, '1.1');
+  assert.ok(!commands.some((c) => c.endsWith('up -d --remove-orphans')));
+  assert.match(err(), /ghcr.io\/x\/web:old \(the image ghcr.io\/x\/web:new names\), showing 1.1, is already live/);
+
+  // The same ref, another display version: nothing either.
+  const again = harness(tree, host('ghcr.io/x/web:old', { serving }));
+  const rerun = await deploy(again.ctx, {
+    host: 'deploy@h',
+    app: 'web',
+    image: 'ghcr.io/x/web:old',
+    displayVersion: '1.3',
+    dir: '/repo',
+  });
+  assert.equal(rerun.unchanged, true);
+  assert.ok(!again.commands.some((c) => c.includes('docker pull -q')));
+
+  // A file written before display versions: the full deploy, once.
+  const before = renderCompose(source, 'ghcr.io/x/web:old', 'c');
+  const first = harness(tree, host('ghcr.io/x/web:old', { sameImage: true, serving: before }));
+  const full = await deploy(first.ctx, {
+    host: 'deploy@h',
+    app: 'web',
+    image: 'ghcr.io/x/web:new',
+    displayVersion: '1.3',
+    dir: '/repo',
+  });
+  assert.equal(full.unchanged, undefined);
+  assert.equal(full.displayVersion, '1.3');
+  assert.ok(first.commands.some((c) => c.endsWith('up -d --remove-orphans')));
 });
 
 test('no migrate service and a third-party file: fewer steps, nothing rendered', async () => {

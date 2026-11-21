@@ -159,6 +159,27 @@ export function renderDisplayVersion(text: string, displayVersion: string | unde
   return out.replace(DISPLAY_VERSION_PLACEHOLDER, displayVersion);
 }
 
+/** Stands in for the display version where a served file is compared with a run shape. */
+const SHOWN = 'PLEXUSDISPLAYVERSION0';
+
+/**
+ * Whether `serving` is `shape` with any display version pinned where
+ * `displayVersion` would go: the version it shows, '' where the shape pins
+ * none, or undefined where `serving` is another file. A display version
+ * alone restarts nothing: it changes with every release, the image with
+ * only some.
+ */
+export function shownBy(shape: string, displayVersion: string | undefined, serving: string): string | undefined {
+  const marked = renderDisplayVersion(shape, displayVersion ? SHOWN : undefined, '').trimEnd();
+  const parts = marked.split(SHOWN).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (parts.length === 1) return serving.trimEnd() === marked ? '' : undefined;
+  const source = parts.reduce(
+    (all, part, i) => (i === 0 ? part : `${all}${i === 1 ? '([0-9A-Za-z][0-9A-Za-z.+_-]*)' : '\\1'}${part}`),
+    '',
+  );
+  return new RegExp(`^${source}$`).exec(serving.trimEnd())?.[1];
+}
+
 /** The app dir the platform playbook lays out: the deploy root and the deployment's slug (§ 3 PLX-Platform). */
 export function defaultAppDir(app: string, environment: string = DEFAULT_ENVIRONMENT): string {
   return `/opt/stacks/${deploymentSlug(app, environment)}`;
@@ -262,8 +283,14 @@ interface Session {
   /** The running `web` container's image, or nothing. */
   liveImage: string;
   image?: string;
-  /** The run shape with another image ref pinned: what the host serves when it runs that ref. */
-  render: (ref: string) => string;
+  /**
+   * Whether `serving`, the file the host serves, is this run shape with
+   * `ref` pinned, whatever display version it pins: the one it shows ('' for
+   * none), or undefined when it is another run shape.
+   */
+  shows: (ref: string, serving: string) => string | undefined;
+  /** The display version pinned in the staged file, if any. */
+  displayVersion?: string;
   result: Deploy;
 }
 
@@ -331,7 +358,8 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
     // one fixed loopback port (§ 4 PLX-App), which a second replica could not.
     liveImage: `${dc} ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{.Config.Image}}' 2>/dev/null || true`,
     image,
-    render: (ref) => renderCompose(text, ref, compose as string),
+    shows: (ref, serving) => shownBy(renderCompose(text, ref, compose as string), displayVersion, serving),
+    ...(displayVersion ? { displayVersion } : {}),
     result: {
       host,
       appDir,
@@ -400,26 +428,36 @@ async function alreadyServing(s: Session): Promise<boolean> {
   }
   if (result.previous === undefined) return false;
   let same: string | undefined;
-  if (s.image === undefined || result.previous === s.image) {
+  let shown = '';
+  if (s.image === undefined || (result.previous === s.image && !s.displayVersion)) {
     // A third-party app passes no ref: its file pins the image, so the same
     // file with `web` running is the same deployment, and a platform repo can
     // deploy every app on every push without restarting any.
     if (!(await s.remote.test(`cd ${s.D} && cmp -s compose.yaml ${INCOMING}/compose.yaml`))) return false;
   } else {
-    // Another ref: the same deployment when it names the image `web` runs
-    // (pulled for its id, which fetches no layer the host has) and the host
-    // serves this run shape with the live ref pinned. The host keeps its file
-    // and its ref, which names the image it serves.
-    if (!(await sameImage(s, s.image))) return false;
+    // Another ref, or a display version: the same deployment when the ref
+    // names the image `web` runs (pulled for its id, which fetches no layer
+    // the host has) and the host serves this run shape with the live ref
+    // pinned, whatever display version it shows. The host keeps its file, its
+    // ref, which names the image it serves, and the version it shows.
+    if (result.previous !== s.image) {
+      if (!(await sameImage(s, s.image))) return false;
+      same = s.image;
+    }
     const serving = await s.remote.read(`cat ${s.D}/compose.yaml`);
-    if (serving === undefined || serving !== s.render(result.previous).trimEnd()) return false;
-    same = s.image;
+    const live = serving === undefined ? undefined : s.shows(result.previous, serving);
+    if (live === undefined) return false;
+    shown = live;
   }
   if (!(await awaitHealthy(s, 1))) return false;
   result.live = result.previous;
   result.healthy = true;
   result.unchanged = true;
-  ctx.done(`${result.previous}${same ? ` (the image ${same} names)` : ''} is already live and healthy; nothing to do`);
+  if (shown) result.displayVersion = shown;
+  else delete result.displayVersion;
+  ctx.done(
+    `${result.previous}${same ? ` (the image ${same} names)` : ''}${shown ? `, showing ${shown},` : ''} is already live and healthy; nothing to do`,
+  );
   return true;
 }
 
