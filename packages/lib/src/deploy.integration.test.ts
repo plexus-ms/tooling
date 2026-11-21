@@ -10,6 +10,8 @@
 //   FAKE_STARTING_LOOKS=n   the first n looks at the health status, counted
 //                           in <app dir>/.looks, answer `starting`
 //   an image containing "bad" never turns healthy
+//   FAKE_IMAGE_ID=<id>      every ref names the image <id>, the running one
+//                           among them; without it a ref's id is the ref
 //
 // A no-op `sleep` stands in for the wait's pause between looks: the tests
 // count looks, not seconds.
@@ -59,10 +61,17 @@ fake(
   `
 echo "docker $*" >> "$FAKE_LOG"
 file=compose.yaml
+if [ "$1" = pull ]; then exit 0; fi
+if [ "$1" = image ]; then
+  # image inspect --format {{.Id}} <ref>
+  echo "\${FAKE_IMAGE_ID:-$5}"
+  exit 0
+fi
 if [ "$1" = inspect ]; then
   # inspect --format <fmt> <cid>
   case "$3" in
     *Config.Image*) cat .running ;;
+    *.Image*) echo "\${FAKE_IMAGE_ID:-$(cat .running)}" ;;
     *State.Health*)
       n=$(( $(cat .looks 2>/dev/null || echo 0) + 1 )); echo "$n" > .looks
       if grep -q bad .running || [ "$n" -le "\${FAKE_STARTING_LOOKS:-0}" ]; then echo starting; else echo healthy; fi ;;
@@ -166,6 +175,7 @@ test('happy path on the fake host: pull and migrate against the staged file, swa
   assert.ok(!existsSync(join(appDir, '.incoming')));
   const actions = dockerLog(log).filter((l) => /pull|run|up/.test(l));
   assert.deepEqual(actions, [
+    'docker pull -q ghcr.io/x/web:new',
     'docker compose [staged] pull',
     'docker compose [staged] run --rm migrate',
     'docker compose up -d --remove-orphans',
@@ -274,4 +284,24 @@ test('"already live and healthy" is decided by a single look; a container still 
   assert.equal(same.unchanged, true);
   assert.equal(looks(dockerLog(healthy.log)).length, 1);
   assert.ok(!dockerLog(healthy.log).some((l) => l.endsWith(' pull')));
+});
+
+test('a new ref naming the running image, from the same run shape, is already live; from a changed one it deploys', async () => {
+  const { checkout, appDir, log } = fixture('ghcr.io/x/web:old');
+  const env = { FAKE_LOG: log, FAKE_IMAGE_ID: 'sha256:one' };
+  const { result, err } = await run({}, checkout, appDir, 'ghcr.io/x/web:new', env);
+  assert.equal(result.unchanged, true);
+  assert.equal(result.live, 'ghcr.io/x/web:old');
+  assert.equal(readFileSync(join(appDir, '.running'), 'utf8').trim(), 'ghcr.io/x/web:old');
+  assert.match(readFileSync(join(appDir, 'compose.yaml'), 'utf8'), /image: ghcr.io\/x\/web:old/);
+  assert.ok(!dockerLog(log).some((l) => l.endsWith(' pull') || l.includes(' up ')));
+  assert.match(err, /already live and healthy; nothing to do/);
+
+  const changed = fixture('ghcr.io/x/web:old', COMPOSE.replace('3011:3000', '3012:3000'));
+  const { result: full } = await run({}, changed.checkout, changed.appDir, 'ghcr.io/x/web:new', {
+    FAKE_LOG: changed.log,
+    FAKE_IMAGE_ID: 'sha256:one',
+  });
+  assert.equal(full.unchanged, undefined);
+  assert.equal(full.live, 'ghcr.io/x/web:new');
 });

@@ -58,11 +58,20 @@ function harness(tree: Tree, host: Host, options: Options = {}) {
 const checkout: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': COMPOSE + HEALTHCHECK } } } } };
 const D = "'/opt/stacks/web'";
 
-/** A host serving `previous`, declaring migrate, healthy unless the live image contains "bad". */
-function host(previous: string | undefined, { migrate = true } = {}): Host & { live?: string; staged?: string } {
+/**
+ * A host serving `previous`, declaring migrate, healthy unless the live image
+ * contains "bad". `sameImage`: every other ref names the image it runs, and
+ * `serving` is the compose file it serves.
+ */
+function host(
+  previous: string | undefined,
+  { migrate = true, sameImage = false, serving = '' } = {},
+): Host & { live?: string; staged?: string } {
   const h: Host & { live?: string; staged?: string } = {
     live: previous,
     answer(command, input) {
+      if (command.includes('docker pull -q')) return sameImage ? '' : undefined;
+      if (command.startsWith('cat ') && command.endsWith('/compose.yaml')) return serving;
       if (command.startsWith('rm -rf') && command.includes('cat >')) {
         h.staged = input;
         return '';
@@ -447,6 +456,44 @@ test('the same image from a changed file, or unhealthy, deploys in full', async 
   assert.ok(commands.some((c) => c.endsWith('up -d --remove-orphans')));
   assert.equal(result.healthy, true);
   assert.equal(result.unchanged, undefined);
+});
+
+test('a new ref naming the image the host runs, from the same run shape: nothing pulled, nothing restarted', async () => {
+  const serving = `services:\n  web:\n    image: ghcr.io/x/web:old\n${HEALTHCHECK}`;
+  const h = host('ghcr.io/x/web:old', { sameImage: true, serving });
+  const { ctx, commands, err } = harness(checkout, h);
+  const result = await deploy(ctx, { host: 'deploy@h', app: 'web', image: 'ghcr.io/x/web:new', dir: '/repo' });
+  assert.ok(
+    commands.some(
+      (c) =>
+        c.includes("docker pull -q 'ghcr.io/x/web:new'") &&
+        c.includes("docker image inspect --format '{{.Id}}' 'ghcr.io/x/web:new'") &&
+        c.includes("docker inspect --format '{{.Image}}'"),
+    ),
+  );
+  assert.ok(!commands.some((c) => c.endsWith(' pull')));
+  assert.ok(!commands.some((c) => c.endsWith('up -d --remove-orphans')));
+  assert.ok(!commands.some((c) => c.includes('mv .incoming')));
+  assert.equal(result.unchanged, true);
+  assert.equal(result.live, 'ghcr.io/x/web:old');
+  assert.match(
+    err(),
+    /✓ ghcr.io\/x\/web:old \(the image ghcr.io\/x\/web:new names\) is already live and healthy; nothing to do/,
+  );
+});
+
+test('a new ref naming the image the host runs, from a changed run shape, or naming another image, deploys in full', async () => {
+  const changed = harness(checkout, host('ghcr.io/x/web:old', { sameImage: true, serving: 'services: {}\n' }));
+  const full = await deploy(changed.ctx, { host: 'deploy@h', app: 'web', image: 'ghcr.io/x/web:new', dir: '/repo' });
+  assert.equal(full.unchanged, undefined);
+  assert.ok(changed.commands.some((c) => c.endsWith(' pull')));
+  assert.equal(full.live, 'ghcr.io/x/web:new');
+
+  const other = harness(checkout, host('ghcr.io/x/web:old'));
+  const rebuilt = await deploy(other.ctx, { host: 'deploy@h', app: 'web', image: 'ghcr.io/x/web:new', dir: '/repo' });
+  assert.equal(rebuilt.unchanged, undefined);
+  assert.ok(!other.commands.some((c) => c.startsWith('cat ')));
+  assert.ok(other.commands.some((c) => c.endsWith('up -d --remove-orphans')));
 });
 
 test('a third-party file the host already serves, running and healthy: nothing pulled, nothing restarted', async () => {
