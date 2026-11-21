@@ -136,7 +136,11 @@ function run(
   const ctx = new Context(options, io);
   return deploy(ctx, { host: 'deploy@fake', app: 'web', image, appDir, dir: checkout, retries })
     .finally(() => {
-      process.env = saved;
+      // In place: a child process takes the environment object Node started
+      // with, so assigning a new one to process.env would leave this run's
+      // values in every later one.
+      for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+      Object.assign(process.env, saved);
     })
     .then(
       (result) => ({ result, err }),
