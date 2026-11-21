@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { declaresHealthcheck, healthcheckOf, parseCompose } from './compose.ts';
 import { Context, type Options } from './context.ts';
-import { defaultAppDir, deploy, q, renderCompose, seconds, slowStart } from './deploy.ts';
+import { defaultAppDir, deploy, q, renderCompose, renderDisplayVersion, seconds, slowStart } from './deploy.ts';
 import { fakeIo, type Tree } from './testing/fakeIo.ts';
 import { UsageError } from './version.ts';
 
@@ -21,6 +21,42 @@ test('renderCompose pins the placeholder once, with or without a message, and re
   assert.equal(renderCompose(PINNED, undefined, 'c'), PINNED);
   assert.throws(() => renderCompose(PINNED, 'ghcr.io/x/web:abc', 'apps/x/compose.yaml'), UsageError);
   assert.throws(() => renderCompose(COMPOSE, undefined, 'apps/x/compose.yaml'), UsageError);
+});
+
+test('renderDisplayVersion quotes a whole unquoted value, fills one inside a string, and leaves a file without it alone', () => {
+  const file = [
+    'services:',
+    '  web:',
+    '    environment:',
+    '      PLEXUS_DISPLAY_VERSION: ${PLEXUS_DISPLAY_VERSION:-}',
+    '      QUOTED: "${PLEXUS_DISPLAY_VERSION}"',
+    '      LABEL: Vernier ${PLEXUS_DISPLAY_VERSION:-dev}',
+    '    command: [run, "--version=${PLEXUS_DISPLAY_VERSION}"]',
+    '',
+  ].join('\n');
+  const rendered = renderDisplayVersion(file, '1.10', 'c');
+  assert.equal(
+    rendered,
+    [
+      'services:',
+      '  web:',
+      '    environment:',
+      '      PLEXUS_DISPLAY_VERSION: "1.10"',
+      '      QUOTED: "1.10"',
+      '      LABEL: Vernier 1.10',
+      '    command: [run, "--version=1.10"]',
+      '',
+    ].join('\n'),
+  );
+  // Read back as compose would: a string, never the number 1.1.
+  const environment = parseCompose(rendered, 'c').services.web?.environment as Record<string, unknown> | undefined;
+  assert.equal(environment?.PLEXUS_DISPLAY_VERSION, '1.10');
+  assert.equal(renderDisplayVersion(COMPOSE, '1.10', 'c'), COMPOSE);
+  assert.equal(renderDisplayVersion(file, undefined, 'c'), file);
+  assert.equal(renderDisplayVersion(file, '', 'c'), file);
+  assert.match(renderDisplayVersion(file, '1.4+a1b2c3d', 'c'), /PLEXUS_DISPLAY_VERSION: "1\.4\+a1b2c3d"/);
+  assert.throws(() => renderDisplayVersion(file, '1.4 "x"', 'c'), UsageError);
+  assert.throws(() => renderDisplayVersion(file, '-1', 'c'), UsageError);
 });
 
 test('q quotes for a remote shell', () => {
@@ -133,6 +169,38 @@ test('happy path: stage, pull, migrate, keep the previous file, swap, up, wait f
     rolledBack: false,
   });
   assert.match(err(), /✓ ghcr.io\/x\/web:new is live and healthy/);
+});
+
+test('a display version is pinned into the staged file and reported; a file without the placeholder deploys as before', async () => {
+  const env = '    environment:\n      PLEXUS_DISPLAY_VERSION: ${PLEXUS_DISPLAY_VERSION:-}\n';
+  const withVersion: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': COMPOSE + env + HEALTHCHECK } } } } };
+  const h = host('ghcr.io/x/web:old');
+  const { ctx } = harness(withVersion, h);
+  const result = await deploy(ctx, {
+    host: 'deploy@h',
+    app: 'web',
+    image: 'ghcr.io/x/web:new',
+    displayVersion: '1.10',
+    dir: '/repo',
+  });
+  assert.equal(
+    h.staged,
+    `services:\n  web:\n    image: ghcr.io/x/web:new\n    environment:\n      PLEXUS_DISPLAY_VERSION: "1.10"\n${HEALTHCHECK}`,
+  );
+  assert.equal(result.displayVersion, '1.10');
+
+  const plain = host('ghcr.io/x/web:old');
+  const without = harness(checkout, plain);
+  const unused = await deploy(without.ctx, {
+    host: 'deploy@h',
+    app: 'web',
+    image: 'ghcr.io/x/web:new',
+    displayVersion: '1.10',
+    dir: '/repo',
+  });
+  assert.equal(plain.staged, `services:\n  web:\n    image: ghcr.io/x/web:new\n${HEALTHCHECK}`);
+  assert.equal(unused.displayVersion, undefined);
+  assert.equal(unused.healthy, true);
 });
 
 test('no migrate service and a third-party file: fewer steps, nothing rendered', async () => {

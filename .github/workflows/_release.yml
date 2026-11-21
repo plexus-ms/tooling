@@ -6,8 +6,19 @@ name: _release
 # _verify.yml on a push to an environment branch, and hands it what the
 # verify planned: the apps, the environment, and where each app deploys.
 #
-#   publish   small   the tested manifest under its commit in the forge's registry
-#   deploy    small   _deploy.yml per app with a target in the environment
+#   publish              small   the tested manifest under its commit in the forge's registry
+#   display-versions     small   what each app shows as its version, and the version production cuts
+#   deploy               small   _deploy.yml per app with a target in the environment
+#   tag-display-version  small   the cut version's tag and GitHub Release, once every deploy is green
+#
+# The two display-version jobs run only with the input `display-versions`;
+# without it the release is publish and deploy and nothing else. A repo that
+# turns it on states `major:` in its PLEXUS.md, grants this workflow
+# `contents: write` (the tag and the Release), uses ${PLEXUS_DISPLAY_VERSION}
+# in the compose files of the apps that show it, and serializes its release
+# job (a concurrency group per ref that cancels nothing), so that two pushes
+# to main never take the same number. plx-ci's display-versions states how
+# the versions are read from the tags and the registry.
 #
 # A promotion never builds: a commit whose images the registry holds is
 # published from them and deployed. Without an environment (a run by hand on
@@ -64,6 +75,14 @@ on:
         required: false
         type: boolean
         default: false
+      display-versions:
+        description: >-
+          Give every deployed app a display version, PLEXUS_DISPLAY_VERSION,
+          and cut a version tag with a GitHub Release when a production release
+          changes an app. Off: the release neither computes nor tags anything.
+        required: false
+        type: boolean
+        default: false
       tooling-ref:
         description: >-
           A trial of unreleased tooling: plx-ci and plx are built from a
@@ -77,9 +96,10 @@ on:
         description: The vault's service account token, reading the vault `<owner>-ci`.
         required: true
 
-permissions:
-  contents: read
-  packages: write
+# Per job, not here: what the workflow declares at its top caps every job,
+# and the one job that writes contents (tag-display-version) would otherwise
+# need every caller to grant it, display versions or not. That job declares
+# nothing and runs with what its caller grants.
 
 env:
   CRANE_VERSION: 0.22.1
@@ -92,6 +112,9 @@ env:
 jobs:
   publish:
     if: ${{ inputs.environment != '' }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -166,9 +189,64 @@ jobs:
   # file at a version tag, which is annotated, and the forge resolves a relative
   # nested call to the tag object rather than its commit and fails to start
   # the run. The version's bookkeeping moves the ref with every other.
-  deploy:
+  display-versions:
     needs: publish
-    if: ${{ inputs.deploys != '[]' }}
+    if: ${{ inputs.display-versions && inputs.environment != '' && inputs.deploys != '[]' }}
+    permissions:
+      contents: read
+      packages: read
+    runs-on: ${{ inputs.strategy == 'github' && 'ubuntu-latest' || 'ci-small' }}
+    outputs:
+      version: ${{ steps.versions.outputs.version }}
+      display-versions: ${{ steps.versions.outputs.display-versions }}
+    steps:
+      # The whole history with its tags: the versions are read from them.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v5
+        if: ${{ inputs.tooling-ref == '' }}
+        with:
+          install_args: node npm:@plexus-ms/cli-ci
+      - uses: actions/checkout@v7
+        if: ${{ inputs.tooling-ref != '' }}
+        with:
+          repository: plexus-ms/tooling
+          ref: ${{ inputs.tooling-ref }}
+          path: .plx-ci
+      - uses: actions/setup-node@v7
+        if: ${{ inputs.tooling-ref != '' }}
+        with:
+          node-version-file: .plx-ci/mise.toml
+      - name: plx-ci from the unreleased tooling
+        if: ${{ inputs.tooling-ref != '' }}
+        run: |
+          cd .plx-ci && corepack enable && pnpm install --frozen-lockfile --ignore-scripts >/dev/null
+          pnpm --filter @plexus-ms/cli-ci... run build >/dev/null
+          mkdir -p bin && ln -sf "$PWD/packages/cli-ci/dist/plx-ci.js" bin/plx-ci && echo "$PWD/bin" >> "$GITHUB_PATH"
+      - name: Install crane
+        run: |
+          mkdir -p "$HOME/.local/bin" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          curl -fsSL "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" | tar -xz -C "$HOME/.local/bin" crane
+      - name: Log in to the forge's registry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GITHUB_TOKEN" | crane auth login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Display versions
+        id: versions
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          DEPLOYS: ${{ inputs.deploys }}
+        run: plx-ci display-versions "$ENVIRONMENT" "$GITHUB_SHA" --deploys "$DEPLOYS"
+
+  deploy:
+    needs: [publish, display-versions]
+    # As before when display versions are off, their job then skipped: every
+    # publish green, and something to deploy.
+    if: ${{ !cancelled() && needs.publish.result == 'success' && (needs.display-versions.result == 'success' || needs.display-versions.result == 'skipped') && inputs.deploys != '[]' }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -183,6 +261,44 @@ jobs:
       overlay: ${{ inputs.overlay }}
       vault: ${{ inputs.vault }}
       dry-run: ${{ inputs.dry-run }}
+      display-version: ${{ fromJSON(needs.display-versions.outputs.display-versions || '{}')[matrix.app] || '' }}
       tooling-ref: ${{ inputs.tooling-ref }}
     secrets:
       op-service-account-token: ${{ secrets.op-service-account-token }}
+
+  # The version names a state of production that happened: only once every
+  # deploy of the release is green, and only when it cut one. A re-run of the
+  # failed deploys gets here with the same number.
+  tag-display-version:
+    needs: [display-versions, deploy]
+    if: ${{ !cancelled() && inputs.environment == 'production' && !inputs.dry-run && needs.display-versions.outputs.version != '' && needs.deploy.result == 'success' }}
+    runs-on: ${{ inputs.strategy == 'github' && 'ubuntu-latest' || 'ci-small' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v5
+        if: ${{ inputs.tooling-ref == '' }}
+        with:
+          install_args: node npm:@plexus-ms/cli-ci
+      - uses: actions/checkout@v7
+        if: ${{ inputs.tooling-ref != '' }}
+        with:
+          repository: plexus-ms/tooling
+          ref: ${{ inputs.tooling-ref }}
+          path: .plx-ci
+      - uses: actions/setup-node@v7
+        if: ${{ inputs.tooling-ref != '' }}
+        with:
+          node-version-file: .plx-ci/mise.toml
+      - name: plx-ci from the unreleased tooling
+        if: ${{ inputs.tooling-ref != '' }}
+        run: |
+          cd .plx-ci && corepack enable && pnpm install --frozen-lockfile --ignore-scripts >/dev/null
+          pnpm --filter @plexus-ms/cli-ci... run build >/dev/null
+          mkdir -p bin && ln -sf "$PWD/packages/cli-ci/dist/plx-ci.js" bin/plx-ci && echo "$PWD/bin" >> "$GITHUB_PATH"
+      - name: Tag the version
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.display-versions.outputs.version }}
+        run: plx-ci tag-display-version "$VERSION" "$GITHUB_SHA"

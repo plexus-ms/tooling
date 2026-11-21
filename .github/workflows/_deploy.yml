@@ -69,6 +69,14 @@ on:
         required: false
         type: boolean
         default: false
+      display-version:
+        description: >-
+          The string the app shows as its version, pinned where its
+          compose.yaml uses ${PLEXUS_DISPLAY_VERSION}; empty for none, and the
+          verb is then called as without it.
+        required: false
+        type: string
+        default: ''
       tooling-ref:
         description: A trial of unreleased tooling, plx built from this ref instead of the caller's pin; empty for the pin.
         required: false
@@ -185,9 +193,12 @@ jobs:
         if: ${{ inputs.dry-run }}
         run: ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new '${{ inputs.host }}' -- 'echo "reached $(hostname) as $(id -un)"'
       # An empty option value is the same as an absent one to the verb, so
-      # both flags are always passed.
+      # both flags are always passed; --display-version only where there is
+      # one, so that a plx of a version without it runs as before.
       - name: Deploy
-        run: plx ${{ inputs.dry-run && '-n' || '' }} deploy '${{ inputs.host }}' '${{ inputs.app }}' --environment '${{ inputs.environment }}' --image '${{ inputs.image-ref }}'
+        env:
+          DISPLAY_VERSION: ${{ inputs.display-version }}
+        run: plx ${{ inputs.dry-run && '-n' || '' }} deploy '${{ inputs.host }}' '${{ inputs.app }}' --environment '${{ inputs.environment }}' --image '${{ inputs.image-ref }}' ${DISPLAY_VERSION:+--display-version "$DISPLAY_VERSION"}
       # A GitHub-hosted runner dies with the agent; a persistent one would keep
       # it running, deploy key loaded, for every later job on the machine. The
       # same for the overlay: the peer leaves, and the management server drops
