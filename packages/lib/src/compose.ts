@@ -61,6 +61,15 @@ export function parseCompose(text: string, path: string): Compose {
  */
 export const IMAGE_PLACEHOLDER = /\$\{PLEXUS_DEPLOYMENT_IMAGE(:[^}]*)?\}/g;
 
+/**
+ * The deploy verb's placeholder for the display version, the string an app
+ * shows as its version, in any spelling `${PLEXUS_DISPLAY_VERSION…}`. Unlike
+ * the image's, it is optional on both sides: a file without it ignores a
+ * display version given, and a file with it and none given is left to
+ * compose, whose default the spelling names (`${PLEXUS_DISPLAY_VERSION:-}`).
+ */
+export const DISPLAY_VERSION_PLACEHOLDER = /\$\{PLEXUS_DISPLAY_VERSION(:[^}]*)?\}/g;
+
 /** An image as the deploy verb will run it: every spelling of the placeholder as one. */
 export const normalImage = (image: string): string => image.replace(IMAGE_PLACEHOLDER, '${PLEXUS_DEPLOYMENT_IMAGE}');
 

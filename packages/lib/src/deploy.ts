@@ -10,10 +10,12 @@
 // CI, or the operations repo for third-party software the tenant merely
 // operates. The run shape, apps/<app>/docker/compose.yaml (or
 // apps/<app>/compose.yaml), is read from there, rendered with the concrete
-// image ref in place of ${PLEXUS_DEPLOYMENT_IMAGE}, staged on the host, and
-// swapped into place only once pull and migrate have succeeded, so the compose
-// file on the host always names the image it serves, and a failed deploy
-// leaves the host exactly as it was. Three files in the app dir, one writer
+// image ref in place of ${PLEXUS_DEPLOYMENT_IMAGE} (and, where one is given
+// and the file uses it, the display version in place of
+// ${PLEXUS_DISPLAY_VERSION}, so a rollback restores the one it showed),
+// staged on the host, and swapped into place only once pull and migrate
+// have succeeded, so the compose file on the host always names the image it
+// serves, and a failed deploy leaves the host exactly as it was. Three files in the app dir, one writer
 // each (PLX-Secrets): the platform playbook owns .env (its `apps` role) and
 // .env.secret (its `secrets` role), this verb owns compose.yaml. Compose
 // reads .env implicitly, so every command here and by a human is a bare
@@ -46,7 +48,15 @@
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { declaresHealthcheck, healthcheckOf, IMAGE_PLACEHOLDER, type Mapping, parseCompose } from './compose.ts';
+import { parseDocument, visit } from 'yaml';
+import {
+  DISPLAY_VERSION_PLACEHOLDER,
+  declaresHealthcheck,
+  healthcheckOf,
+  IMAGE_PLACEHOLDER,
+  type Mapping,
+  parseCompose,
+} from './compose.ts';
 import type { Context } from './context.ts';
 import { DEFAULT_ENVIRONMENT, deploymentSlug } from './deployTargets.ts';
 import { run } from './effects.ts';
@@ -59,6 +69,8 @@ export interface DeployOptions {
   app: string;
   /** The image ref to pin; empty or absent for a third-party app whose file pins its own. */
   image?: string;
+  /** The string the app shows as its version, pinned in place of ${PLEXUS_DISPLAY_VERSION}; empty or absent leaves the file to compose. */
+  displayVersion?: string;
   /** Looks at the app container's health status, two seconds apart. */
   retries?: number;
   /** The environment deployed into; default production. Decides the app dir's slug (§ 3 PLX-Platform). */
@@ -77,6 +89,8 @@ export interface Deploy {
   /** The compose file read, relative to the checkout. */
   compose: string;
   image?: string;
+  /** The display version pinned, where one was given and the file uses it. */
+  displayVersion?: string;
   /** The image that was live before, from the running container. */
   previous?: string;
   /** The image live at the end, healthy or rolled back to. */
@@ -108,6 +122,41 @@ export function renderCompose(text: string, image: string | undefined, path: str
   }
   if (has) throw new UsageError(`${path} references \${PLEXUS_DEPLOYMENT_IMAGE} but no image ref was given`);
   return text;
+}
+
+/** What a display version may hold: safe inside any quoting compose and a shell know, and never empty. */
+const DISPLAY_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/;
+
+/**
+ * Pin the display version in place of every ${PLEXUS_DISPLAY_VERSION}
+ * placeholder; without one given, or without a placeholder in the file, the
+ * text is returned as it is. Where a placeholder is a whole unquoted YAML
+ * value, the version goes in double-quoted: compose reads `1.10` or `1234e56`
+ * unquoted as a number, which would show as `1.1` or `1.234e+59`.
+ */
+export function renderDisplayVersion(text: string, displayVersion: string | undefined, path: string): string {
+  if (!displayVersion) return text;
+  if (!DISPLAY_VERSION.test(displayVersion))
+    throw new UsageError(
+      `display version ${JSON.stringify(displayVersion)}: only letters, digits and . + _ - are allowed, starting with a letter or digit`,
+    );
+  DISPLAY_VERSION_PLACEHOLDER.lastIndex = 0;
+  if (!DISPLAY_VERSION_PLACEHOLDER.test(text)) return text;
+  DISPLAY_VERSION_PLACEHOLDER.lastIndex = 0;
+  const whole = new RegExp(`^${DISPLAY_VERSION_PLACEHOLDER.source}$`);
+  const plain: [number, number][] = [];
+  const doc = parseDocument(text);
+  if (doc.errors.length > 0) throw new UsageError(`${path} is not valid YAML: ${doc.errors[0]?.message}`);
+  visit(doc, {
+    Scalar(_key, node) {
+      if (node.type === 'PLAIN' && typeof node.value === 'string' && whole.test(node.value) && node.range)
+        plain.push([node.range[0], node.range[1]]);
+    },
+  });
+  let out = text;
+  for (const [start, end] of plain.sort((a, b) => b[0] - a[0]))
+    out = `${out.slice(0, start)}${JSON.stringify(displayVersion)}${out.slice(end)}`;
+  return out.replace(DISPLAY_VERSION_PLACEHOLDER, displayVersion);
 }
 
 /** The app dir the platform playbook lays out: the deploy root and the deployment's slug (§ 3 PLX-Platform). */
@@ -240,7 +289,9 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
   }
   if (compose === undefined)
     throw new UsageError(`no compose.yaml under ${source}; run from the app's source repo (§ 2 PLX-App)`);
-  const rendered = renderCompose(text, image, compose);
+  const withImage = renderCompose(text, image, compose);
+  const rendered = renderDisplayVersion(withImage, options.displayVersion || undefined, compose);
+  const displayVersion = rendered === withImage ? undefined : options.displayVersion;
   // The wait's budget: `retries` looks, two seconds apart.
   const budget = retries * 2;
   const check = healthcheckOf(parseCompose(rendered, compose));
@@ -256,6 +307,9 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
   ctx.say(`  host:    ${host}`);
   ctx.say(`  dir:     ${appDir}`);
   ctx.say(`  compose: ${compose}`);
+  if (displayVersion) ctx.say(`  display: ${displayVersion}`);
+  else if (options.displayVersion)
+    ctx.say(`  (${compose} does not use \${PLEXUS_DISPLAY_VERSION}; the display version is not pinned)`, 1);
   ctx.say('  health:  the healthcheck of service web, as Docker reports it');
   if (slow)
     ctx.say(
@@ -278,7 +332,15 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
     liveImage: `${dc} ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{.Config.Image}}' 2>/dev/null || true`,
     image,
     render: (ref) => renderCompose(text, ref, compose as string),
-    result: { host, appDir, compose, image, healthy: false, rolledBack: false },
+    result: {
+      host,
+      appDir,
+      compose,
+      image,
+      ...(displayVersion ? { displayVersion } : {}),
+      healthy: false,
+      rolledBack: false,
+    },
   };
   const { result } = s;
   let staged = false;
