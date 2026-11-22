@@ -1,5 +1,5 @@
 {
-  "version": "0.128.0",
+  "version": "0.129.0",
   "citable": [
     "§ 1 PLX",
     "§ 1.1 PLX",
@@ -45,6 +45,7 @@
     "§ 6.7 PLX",
     "§ 6.8 PLX",
     "§ 6.9 PLX",
+    "§ 6.10 PLX",
     "§ 7 PLX",
     "§ 7.1 PLX",
     "§ 7.2 PLX",
@@ -210,6 +211,12 @@
     "PLX-Platform/AppRecord",
     "PLX-Platform/UniqueAppName",
     "PLX-Platform/RecordValues",
+    "§ 1 PLX-Releases",
+    "§ 2 PLX-Releases",
+    "§ 3 PLX-Releases",
+    "§ 4 PLX-Releases",
+    "§ 5 PLX-Releases",
+    "§ 6 PLX-Releases",
     "§ 1 PLX-Secrets",
     "§ 2 PLX-Secrets",
     "§ 3 PLX-Secrets",
