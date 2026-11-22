@@ -1,0 +1,45 @@
+---
+# Backups per service. A timer runs /usr/local/sbin/plexus-backup, which dumps
+# every running container that carries a `plexus.backup=<type>` label with the
+# handler of that type (the script lists them; `postgres` today), keeps a
+# compressed copy on the host and backs the dump up with restic to a repository
+# of the deployment's own. An app is covered by carrying the label; nothing
+# about it is listed here. A failed run is mailed like any failed service
+# (plexus.host.mail).
+
+# Where the restic repositories live, in restic's own syntax and without the
+# deployment: the script appends `/<deployment>`, the compose project of the
+# labelled container (`vernier-review`, `vernier-review-staging`), and creates
+# a repository on its first run.
+#   backup_repository: s3:https://s3.fr-par.scw.cloud/example-backups
+# Empty leaves the host without the backup.
+backup_repository: ""
+
+# The password every repository of the tenant is encrypted with. Generated
+# once (`openssl rand -base64 32`) and kept in the vault: without it no backup
+# can be read, and nothing else holds it.
+backup_password: ""
+
+# Credentials of an S3 repository, and its region where the provider wants
+# one. Left empty for a repository that needs none.
+backup_s3_access_key: ""
+backup_s3_secret_key: ""
+backup_s3_region: ""
+
+# When the backup runs, each a time of day (the hosts run on UTC,
+# plexus.host.base); the timer adds up to ten minutes at random.
+backup_times: ["00:30", "08:30", "16:30"]
+
+# What restic keeps in each repository, as its `--keep-<key> <value>` options:
+# every backup of the last week, then one a day, a week and a month.
+backup_keep:
+  within: 7d
+  daily: 14
+  weekly: 8
+  monthly: 12
+
+# The compressed copies on the host, one directory per deployment under the
+# root, for a restore when the repository cannot be reached: how many days
+# they are kept.
+backup_local_root: /var/backups/stacks
+backup_local_days: 7

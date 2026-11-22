@@ -1,0 +1,114 @@
+---
+- name: Backups per service
+  when: backup_repository | length > 0
+  block:
+    - name: Check that the repositories have a password
+      ansible.builtin.assert:
+        that: backup_password | length > 0
+        fail_msg: backup_repository is set, so backup_password has to be (see the role's defaults).
+
+    - name: Install restic and zstd
+      ansible.builtin.apt:
+        name: [restic, zstd]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install the backup script
+      ansible.builtin.copy:
+        src: plexus-backup
+        dest: /usr/local/sbin/plexus-backup
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Create the root of the local copies
+      ansible.builtin.file:
+        path: "{{ backup_local_root }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    # A file of its own: a password may hold what an environment file would
+    # read as quoting.
+    - name: Write the repositories' password
+      ansible.builtin.copy:
+        dest: /etc/plexus-backup.password
+        owner: root
+        group: root
+        mode: "0600"
+        content: "{{ backup_password }}\n"
+      no_log: true
+
+    - name: Write the backup's settings
+      ansible.builtin.copy:
+        dest: /etc/plexus-backup.env
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          BACKUP_REPOSITORY={{ backup_repository }}
+          BACKUP_KEEP="{% for key, value in backup_keep.items() %}--keep-{{ key }} {{ value }}{{ '' if loop.last else ' ' }}{% endfor %}"
+          BACKUP_LOCAL_ROOT={{ backup_local_root }}
+          BACKUP_LOCAL_DAYS={{ backup_local_days }}
+          RESTIC_PASSWORD_FILE=/etc/plexus-backup.password
+          RESTIC_CACHE_DIR=/var/cache/restic
+          {% if backup_s3_access_key %}
+          AWS_ACCESS_KEY_ID={{ backup_s3_access_key }}
+          AWS_SECRET_ACCESS_KEY={{ backup_s3_secret_key }}
+          {% endif %}
+          {% if backup_s3_region %}
+          AWS_DEFAULT_REGION={{ backup_s3_region }}
+          {% endif %}
+      no_log: true
+
+    - name: Install the backup's service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/plexus-backup.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Back up the labelled data services
+          After=docker.service network-online.target
+          Requires=docker.service
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          EnvironmentFile=/etc/plexus-backup.env
+          ExecStart=/usr/local/sbin/plexus-backup
+          TimeoutStartSec=2h
+      notify: Reload systemd
+
+    - name: Install the backup's timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/plexus-backup.timer
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Back up the labelled data services
+
+          [Timer]
+          {% for time in backup_times %}
+          OnCalendar=*-*-* {{ time }}:00
+          {% endfor %}
+          RandomizedDelaySec=10m
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      notify: Reload systemd
+
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable the backup's timer
+      ansible.builtin.systemd_service:
+        name: plexus-backup.timer
+        enabled: true
+        state: started

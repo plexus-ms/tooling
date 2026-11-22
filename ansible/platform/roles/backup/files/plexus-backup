@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Managed by Ansible (backup); do not edit.
+#
+# Backs up every running container that carries a `plexus.backup=<type>` label.
+# For each one:
+#
+#   1. the handler of <type> dumps the service from inside its own container
+#      into <root>/<deployment>/<service>.dump, uncompressed, so that restic
+#      finds the unchanged parts of the previous dump again;
+#   2. the handler reads the dump back; a dump that cannot be read ends the
+#      service's backup here, and nothing is uploaded or rotated;
+#   3. restic backs the file up to <repository>/<deployment>, creating the
+#      repository on its first run, and forgets what the retention drops;
+#   4. the dump is compressed to <service>-<UTC time>.dump.zst beside it and
+#      the copies older than BACKUP_LOCAL_DAYS are deleted. This happens
+#      whether or not step 3 succeeded, so a host that cannot reach its
+#      repository still has its local copies.
+#
+# <deployment> is the container's compose project, <service> its compose
+# service. Snapshots carry the deployment as their host, so a deployment that
+# moves to another machine continues its history.
+#
+# A service that fails does not stop the others; the script exits 1 when any
+# failed, which fails the unit (plexus-backup.service) and mails.
+#
+# Handlers: postgres. A new type is one `dump_<type>` and one `verify_<type>`.
+#
+# By hand, as root:
+#
+#   systemctl start plexus-backup.service        # a run now; journalctl -u plexus-backup
+#   set -a; . /etc/plexus-backup.env; set +a      # restic's settings in this shell
+#   export RESTIC_REPOSITORY=$BACKUP_REPOSITORY/<deployment>
+#   restic snapshots
+#   restic dump latest <root>/<deployment>/<service>.dump | docker exec -i <container> pg_restore -U <user> -d <empty database>
+#   zstd -dc <root>/<deployment>/<service>-<time>.dump.zst | docker exec -i <container> pg_restore -U <user> -d <empty database>
+#
+# Settings come from the environment (/etc/plexus-backup.env): BACKUP_REPOSITORY,
+# BACKUP_KEEP (restic's --keep options), BACKUP_LOCAL_ROOT, BACKUP_LOCAL_DAYS,
+# and what restic reads itself (RESTIC_PASSWORD_FILE, RESTIC_CACHE_DIR, AWS_*).
+set -euo pipefail
+
+: "${BACKUP_REPOSITORY:?}" "${BACKUP_KEEP:?}" "${BACKUP_LOCAL_ROOT:?}" "${BACKUP_LOCAL_DAYS:?}"
+
+# ── handlers ────────────────────────────────────────────────────────────────
+# dump_<type> <container> writes the dump to stdout; verify_<type> <container>
+# reads it from stdin and fails when it is not a complete dump. Called by name.
+
+# The official image admits its own user over the local socket, so the dump
+# needs no password; the client is the server's own version.
+# shellcheck disable=SC2329
+dump_postgres() {
+  docker exec "$1" sh -c \
+    'exec pg_dump --username "$POSTGRES_USER" --dbname "${POSTGRES_DB:-$POSTGRES_USER}" --format=custom --compress=0'
+}
+
+# shellcheck disable=SC2329
+verify_postgres() {
+  docker exec -i "$1" pg_restore --list >/dev/null
+}
+
+# ── one service ─────────────────────────────────────────────────────────────
+label() {
+  docker inspect --format "{{ index .Config.Labels \"$2\" }}" "$1"
+}
+
+upload() { # <deployment> <type> <file>
+  local rc=0
+  export RESTIC_REPOSITORY="$BACKUP_REPOSITORY/$1"
+  restic cat config >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 10 ]; then # no repository there yet
+    restic init || return
+  fi
+  # Chained, since the caller goes on after a failure and so runs this
+  # function without set -e.
+  # shellcheck disable=SC2086 # BACKUP_KEEP is a list of options
+  restic backup --retry-lock 10m --host "$1" --tag "$2" "$3" &&
+    restic forget --retry-lock 10m --host "$1" --prune $BACKUP_KEEP
+}
+
+backup() { # <container>
+  local type deployment service dir file stamp rc=0
+  type=$(label "$1" plexus.backup)
+  deployment=$(label "$1" com.docker.compose.project)
+  service=$(label "$1" com.docker.compose.service)
+  if [ -z "$deployment" ] || [ -z "$service" ]; then
+    echo "✗ container $1 is not a compose service" >&2
+    return 1
+  fi
+  if ! declare -F "dump_$type" >/dev/null; then
+    echo "✗ $deployment/$service: no handler for plexus.backup=$type" >&2
+    return 1
+  fi
+
+  dir="$BACKUP_LOCAL_ROOT/$deployment"
+  file="$dir/$service.dump"
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  install -d -m 0700 "$dir"
+  # shellcheck disable=SC2064 # the path as it is now
+  trap "rm -f '$file.partial'" EXIT # of the caller's subshell
+
+  "dump_$type" "$1" >"$file.partial"
+  "verify_$type" "$1" <"$file.partial"
+  mv "$file.partial" "$file"
+
+  upload "$deployment" "$type" "$file" || rc=$?
+
+  zstd --quiet --force --rm "$file" -o "$dir/$service-$stamp.dump.zst"
+  find "$dir" -name "$service-*.dump.zst" -mtime "+$BACKUP_LOCAL_DAYS" -delete
+
+  if [ "$rc" -ne 0 ]; then
+    echo "✗ $deployment/$service: dumped to $dir, but not backed up to the repository" >&2
+    return 1
+  fi
+  echo "✓ $deployment/$service"
+}
+
+# ── every labelled service ──────────────────────────────────────────────────
+failed=0
+for container in $(docker ps --quiet --filter label=plexus.backup); do
+  # In a subshell with set -e of its own, so that this service's backup ends
+  # at its first failing step and the loop carries on with the next. Not
+  # `(…) || failed=1`: bash ignores set -e in everything left of a `||`.
+  set +e
+  (set -e; backup "$container")
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || failed=1
+done
+exit "$failed"
