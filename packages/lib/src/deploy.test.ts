@@ -7,6 +7,7 @@ import {
   defaultAppDir,
   deploy,
   q,
+  renderCommitSha,
   renderCompose,
   renderDisplayVersion,
   seconds,
@@ -20,6 +21,9 @@ const COMPOSE = 'services:\n  web:\n    image: ${PLEXUS_DEPLOYMENT_IMAGE:?set}\n
 const PINNED = 'services:\n  web:\n    image: ghcr.io/x/beszel:1.0\n';
 /** The app service's healthcheck (PLX-App/Healthcheck), which every deployed file declares. */
 const HEALTHCHECK = '    healthcheck:\n      test: [CMD, "true"]\n';
+/** Two commits, full hashes; the second reads as a number where YAML is left to guess. */
+const SHA_A = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
+const SHA_B = '1234e56789012345678901234567890123456789';
 
 test('renderCompose pins the placeholder once, with or without a message, and refuses a mismatch', () => {
   assert.equal(renderCompose(COMPOSE, 'ghcr.io/x/web:abc', 'c'), 'services:\n  web:\n    image: ghcr.io/x/web:abc\n');
@@ -63,7 +67,7 @@ test('renderDisplayVersion quotes a whole unquoted value, fills one inside a str
   assert.equal(renderDisplayVersion(COMPOSE, '1.10', 'c'), COMPOSE);
   assert.equal(renderDisplayVersion(file, undefined, 'c'), file);
   assert.equal(renderDisplayVersion(file, '', 'c'), file);
-  assert.match(renderDisplayVersion(file, '1.4+a1b2c3d', 'c'), /PLEXUS_DISPLAY_VERSION: "1\.4\+a1b2c3d"/);
+  assert.match(renderDisplayVersion(file, '1.4+', 'c'), /PLEXUS_DISPLAY_VERSION: "1\.4\+"/);
   assert.throws(() => renderDisplayVersion(file, '1.4 "x"', 'c'), UsageError);
   assert.throws(() => renderDisplayVersion(file, '-1', 'c'), UsageError);
 });
@@ -212,21 +216,47 @@ test('a display version is pinned into the staged file and reported; a file with
   assert.equal(unused.healthy, true);
 });
 
-test('shownBy reads the display version a served file pins, and tells another run shape apart', () => {
+test('renderCommitSha pins a full hash, quoted where YAML would guess, and refuses anything else', () => {
+  const file =
+    'services:\n  web:\n    image: i\n    environment:\n      S: ${PLEXUS_COMMIT_SHA:-}\n      L: "at ${PLEXUS_COMMIT_SHA}"\n';
+  assert.equal(
+    renderCommitSha(file, SHA_B, 'c'),
+    `services:\n  web:\n    image: i\n    environment:\n      S: "${SHA_B}"\n      L: "at ${SHA_B}"\n`,
+  );
+  assert.equal(renderCommitSha(COMPOSE, SHA_A, 'c'), COMPOSE);
+  assert.equal(renderCommitSha(file, undefined, 'c'), file);
+  assert.equal(renderCommitSha(file, '', 'c'), file);
+  for (const short of ['a1b2c3d', SHA_A.toUpperCase(), `${SHA_A}0`, 'dev'])
+    assert.throws(() => renderCommitSha(file, short, 'c'), UsageError);
+});
+
+test('shownBy reads the display version and the commit sha a served file pins, and tells another run shape apart', () => {
   const shape =
     'services:\n  web:\n    image: i\n    environment:\n      V: ${PLEXUS_DISPLAY_VERSION:-}\n      L: "app ${PLEXUS_DISPLAY_VERSION}"\n';
   const served = (v: string) => renderDisplayVersion(shape, v, 'c');
-  assert.equal(shownBy(shape, '1.3', served('1.1')), '1.1');
-  assert.equal(shownBy(shape, '1.3', served('1.4+a1b2c3d')), '1.4+a1b2c3d');
+  const given = { displayVersion: '1.3' };
+  assert.deepEqual(shownBy(shape, given, served('1.1')), { displayVersion: '1.1' });
+  assert.deepEqual(shownBy(shape, given, served('1.4+')), { displayVersion: '1.4+' });
   // Two places, two versions: not a file this verb wrote.
-  assert.equal(shownBy(shape, '1.3', served('1.1').replace('app 1.1', 'app 1.2')), undefined);
+  assert.equal(shownBy(shape, given, served('1.1').replace('app 1.1', 'app 1.2')), undefined);
   // Written before display versions: the placeholder itself, another file.
-  assert.equal(shownBy(shape, '1.3', shape), undefined);
-  assert.equal(shownBy(shape, '1.3', served('1.1').replace('image: i', 'image: j')), undefined);
+  assert.equal(shownBy(shape, given, shape), undefined);
+  assert.equal(shownBy(shape, given, served('1.1').replace('image: i', 'image: j')), undefined);
   // Without a display version, or a file without the placeholder: the file as it is.
-  assert.equal(shownBy(shape, undefined, shape), '');
-  assert.equal(shownBy(COMPOSE, '1.3', COMPOSE), '');
-  assert.equal(shownBy(COMPOSE, '1.3', PINNED), undefined);
+  assert.deepEqual(shownBy(shape, {}, shape), {});
+  assert.deepEqual(shownBy(COMPOSE, given, COMPOSE), {});
+  assert.equal(shownBy(COMPOSE, given, PINNED), undefined);
+
+  // Both values, each in two places.
+  const both = `${shape}      S: \${PLEXUS_COMMIT_SHA:-}\n      T: "\${PLEXUS_DISPLAY_VERSION} at \${PLEXUS_COMMIT_SHA}"\n`;
+  const servedBoth = (v: string, sha: string) => renderCommitSha(renderDisplayVersion(both, v, 'c'), sha, 'c');
+  const givenBoth = { displayVersion: '1.3', commitSha: SHA_A };
+  assert.deepEqual(shownBy(both, givenBoth, servedBoth('1.2+', SHA_B)), { displayVersion: '1.2+', commitSha: SHA_B });
+  assert.equal(shownBy(both, givenBoth, servedBoth('1.2+', SHA_B).replace(`at ${SHA_B}`, `at ${SHA_A}`)), undefined);
+  // A file that pins the version and leaves the commit sha to compose: another file, a full deploy once.
+  assert.equal(shownBy(both, givenBoth, renderDisplayVersion(both, '1.2', 'c')), undefined);
+  // Only one of the two given: the other placeholder is part of the run shape.
+  assert.deepEqual(shownBy(both, { commitSha: SHA_A }, renderCommitSha(both, SHA_B, 'c')), { commitSha: SHA_B });
 });
 
 test('the image already live, showing another display version, restarts nothing and keeps the version it shows', async () => {
@@ -246,6 +276,45 @@ test('the image already live, showing another display version, restarts nothing 
   assert.equal(result.displayVersion, '1.1');
   assert.ok(!commands.some((c) => c.endsWith('up -d --remove-orphans')));
   assert.match(err(), /ghcr.io\/x\/web:old \(the image ghcr.io\/x\/web:new names\), showing 1.1, is already live/);
+
+  // The same for a commit sha: another commit that names the image already live restarts nothing.
+  const envBoth = `${env}      PLEXUS_COMMIT_SHA: \${PLEXUS_COMMIT_SHA:-}\n`;
+  const sourceBoth = COMPOSE + envBoth + HEALTHCHECK;
+  const treeBoth: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': sourceBoth } } } } };
+  const servingBoth = renderCommitSha(
+    renderDisplayVersion(renderCompose(sourceBoth, 'ghcr.io/x/web:old', 'c'), '1.1+', 'c'),
+    SHA_B,
+    'c',
+  );
+  const docs = harness(treeBoth, host('ghcr.io/x/web:old', { sameImage: true, serving: servingBoth }));
+  const kept = await deploy(docs.ctx, {
+    host: 'deploy@h',
+    app: 'web',
+    image: 'ghcr.io/x/web:new',
+    displayVersion: '1.2',
+    commitSha: SHA_A,
+    dir: '/repo',
+  });
+  assert.equal(kept.unchanged, true);
+  assert.equal(kept.displayVersion, '1.1+');
+  assert.equal(kept.commitSha, SHA_B);
+  assert.ok(!docs.commands.some((c) => c.endsWith('up -d --remove-orphans')));
+  assert.match(docs.err(), /showing 1\.1\+ at 1234e56, is already live/);
+
+  // A commit sha alone, to a repo without display versions: pinned on a full deploy, kept otherwise.
+  const shaOnly = COMPOSE + '    environment:\n      PLEXUS_COMMIT_SHA: ${PLEXUS_COMMIT_SHA:-}\n' + HEALTHCHECK;
+  const treeSha: Tree = { repo: { apps: { web: { docker: { 'compose.yaml': shaOnly } } } } };
+  const fresh = host('ghcr.io/x/web:old');
+  const started = await deploy(harness(treeSha, fresh).ctx, {
+    host: 'deploy@h',
+    app: 'web',
+    image: 'ghcr.io/x/web:new',
+    commitSha: SHA_A,
+    dir: '/repo',
+  });
+  assert.match(fresh.staged ?? '', new RegExp(`PLEXUS_COMMIT_SHA: "${SHA_A}"`));
+  assert.equal(started.commitSha, SHA_A);
+  assert.equal(started.displayVersion, undefined);
 
   // The same ref, another display version: nothing either.
   const again = harness(tree, host('ghcr.io/x/web:old', { serving }));

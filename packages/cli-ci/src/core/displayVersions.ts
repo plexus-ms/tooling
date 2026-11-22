@@ -1,35 +1,56 @@
-// Display versions: the string each app of an app repo shows as its version,
-// and the version tag a production release cuts. Opt-in per repo, through
-// the release workflow's `display-versions` input; a repo that does not ask
-// for them meets none of this.
+// Display versions (PLX-Releases): the string each app of an app repo shows as
+// its version, and the version tag a production release cuts. Opt-in per
+// repo, through the release workflow's `display-versions` input; a repo that
+// does not ask for them meets none of this. The commit an app is started
+// from is handed over beside it, by the workflow itself, to every app repo.
 //
 // A version is `MAJOR.MINOR`, a git tag with no prefix, one per repo. The
 // tags are the only state: nothing else is stored, and every number is read
 // back from git and the forge's registry.
 //
-//   production   the next version when an app changed: an app has changed
-//                when its published image (`<prefix>/<app>:<sha>`) is not
-//                the one published under the last version's commit. The next
-//                version is the last one's minor plus one, or `<major>.0`
-//                when the marker's `major` is above the last one's. Every app
-//                is handed that version, or the last one when nothing changed
-//                and no version is cut.
-//   elsewhere    the last version in the commit's history and the short sha,
-//                `1.4+a1b2c3d`, or the short sha alone before the first
-//                version; no version is cut.
+// A display version is a version, bare or with a `+`, and nothing else: no
+// `v`, which is the app's to add, and no commit, which is its own value.
 //
-// An app whose image is already live keeps the version it shows: the deploy
-// verb restarts nothing for a display version alone (§ 6 PLX-Delivery), so an
-// unchanged app goes on showing the version it was released in.
+//   1.4     the commit released carries the tag 1.4, or is about to: a
+//           production release cuts 1.4 with it.
+//   1.4+    the commit deviates from 1.4, the last version in its history.
+//   0.0+    before the first version.
 //
-// The marker's `major` (PLEXUS.md frontmatter) is the human's decision; the
-// minor counts up by itself. The tag itself, with its GitHub Release, is
-// made by `tagDisplayVersion` once every deploy of the release is green.
+// A production release cuts the next version when an app changed: an app
+// has changed when its published image (`<prefix>/<app>:<sha>`) is not the
+// one published under the last version's commit. The next version is the
+// last one's minor plus one, or `<major>.0` when the marker's `major` is
+// above the last one's. No other environment ever cuts a version.
+//
+// Three cases follow from that and are meant:
+//
+//   - Staging shows `1.4+` for a commit that production then releases as
+//     1.5, and goes on showing it: its string was pinned before the tag was
+//     there, and no release touches another environment. The commit sha the
+//     two show is the same.
+//   - Production shows `1.4+` after a release that changes an app's run
+//     shape and no image: no version is cut, and the app restarts at a commit
+//     that carries no tag.
+//   - An app whose image is already live keeps the display version and the
+//     commit sha it shows: the deploy verb restarts nothing for either alone
+//     (§ 6 PLX-Delivery), so in a repo of several apps an unchanged one goes
+//     on showing the version it was released in.
+//
+// The marker's `major` (PLEXUS.md frontmatter) is the human's decision, 1 or
+// higher, so that `0.0+` only ever means "before the first version"; the
+// minor counts up by itself. It is read on every run, in every environment,
+// so that a repo that turns display versions on without one fails at its
+// first push and not at its first production release. The tag itself, with
+// its GitHub Release, is made by `tagDisplayVersion` once every deploy of the
+// release is green.
 import { type Context, MARKER_FILE, splitFrontmatter, UsageError } from '@plexus-ms/lib';
 import { craneDigest, imageName } from './registry.ts';
 
 /** The environment whose releases cut versions. */
 export const PRODUCTION = 'production';
+
+/** The display version before the first version. */
+export const UNRELEASED = '0.0+';
 
 export interface Version {
   tag: string;
@@ -71,8 +92,8 @@ export async function majorOf(ctx: Context, dir: string): Promise<number> {
     throw new UsageError(
       `${MARKER_FILE} states no major; a repo with display versions sets \`major:\` in its frontmatter`,
     );
-  if (typeof major !== 'number' || !Number.isInteger(major) || major < 0)
-    throw new UsageError(`${MARKER_FILE}: major must be a whole number, not ${JSON.stringify(major)}`);
+  if (typeof major !== 'number' || !Number.isInteger(major) || major < 1)
+    throw new UsageError(`${MARKER_FILE}: major must be a whole number, 1 or higher, not ${JSON.stringify(major)}`);
   return major;
 }
 
@@ -82,8 +103,9 @@ export async function versionsIn(ctx: Context, dir: string, sha: string): Promis
   return versionsOf(out.split('\n'));
 }
 
-const commitOf = async (ctx: Context, dir: string, tag: string): Promise<string> =>
-  (await ctx.read('git', ['rev-parse', `${tag}^{commit}`], { cwd: dir })).trim();
+/** The commit a tag or a hash names, as a full hash. */
+const commitOf = async (ctx: Context, dir: string, rev: string): Promise<string> =>
+  (await ctx.read('git', ['rev-parse', `${rev}^{commit}`], { cwd: dir })).trim();
 
 export interface DisplayVersions {
   environment: string;
@@ -110,15 +132,19 @@ export async function displayVersions(ctx: Context, options: DisplayVersionsOpti
   const { dir, environment, sha, apps, prefix } = options;
   const versions = await versionsIn(ctx, dir, sha);
   const last = versions[0];
-  const base = { environment, ...(last ? { previous: last.tag } : {}) };
-
-  if (environment !== PRODUCTION) {
-    const short = (await ctx.read('git', ['rev-parse', '--short=7', sha], { cwd: dir })).trim();
-    const shown = last ? `${last.tag}+${short}` : short;
-    return { ...base, version: '', apps: Object.fromEntries(apps.map((app) => [app, shown])) };
-  }
-
+  // On every run: a marker without a usable major fails here, whatever the environment.
+  const next = nextVersion(last, await majorOf(ctx, dir));
   const lastCommit = last ? await commitOf(ctx, dir, last.tag) : undefined;
+  // What the commit shows where no version is cut with it: its own tag, or a deviation from the last one.
+  const uncut = !last ? UNRELEASED : lastCommit === (await commitOf(ctx, dir, sha)) ? last.tag : `${last.tag}+`;
+  const result = (version: string): DisplayVersions => ({
+    environment,
+    ...(last ? { previous: last.tag } : {}),
+    version,
+    apps: Object.fromEntries(apps.map((app) => [app, version || uncut])),
+  });
+  if (environment !== PRODUCTION) return result('');
+
   const changed: string[] = [];
   for (const app of apps) {
     const image = imageName(prefix, app);
@@ -129,11 +155,9 @@ export async function displayVersions(ctx: Context, options: DisplayVersionsOpti
     ctx.say(`${app}: ${same ? `unchanged since ${last?.tag}` : 'changed since the last version'}`);
     if (!same) changed.push(app);
   }
-  const version = changed.length > 0 ? nextVersion(last, await majorOf(ctx, dir)) : '';
-  if (version) ctx.say(`production changed: ${changed.join(', ')}; the release cuts ${version}`);
+  if (changed.length > 0) ctx.say(`production changed: ${changed.join(', ')}; the release cuts ${next}`);
   else ctx.say(`production is unchanged since ${last?.tag}; the release cuts no version`);
-  const shown = version || (last?.tag as string);
-  return { ...base, version, apps: Object.fromEntries(apps.map((app) => [app, shown])) };
+  return result(changed.length > 0 ? next : '');
 }
 
 /** The release notes of `version`: the subjects of the commits since the previous version, merges left out. */

@@ -26,6 +26,8 @@ function repo(options: {
   log?: string;
   curl?: string[][];
   existing?: Record<string, string>;
+  /** The version tag the released commit carries, if any. */
+  at?: string;
 }) {
   const marker = options.major === undefined ? '---\n---\n' : `---\nmajor: ${options.major}\n---\n`;
   const crane: string[] = [];
@@ -35,12 +37,14 @@ function repo(options: {
       { repo: { 'PLEXUS.md': marker } },
       (_cwd, args) => {
         if (args[0] === 'tag' && args[1] === '--merged') return [...options.tags, 'some-other-tag'].join('\n');
-        if (args[0] === 'rev-parse' && args[1] === '--short=7') return 'abcdef1\n';
         if (args[0] === 'rev-parse' && args[1] === '-q') {
           const tag = /^refs\/tags\/(.+)\^\{commit\}$/.exec(args[3] ?? '')?.[1] ?? '';
           return options.existing?.[tag];
         }
-        if (args[0] === 'rev-parse') return `${commitOf((args[1] ?? '').replace('^{commit}', ''))}\n`;
+        if (args[0] === 'rev-parse') {
+          const rev = (args[1] ?? '').replace('^{commit}', '');
+          return rev === SHA || rev === options.at ? `${SHA}\n` : `${commitOf(rev)}\n`;
+        }
         if (args[0] === 'log') return options.log ?? '';
         return undefined;
       },
@@ -101,13 +105,23 @@ test('production: a changed app cuts the next version, which every app is handed
   assert.ok(!r.crane.some((ref) => ref.endsWith(':c-1.1') || ref.endsWith(':c-1.0')));
 });
 
-test('production: nothing changed, no version; every app is handed the last one', async () => {
-  const r = repo({
+test('production: nothing changed, no version; a commit without the tag deviates from the last one', async () => {
+  const digests = { [`web:${SHA}`]: 'W', 'web:c-1.1': 'W', 'web:c-1.0': 'W', [`api:${SHA}`]: 'A', 'api:c-1.1': 'A' };
+  // An app handed this is one that restarts all the same, for a changed run shape.
+  assert.deepEqual(await run(repo({ tags: ['1.0', '1.1'], major: 1, digests })), {
+    environment: 'production',
+    previous: '1.1',
+    version: '',
+    apps: { web: '1.1+', api: '1.1+' },
+  });
+  // A re-run of the release that cut 1.1: the commit carries the tag.
+  const rerun = repo({
     tags: ['1.0', '1.1'],
     major: 1,
-    digests: { [`web:${SHA}`]: 'W', 'web:c-1.1': 'W', 'web:c-1.0': 'W', [`api:${SHA}`]: 'A', 'api:c-1.1': 'A' },
+    at: '1.1',
+    digests: { [`web:${SHA}`]: 'W', [`api:${SHA}`]: 'A' },
   });
-  assert.deepEqual(await run(r), {
+  assert.deepEqual(await run(rerun), {
     environment: 'production',
     previous: '1.1',
     version: '',
@@ -132,28 +146,41 @@ test('production: a raised major starts at .0; the first version is <major>.0; a
   assert.deepEqual((await run(added, 'production', ['web', 'new'])).apps, { web: '1.1', new: '1.1' });
 });
 
-test('production: a marker without a whole-number major is a usage error, asked only when a version is cut', async () => {
+test('a marker without a whole-number major of 1 or higher is a usage error, on every run and in every environment', async () => {
   const digests = { [`web:${SHA}`]: 'W2', 'web:c-1.0': 'W1' };
   await assert.rejects(run(repo({ tags: ['1.0'], digests }), 'production', ['web']), /states no major/);
   await assert.rejects(run(repo({ tags: ['1.0'], major: '"one"', digests }), 'production', ['web']), /whole number/);
-  const unchanged = repo({ tags: ['1.0'], digests: { [`web:${SHA}`]: 'W', 'web:c-1.0': 'W' } });
-  assert.equal((await run(unchanged, 'production', ['web'])).version, '');
+  await assert.rejects(run(repo({ tags: [], major: 0, digests }), 'production', ['web']), /1 or higher/);
+  const unchanged = { [`web:${SHA}`]: 'W', 'web:c-1.0': 'W' };
+  await assert.rejects(run(repo({ tags: ['1.0'], digests: unchanged }), 'production', ['web']), /states no major/);
+  await assert.rejects(run(repo({ tags: ['1.0'], digests: {} }), 'staging'), /states no major/);
+  await assert.rejects(run(repo({ tags: ['2.3'], major: 1, digests: {} }), 'staging'), /never goes back/);
 });
 
 test('production: an image that is not published is an error, since publish runs first', async () => {
   await assert.rejects(run(repo({ tags: ['1.0'], major: 1, digests: {} }), 'production', ['web']), /is not published/);
 });
 
-test('staging: the last version in the history and the short sha, or the short sha alone; never a version', async () => {
-  assert.deepEqual(await run(repo({ tags: ['1.0', '1.2', '1.1'], digests: {} }), 'staging'), {
+test('staging: the last version with a +, the bare version at its own commit, 0.0+ before the first; never a version', async () => {
+  assert.deepEqual(await run(repo({ tags: ['1.0', '1.2', '1.1'], major: 1, digests: {} }), 'staging'), {
     environment: 'staging',
     previous: '1.2',
     version: '',
-    apps: { web: '1.2+abcdef1', api: '1.2+abcdef1' },
+    apps: { web: '1.2+', api: '1.2+' },
   });
-  assert.deepEqual((await run(repo({ tags: [], digests: {} }), 'staging')).apps, {
-    web: 'abcdef1',
-    api: 'abcdef1',
+  assert.deepEqual((await run(repo({ tags: ['1.0', '1.2'], major: 1, at: '1.2', digests: {} }), 'staging')).apps, {
+    web: '1.2',
+    api: '1.2',
+  });
+  // An older tag at the commit is not the last version of its history.
+  assert.deepEqual((await run(repo({ tags: ['1.0', '1.2'], major: 1, at: '1.0', digests: {} }), 'staging')).apps, {
+    web: '1.2+',
+    api: '1.2+',
+  });
+  assert.deepEqual(await run(repo({ tags: [], major: 1, digests: {} }), 'staging'), {
+    environment: 'staging',
+    version: '',
+    apps: { web: '0.0+', api: '0.0+' },
   });
 });
 

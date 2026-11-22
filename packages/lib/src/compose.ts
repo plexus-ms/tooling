@@ -70,6 +70,13 @@ export const IMAGE_PLACEHOLDER = /\$\{PLEXUS_DEPLOYMENT_IMAGE(:[^}]*)?\}/g;
  */
 export const DISPLAY_VERSION_PLACEHOLDER = /\$\{PLEXUS_DISPLAY_VERSION(:[^}]*)?\}/g;
 
+/**
+ * The deploy verb's placeholder for the commit sha, the commit a deployment
+ * was started from, in any spelling `${PLEXUS_COMMIT_SHA…}`. Optional on both
+ * sides, like the display version's.
+ */
+export const COMMIT_SHA_PLACEHOLDER = /\$\{PLEXUS_COMMIT_SHA(:[^}]*)?\}/g;
+
 /** An image as the deploy verb will run it: every spelling of the placeholder as one. */
 export const normalImage = (image: string): string => image.replace(IMAGE_PLACEHOLDER, '${PLEXUS_DEPLOYMENT_IMAGE}');
 

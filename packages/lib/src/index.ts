@@ -50,8 +50,10 @@ export {
   defaultAppDir,
   deploy,
   q as shellQuote,
+  renderCommitSha,
   renderCompose,
   renderDisplayVersion,
+  type Shown,
 } from './deploy.ts';
 export {
   DEFAULT_ENVIRONMENT,

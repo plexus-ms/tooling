@@ -10,7 +10,8 @@
 //   plx deploy deploy@1.2.3.4 website --image ghcr.io/org/website:<sha>
 //   plx deploy deploy@1.2.3.4 beszel            # third-party: image pinned in the file
 //   plx deploy deploy@1.2.3.4 website -e staging --image …   # the staging deployment, /opt/stacks/website-staging
-//   plx deploy deploy@1.2.3.4 website --image … --display-version 1.4   # the app shows 1.4, where its file uses ${PLEXUS_DISPLAY_VERSION}
+//   plx deploy deploy@1.2.3.4 website --image … --display-version 1.4 --commit-sha <sha>
+//                                               # the app shows them, where its file uses ${PLEXUS_DISPLAY_VERSION} and ${PLEXUS_COMMIT_SHA}
 import { resolve } from 'node:path';
 import { type Deploy, deploy } from '@plexus-ms/lib';
 import type { Command } from 'commander';
@@ -19,6 +20,7 @@ import { contextOf } from '../program.ts';
 interface Opts {
   image?: string;
   displayVersion?: string;
+  commitSha?: string;
   retries: string;
   environment?: string;
   appDir?: string;
@@ -39,6 +41,10 @@ export function register(program: Command): void {
       '--display-version <string>',
       'the string the app shows as its version, pinned where its compose.yaml uses ${PLEXUS_DISPLAY_VERSION}; ignored where it does not',
     )
+    .option(
+      '--commit-sha <sha>',
+      'the commit the deployment is started from, a full hash, pinned where its compose.yaml uses ${PLEXUS_COMMIT_SHA}; ignored where it does not',
+    )
     .option('--retries <n>', 'looks at the app container’s health status, two seconds apart', '30')
     .option(
       '-e, --environment <name>',
@@ -57,6 +63,7 @@ export function register(program: Command): void {
         app,
         image: opts.image,
         displayVersion: opts.displayVersion,
+        commitSha: opts.commitSha,
         retries: Number(opts.retries),
         environment: opts.environment,
         appDir: opts.appDir,

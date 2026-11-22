@@ -1,7 +1,9 @@
 // The marker, PLEXUS.md (§ 1.4 PLX): YAML frontmatter with an app's
 // `profile` and the unit's `deviations`, then free-form prose that gives a
-// reason for each deviation. This is the one reader of that shape; every verb
-// that needs a marker parses it here. Neither what a unit follows nor the
+// reason for each deviation. A repo with display versions also states their
+// `major` there (PLX-Releases), which plx-ci reads from the frontmatter by
+// itself. This is the one reader of the declaration; every verb that needs
+// one parses it here. Neither what a unit follows nor the
 // Plexus version is in a marker: a unit is bound by the contracts by being a
 // repo or an app, and a repo is on the version its `plx` pin names (§ 1.5 PLX).
 // Keys a marker of an earlier version still carries (`plexus`, `modules`) are

@@ -12,6 +12,10 @@
 // the environment: GITHUB_REPOSITORY, and GITHUB_TOKEN, allowed to write the
 // repo's contents.
 //
+// A display version is `1.4`, or `1.4+` where the commit deviates from the
+// last version, and never holds a commit; the commit is its own value, which
+// the release hands to the deploy beside it.
+//
 //   plx-ci display-versions production "$GITHUB_SHA" --deploys "$DEPLOYS"
 //   plx-ci tag-display-version 1.4 "$GITHUB_SHA"
 import { appendFileSync } from 'node:fs';

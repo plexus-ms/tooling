@@ -18,7 +18,11 @@ name: _release
 # in the compose files of the apps that show it, and serializes its release
 # job (a concurrency group per ref that cancels nothing), so that two pushes
 # to main never take the same number. plx-ci's display-versions states how
-# the versions are read from the tags and the registry.
+# the versions are read from the tags and the registry (PLX-Releases).
+#
+# Every deploy is handed the commit released, display versions or not: an
+# app whose compose file uses ${PLEXUS_COMMIT_SHA} shows the commit it was
+# started from, and one that does not is deployed as before.
 #
 # A promotion never builds: a commit whose images the registry holds is
 # published from them and deployed. Without an environment (a run by hand on
@@ -79,7 +83,8 @@ on:
         description: >-
           Give every deployed app a display version, PLEXUS_DISPLAY_VERSION,
           and cut a version tag with a GitHub Release when a production release
-          changes an app. Off: the release neither computes nor tags anything.
+          changes an app (PLX-Releases). Off: the release neither computes nor
+          tags anything.
         required: false
         type: boolean
         default: false
@@ -262,6 +267,7 @@ jobs:
       vault: ${{ inputs.vault }}
       dry-run: ${{ inputs.dry-run }}
       display-version: ${{ fromJSON(needs.display-versions.outputs.display-versions || '{}')[matrix.app] || '' }}
+      commit-sha: ${{ github.sha }}
       tooling-ref: ${{ inputs.tooling-ref }}
     secrets:
       op-service-account-token: ${{ secrets.op-service-account-token }}
