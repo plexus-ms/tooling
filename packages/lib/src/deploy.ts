@@ -35,7 +35,10 @@
 // A third-party app pins its image inside compose.yaml and passes no image
 // ref; the file is then placed as is. Where the host already serves the same
 // file with `web` running and healthy, with or without a ref, the verb ends
-// there: nothing is pulled, migrated or restarted.
+// there: nothing is pulled, migrated or restarted. A ref other than the live
+// one that names the very image `web` runs counts as the same: a release
+// tags every app's image with its commit, an unchanged app's among them, and
+// restarting it for a new tag would restart every app on every release.
 //
 //   plx deploy deploy@1.2.3.4 website --image ghcr.io/org/website:<sha>
 //   plx deploy deploy@1.2.3.4 website --environment staging --image …   # into /opt/stacks/website-staging
@@ -210,6 +213,8 @@ interface Session {
   /** The running `web` container's image, or nothing. */
   liveImage: string;
   image?: string;
+  /** The run shape with another image ref pinned: what the host serves when it runs that ref. */
+  render: (ref: string) => string;
   result: Deploy;
 }
 
@@ -272,6 +277,7 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
     // one fixed loopback port (§ 4 PLX-App), which a second replica could not.
     liveImage: `${dc} ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{.Config.Image}}' 2>/dev/null || true`,
     image,
+    render: (ref) => renderCompose(text, ref, compose as string),
     result: { host, appDir, compose, image, healthy: false, rolledBack: false },
   };
   const { result } = s;
@@ -330,17 +336,37 @@ async function alreadyServing(s: Session): Promise<boolean> {
     ctx.say('  (nothing more runs when the host already serves this image from this file, healthy)');
     return false;
   }
-  // A third-party app passes no ref: its file pins the image, so the same
-  // file with `web` running is the same deployment, and a platform repo can
-  // deploy every app on every push without restarting any.
-  if (!(s.image ? result.previous === s.image : result.previous !== undefined)) return false;
-  if (!(await s.remote.test(`cd ${s.D} && cmp -s compose.yaml ${INCOMING}/compose.yaml`))) return false;
+  if (result.previous === undefined) return false;
+  let same: string | undefined;
+  if (s.image === undefined || result.previous === s.image) {
+    // A third-party app passes no ref: its file pins the image, so the same
+    // file with `web` running is the same deployment, and a platform repo can
+    // deploy every app on every push without restarting any.
+    if (!(await s.remote.test(`cd ${s.D} && cmp -s compose.yaml ${INCOMING}/compose.yaml`))) return false;
+  } else {
+    // Another ref: the same deployment when it names the image `web` runs
+    // (pulled for its id, which fetches no layer the host has) and the host
+    // serves this run shape with the live ref pinned. The host keeps its file
+    // and its ref, which names the image it serves.
+    if (!(await sameImage(s, s.image))) return false;
+    const serving = await s.remote.read(`cat ${s.D}/compose.yaml`);
+    if (serving === undefined || serving !== s.render(result.previous).trimEnd()) return false;
+    same = s.image;
+  }
   if (!(await awaitHealthy(s, 1))) return false;
   result.live = result.previous;
   result.healthy = true;
   result.unchanged = true;
-  ctx.done(`${result.previous} is already live and healthy; nothing to do`);
+  ctx.done(`${result.previous}${same ? ` (the image ${same} names)` : ''} is already live and healthy; nothing to do`);
   return true;
+}
+
+/** Whether `ref` names the image the `web` container runs: pulled, then compared by image id; no id is no match. */
+function sameImage(s: Session, ref: string): Promise<boolean | undefined> {
+  const running = `docker compose ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{.Image}}' 2>/dev/null`;
+  return s.remote.test(
+    `cd ${s.D} && docker pull -q ${q(ref)} >/dev/null && id=$(docker image inspect --format '{{.Id}}' ${q(ref)}) && [ -n "$id" ] && [ "$id" = "$(${running})" ]`,
+  );
 }
 
 /**
