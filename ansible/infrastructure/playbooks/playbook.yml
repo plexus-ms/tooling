@@ -34,6 +34,13 @@
   hosts: proxmox:pbs:haproxy
   become: true
   tags: [host]
+  # Facts by a task tagged `always`, in every play: the implicit gathering
+  # carries only the play's tags and is skipped under a role's tag alone.
+  gather_facts: false
+  pre_tasks:
+    - name: Gather facts
+      ansible.builtin.setup:
+      tags: [always]
   roles:
     - { role: plexus.host.base, tags: [base] }
     - { role: plexus.host.hostname, tags: [hostname], when: hostname_enabled }
@@ -46,6 +53,11 @@
   hosts: proxmox
   become: true
   tags: [infrastructure]
+  gather_facts: false
+  pre_tasks:
+    - name: Gather facts
+      ansible.builtin.setup:
+      tags: [always]
   roles:
     - { role: plexus.infrastructure.proxmox, tags: [proxmox] } # web UI on the overlay, firewall, storage, guest bridge, backup jobs
     - { role: plexus.infrastructure.guests, tags: [guests] }   # creates the VMs the other plays and playbooks configure
@@ -56,6 +68,11 @@
   hosts: pbs
   become: true
   tags: [infrastructure]
+  gather_facts: false
+  pre_tasks:
+    - name: Gather facts
+      ansible.builtin.setup:
+      tags: [always]
   roles:
     - { role: plexus.host.firewall, tags: [firewall] }
     - { role: plexus.infrastructure.pbs, tags: [pbs] } # datastore, retention, the clients that may push to it
@@ -64,6 +81,11 @@
   hosts: haproxy
   become: true
   tags: [infrastructure]
+  gather_facts: false
+  pre_tasks:
+    - name: Gather facts
+      ansible.builtin.setup:
+      tags: [always]
   roles:
     - { role: plexus.infrastructure.haproxy, tags: [haproxy] } # SNI/Host routing to the tenant VMs, NAT for the guest bridge
     - { role: plexus.host.firewall, tags: [firewall] }         # after the role that adds rules to it
@@ -76,6 +98,7 @@
   hosts: guests
   become: true
   tags: [infrastructure, guests]
+  gather_facts: false
   pre_tasks:
     # A new guest upgrades its packages on first boot and holds apt meanwhile.
     - name: Wait for the first boot to finish
@@ -83,6 +106,9 @@
         cmd: cloud-init status --wait
       changed_when: false
       failed_when: false
+    - name: Gather facts
+      ansible.builtin.setup:
+      tags: [always]
   roles:
     - { role: plexus.host.base, tags: [base] }
     - { role: plexus.infrastructure.guest_agent, tags: [guest_agent] }
@@ -92,5 +118,10 @@
   hosts: proxmox:pbs:haproxy
   become: true
   tags: [host]
+  gather_facts: false
+  pre_tasks:
+    - name: Gather facts
+      ansible.builtin.setup:
+      tags: [always]
   roles:
     - { role: plexus.host.sshd, tags: [sshd] } # last: closes root logins once an admin has logged in
