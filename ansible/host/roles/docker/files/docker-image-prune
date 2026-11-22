@@ -1,0 +1,36 @@
+#!/bin/sh
+# Daily removal of the images no container uses. Managed by Ansible (docker).
+# Hand-runnable as root: docker-image-prune
+#
+# An image goes only when no container used it at two consecutive runs: the
+# IDs unused at this run are kept in STATE, and the ones that were in it from
+# the run before are removed. `docker image prune --all` has no such rule: its
+# `until` filter reads when an image was built, not when it was last used, so
+# it would take the image a deploy has just replaced, which `plx deploy` rolls
+# back to from the host's cache. Here that image was in use at the run before
+# and stays for a day at least. Without STATE nothing is removed at this run.
+set -eu
+export LC_ALL=C
+state=${STATE:-/var/lib/docker-image-prune/unused}
+
+mkdir -p "$(dirname "$state")"
+[ -f "$state" ] || : >"$state"
+used=$(mktemp "$state.XXXXXX")
+unused=$(mktemp "$state.XXXXXX")
+trap 'rm -f "$used" "$unused"' EXIT
+
+# A stopped container uses its image too.
+docker container ls --all --quiet --no-trunc | xargs -r docker container inspect --format '{{.Image}}' | sort -u >"$used"
+docker image ls --quiet --no-trunc | sort -u | grep -vxFf "$used" >"$unused" || true
+
+# By ID and forced, since an image with more than one tag is not removed by
+# ID otherwise; hence the second look for a container that came since.
+comm -12 "$state" "$unused" >"$used"
+failed=0
+while read -r id; do
+  [ -z "$(docker container ls --all --quiet --filter "ancestor=$id")" ] || continue
+  if docker image rm --force "$id" >/dev/null; then echo "removed the image $id"; else failed=1; fi
+done <"$used"
+
+mv "$unused" "$state"
+exit "$failed"

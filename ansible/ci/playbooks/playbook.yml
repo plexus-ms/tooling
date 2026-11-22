@@ -23,7 +23,8 @@
     - { role: plexus.host.iam, tags: [iam] }
     - { role: plexus.host.upgrades, tags: [upgrades] }
     - { role: plexus.host.mail, tags: [mail] }
-    - { role: plexus.host.docker, tags: [docker] }
+    # Its images are the runner housekeeping's (actions_runners).
+    - { role: plexus.host.docker, tags: [docker], docker_image_prune: false }
 
 - name: The runner slots
   hosts: ci
