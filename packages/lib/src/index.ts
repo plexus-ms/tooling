@@ -44,7 +44,17 @@ export {
   setAnswer,
   TEMPLATE_FILES,
 } from './copier.ts';
-export { type Deploy, type DeployOptions, defaultAppDir, deploy, q as shellQuote, renderCompose } from './deploy.ts';
+export {
+  type Deploy,
+  type DeployOptions,
+  defaultAppDir,
+  deploy,
+  q as shellQuote,
+  renderCommitSha,
+  renderCompose,
+  renderDisplayVersion,
+  type Shown,
+} from './deploy.ts';
 export {
   DEFAULT_ENVIRONMENT,
   type DeployLeg,

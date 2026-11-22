@@ -10,10 +10,13 @@
 // CI, or the operations repo for third-party software the tenant merely
 // operates. The run shape, apps/<app>/docker/compose.yaml (or
 // apps/<app>/compose.yaml), is read from there, rendered with the concrete
-// image ref in place of ${PLEXUS_DEPLOYMENT_IMAGE}, staged on the host, and
-// swapped into place only once pull and migrate have succeeded, so the compose
-// file on the host always names the image it serves, and a failed deploy
-// leaves the host exactly as it was. Three files in the app dir, one writer
+// image ref in place of ${PLEXUS_DEPLOYMENT_IMAGE} (and, where they are given
+// and the file uses them, the display version in place of
+// ${PLEXUS_DISPLAY_VERSION} and the commit sha in place of
+// ${PLEXUS_COMMIT_SHA}, so a rollback restores the ones it showed),
+// staged on the host, and swapped into place only once pull and migrate
+// have succeeded, so the compose file on the host always names the image it
+// serves, and a failed deploy leaves the host exactly as it was. Three files in the app dir, one writer
 // each (PLX-Secrets): the platform playbook owns .env (its `apps` role) and
 // .env.secret (its `secrets` role), this verb owns compose.yaml. Compose
 // reads .env implicitly, so every command here and by a human is a bare
@@ -39,6 +42,10 @@
 // one that names the very image `web` runs counts as the same: a release
 // tags every app's image with its commit, an unchanged app's among them, and
 // restarting it for a new tag would restart every app on every release.
+// The display version and the commit sha change with every release too, so
+// neither restarts anything alone: an app whose image and run shape are the
+// ones live keeps the file it serves, and with it the display version and the
+// commit sha it was last started with (PLX-Releases).
 //
 //   plx deploy deploy@1.2.3.4 website --image ghcr.io/org/website:<sha>
 //   plx deploy deploy@1.2.3.4 website --environment staging --image …   # into /opt/stacks/website-staging
@@ -46,7 +53,16 @@
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { declaresHealthcheck, healthcheckOf, IMAGE_PLACEHOLDER, type Mapping, parseCompose } from './compose.ts';
+import { parseDocument, visit } from 'yaml';
+import {
+  COMMIT_SHA_PLACEHOLDER,
+  DISPLAY_VERSION_PLACEHOLDER,
+  declaresHealthcheck,
+  healthcheckOf,
+  IMAGE_PLACEHOLDER,
+  type Mapping,
+  parseCompose,
+} from './compose.ts';
 import type { Context } from './context.ts';
 import { DEFAULT_ENVIRONMENT, deploymentSlug } from './deployTargets.ts';
 import { run } from './effects.ts';
@@ -59,6 +75,10 @@ export interface DeployOptions {
   app: string;
   /** The image ref to pin; empty or absent for a third-party app whose file pins its own. */
   image?: string;
+  /** The string the app shows as its version, pinned in place of ${PLEXUS_DISPLAY_VERSION}; empty or absent leaves the file to compose. */
+  displayVersion?: string;
+  /** The commit the deployment is started from, a full hash, pinned in place of ${PLEXUS_COMMIT_SHA}; empty or absent leaves the file to compose. */
+  commitSha?: string;
   /** Looks at the app container's health status, two seconds apart. */
   retries?: number;
   /** The environment deployed into; default production. Decides the app dir's slug (§ 3 PLX-Platform). */
@@ -77,6 +97,10 @@ export interface Deploy {
   /** The compose file read, relative to the checkout. */
   compose: string;
   image?: string;
+  /** The display version the deployment shows at the end: the one pinned, or the one kept where nothing was restarted. */
+  displayVersion?: string;
+  /** The commit sha the deployment shows at the end, pinned or kept likewise. */
+  commitSha?: string;
   /** The image that was live before, from the running container. */
   previous?: string;
   /** The image live at the end, healthy or rolled back to. */
@@ -109,6 +133,142 @@ export function renderCompose(text: string, image: string | undefined, path: str
   if (has) throw new UsageError(`${path} references \${PLEXUS_DEPLOYMENT_IMAGE} but no image ref was given`);
   return text;
 }
+
+/**
+ * What a deployment is handed to say what it is (PLX-Releases): the display
+ * version and the commit it was started from. Each is there only where one
+ * was given and the compose file uses its placeholder.
+ */
+export interface Shown {
+  displayVersion?: string;
+  commitSha?: string;
+}
+
+/** One of the values of `Shown`: its placeholder, what it may hold, and what stands in for it in a comparison. */
+interface Pin {
+  key: keyof Shown;
+  placeholder: RegExp;
+  /** What a served file holds in its place, as a regular expression's source. */
+  held: string;
+  /** Stands in for the value where a served file is compared with a run shape. */
+  sentinel: string;
+}
+
+const DISPLAY_VERSION_PIN: Pin = {
+  key: 'displayVersion',
+  placeholder: DISPLAY_VERSION_PLACEHOLDER,
+  held: '[0-9A-Za-z][0-9A-Za-z.+_-]*',
+  sentinel: 'PLEXUSDISPLAYVERSION0',
+};
+const COMMIT_SHA_PIN: Pin = {
+  key: 'commitSha',
+  placeholder: COMMIT_SHA_PLACEHOLDER,
+  held: '[0-9a-f]+',
+  sentinel: 'PLEXUSCOMMITSHA0',
+};
+const PINS = [DISPLAY_VERSION_PIN, COMMIT_SHA_PIN];
+
+/**
+ * `value` in place of every placeholder of `pin`; a file without one is
+ * returned as it is. Where a placeholder is a whole unquoted YAML value, the
+ * value goes in double-quoted: compose reads `1.10` or `1234e56` unquoted as
+ * a number, which would show as `1.1` or `1.234e+59`.
+ */
+function pinValue(text: string, pin: Pin, value: string, path: string): string {
+  const placeholder = new RegExp(pin.placeholder.source, 'g');
+  if (!placeholder.test(text)) return text;
+  const whole = new RegExp(`^${pin.placeholder.source}$`);
+  const plain: [number, number][] = [];
+  const doc = parseDocument(text);
+  if (doc.errors.length > 0) throw new UsageError(`${path} is not valid YAML: ${doc.errors[0]?.message}`);
+  visit(doc, {
+    Scalar(_key, node) {
+      if (node.type === 'PLAIN' && typeof node.value === 'string' && whole.test(node.value) && node.range)
+        plain.push([node.range[0], node.range[1]]);
+    },
+  });
+  let out = text;
+  for (const [start, end] of plain.sort((a, b) => b[0] - a[0]))
+    out = `${out.slice(0, start)}${JSON.stringify(value)}${out.slice(end)}`;
+  return out.replace(new RegExp(pin.placeholder.source, 'g'), value);
+}
+
+/** What a display version may hold: safe inside any quoting compose and a shell know, and never empty. */
+const DISPLAY_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/;
+
+/**
+ * Pin the display version in place of every ${PLEXUS_DISPLAY_VERSION}
+ * placeholder; without one given, or without a placeholder in the file, the
+ * text is returned as it is.
+ */
+export function renderDisplayVersion(text: string, displayVersion: string | undefined, path: string): string {
+  if (!displayVersion) return text;
+  if (!DISPLAY_VERSION.test(displayVersion))
+    throw new UsageError(
+      `display version ${JSON.stringify(displayVersion)}: only letters, digits and . + _ - are allowed, starting with a letter or digit`,
+    );
+  return pinValue(text, DISPLAY_VERSION_PIN, displayVersion, path);
+}
+
+/** A full commit hash, SHA-1 or SHA-256, in lower case. */
+const COMMIT_SHA = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/**
+ * Pin the commit sha in place of every ${PLEXUS_COMMIT_SHA} placeholder;
+ * without one given, or without a placeholder in the file, the text is
+ * returned as it is. The full hash, never a short one: shortening is the
+ * app's, as the `v` before a display version is.
+ */
+export function renderCommitSha(text: string, commitSha: string | undefined, path: string): string {
+  if (!commitSha) return text;
+  if (!COMMIT_SHA.test(commitSha))
+    throw new UsageError(
+      `commit sha ${JSON.stringify(commitSha)}: a full commit hash, 40 or 64 hex digits in lower case`,
+    );
+  return pinValue(text, COMMIT_SHA_PIN, commitSha, path);
+}
+
+/**
+ * Whether `serving` is `shape` with any display version and any commit sha
+ * pinned where those of `given` would go: what it shows (a value is absent
+ * where the shape pins none), or undefined where `serving` is another file.
+ * Neither value alone restarts anything: both change with every release, the
+ * image with only some.
+ */
+export function shownBy(shape: string, given: Shown, serving: string): Shown | undefined {
+  let marked = shape;
+  const used: Pin[] = [];
+  for (const pin of PINS) {
+    if (!given[pin.key]) continue;
+    const next = pinValue(marked, pin, pin.sentinel, '');
+    if (next !== marked) used.push(pin);
+    marked = next;
+  }
+  marked = marked.trimEnd();
+  if (used.length === 0) return serving.trimEnd() === marked ? {} : undefined;
+  // The first place of a value captures it, every later one has to repeat it.
+  const groups = new Map<keyof Shown, number>();
+  let source = '';
+  for (const part of marked.split(new RegExp(`(${used.map((pin) => pin.sentinel).join('|')})`))) {
+    const pin = used.find((u) => u.sentinel === part);
+    if (!pin) {
+      source += part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      continue;
+    }
+    const group = groups.get(pin.key);
+    if (group === undefined) {
+      groups.set(pin.key, groups.size + 1);
+      source += `(${pin.held})`;
+    } else source += `\\${group}`;
+  }
+  const match = new RegExp(`^${source}$`).exec(serving.trimEnd());
+  if (!match) return undefined;
+  return Object.fromEntries([...groups].map(([key, group]) => [key, match[group]]));
+}
+
+/** `1.4 at a1b2c3d`, as much of it as there is; '' for nothing. */
+const describeShown = (shown: Shown): string =>
+  [shown.displayVersion, shown.commitSha && `at ${shown.commitSha.slice(0, 7)}`].filter(Boolean).join(' ');
 
 /** The app dir the platform playbook lays out: the deploy root and the deployment's slug (§ 3 PLX-Platform). */
 export function defaultAppDir(app: string, environment: string = DEFAULT_ENVIRONMENT): string {
@@ -213,8 +373,14 @@ interface Session {
   /** The running `web` container's image, or nothing. */
   liveImage: string;
   image?: string;
-  /** The run shape with another image ref pinned: what the host serves when it runs that ref. */
-  render: (ref: string) => string;
+  /**
+   * Whether `serving`, the file the host serves, is this run shape with
+   * `ref` pinned, whatever display version and commit sha it pins: what it
+   * shows, or undefined when it is another run shape.
+   */
+  shows: (ref: string, serving: string) => Shown | undefined;
+  /** The display version and the commit sha pinned in the staged file, if any. */
+  pinned: Shown;
   result: Deploy;
 }
 
@@ -240,7 +406,13 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
   }
   if (compose === undefined)
     throw new UsageError(`no compose.yaml under ${source}; run from the app's source repo (§ 2 PLX-App)`);
-  const rendered = renderCompose(text, image, compose);
+  const withImage = renderCompose(text, image, compose);
+  const withVersion = renderDisplayVersion(withImage, options.displayVersion || undefined, compose);
+  const rendered = renderCommitSha(withVersion, options.commitSha || undefined, compose);
+  const pinned: Shown = {
+    ...(withVersion === withImage ? {} : { displayVersion: options.displayVersion }),
+    ...(rendered === withVersion ? {} : { commitSha: options.commitSha }),
+  };
   // The wait's budget: `retries` looks, two seconds apart.
   const budget = retries * 2;
   const check = healthcheckOf(parseCompose(rendered, compose));
@@ -256,6 +428,12 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
   ctx.say(`  host:    ${host}`);
   ctx.say(`  dir:     ${appDir}`);
   ctx.say(`  compose: ${compose}`);
+  if (pinned.displayVersion) ctx.say(`  display: ${pinned.displayVersion}`);
+  else if (options.displayVersion)
+    ctx.say(`  (${compose} does not use \${PLEXUS_DISPLAY_VERSION}; the display version is not pinned)`, 1);
+  if (pinned.commitSha) ctx.say(`  commit:  ${pinned.commitSha}`);
+  else if (options.commitSha)
+    ctx.say(`  (${compose} does not use \${PLEXUS_COMMIT_SHA}; the commit sha is not pinned)`, 1);
   ctx.say('  health:  the healthcheck of service web, as Docker reports it');
   if (slow)
     ctx.say(
@@ -277,8 +455,17 @@ export async function deploy(ctx: Context, options: DeployOptions): Promise<Depl
     // one fixed loopback port (§ 4 PLX-App), which a second replica could not.
     liveImage: `${dc} ps -q web 2>/dev/null | head -1 | xargs -r docker inspect --format '{{.Config.Image}}' 2>/dev/null || true`,
     image,
-    render: (ref) => renderCompose(text, ref, compose as string),
-    result: { host, appDir, compose, image, healthy: false, rolledBack: false },
+    shows: (ref, serving) => shownBy(renderCompose(text, ref, compose as string), pinned, serving),
+    pinned,
+    result: {
+      host,
+      appDir,
+      compose,
+      image,
+      ...pinned,
+      healthy: false,
+      rolledBack: false,
+    },
   };
   const { result } = s;
   let staged = false;
@@ -338,26 +525,39 @@ async function alreadyServing(s: Session): Promise<boolean> {
   }
   if (result.previous === undefined) return false;
   let same: string | undefined;
-  if (s.image === undefined || result.previous === s.image) {
+  let shown: Shown = {};
+  if (s.image === undefined || (result.previous === s.image && Object.keys(s.pinned).length === 0)) {
     // A third-party app passes no ref: its file pins the image, so the same
     // file with `web` running is the same deployment, and a platform repo can
     // deploy every app on every push without restarting any.
     if (!(await s.remote.test(`cd ${s.D} && cmp -s compose.yaml ${INCOMING}/compose.yaml`))) return false;
   } else {
-    // Another ref: the same deployment when it names the image `web` runs
-    // (pulled for its id, which fetches no layer the host has) and the host
-    // serves this run shape with the live ref pinned. The host keeps its file
-    // and its ref, which names the image it serves.
-    if (!(await sameImage(s, s.image))) return false;
+    // Another ref, a display version or a commit sha: the same deployment
+    // when the ref names the image `web` runs (pulled for its id, which
+    // fetches no layer the host has) and the host serves this run shape with
+    // the live ref pinned, whatever display version and commit sha it shows.
+    // The host keeps its file, its ref, which names the image it serves, and
+    // the two values it shows.
+    if (result.previous !== s.image) {
+      if (!(await sameImage(s, s.image))) return false;
+      same = s.image;
+    }
     const serving = await s.remote.read(`cat ${s.D}/compose.yaml`);
-    if (serving === undefined || serving !== s.render(result.previous).trimEnd()) return false;
-    same = s.image;
+    const live = serving === undefined ? undefined : s.shows(result.previous, serving);
+    if (live === undefined) return false;
+    shown = live;
   }
   if (!(await awaitHealthy(s, 1))) return false;
   result.live = result.previous;
   result.healthy = true;
   result.unchanged = true;
-  ctx.done(`${result.previous}${same ? ` (the image ${same} names)` : ''} is already live and healthy; nothing to do`);
+  delete result.displayVersion;
+  delete result.commitSha;
+  Object.assign(result, shown);
+  const showing = describeShown(shown);
+  ctx.done(
+    `${result.previous}${same ? ` (the image ${same} names)` : ''}${showing ? `, showing ${showing},` : ''} is already live and healthy; nothing to do`,
+  );
   return true;
 }
 
