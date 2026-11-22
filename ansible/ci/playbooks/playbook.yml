@@ -16,6 +16,13 @@
   hosts: ci
   become: true
   tags: [host]
+  # Facts by a task tagged `always`, in every play: the implicit gathering
+  # carries only the play's tags and is skipped under a role's tag alone.
+  gather_facts: false
+  pre_tasks:
+    - name: Gather facts
+      ansible.builtin.setup:
+      tags: [always]
   roles:
     - { role: plexus.host.base, tags: [base] }
     - { role: plexus.host.hostname, tags: [hostname], when: hostname_enabled }
@@ -30,6 +37,11 @@
   hosts: ci
   become: true
   tags: [ci]
+  gather_facts: false
+  pre_tasks:
+    - name: Gather facts
+      ansible.builtin.setup:
+      tags: [always]
   roles:
     - { role: plexus.ci.actions_runners, tags: [actions_runners] }
 
@@ -37,6 +49,11 @@
   hosts: ci
   become: true
   tags: [host]
+  gather_facts: false
+  pre_tasks:
+    - name: Gather facts
+      ansible.builtin.setup:
+      tags: [always]
   roles:
     - { role: plexus.host.firewall, tags: [firewall] } # after the roles that open ports in it
     - { role: plexus.host.sshd, tags: [sshd] }         # last: closes root logins once an admin has logged in
