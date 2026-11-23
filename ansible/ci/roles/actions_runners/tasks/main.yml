@@ -213,7 +213,9 @@
 
 # One template unit, one instance per slot. ExecStartPre frees the name and
 # mints the slot's config; the container runs one job and exits, and
-# systemd starts the next one.
+# systemd starts the next one. A stop ends the container with SIGTERM, which
+# docker run reports as 143: that is a slot stopped, not one that failed, so
+# a reboot marks no slot failed and mails nobody.
 - name: Install the slot unit
   ansible.builtin.copy:
     dest: /etc/systemd/system/ci-runner@.service
@@ -236,6 +238,7 @@
       ExecStopPost=-/usr/bin/rm -f /run/ci-runner/%i.env
       TimeoutStartSec=5min
       TimeoutStopSec=1min
+      SuccessExitStatus=143
       Restart=always
       RestartSec=5s
 
