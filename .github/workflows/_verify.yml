@@ -250,7 +250,7 @@ jobs:
       - name: A token that may read the operations repo
         id: operations
         if: ${{ inputs.deploy }}
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ env.APP_CLIENT_ID }}
           private-key: ${{ env.APP_PRIVATE_KEY }}
@@ -275,7 +275,7 @@ jobs:
       - name: A token that may register and remove runners on this repo
         id: runners
         if: ${{ inputs.strategy == 'hybrid' && steps.plan.outputs.matrix != '[]' }}
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ env.APP_CLIENT_ID }}
           private-key: ${{ env.APP_PRIVATE_KEY }}
@@ -485,7 +485,7 @@ jobs:
           APP_CLIENT_ID: op://${{ env.VAULT }}/github-app/client-id
       - name: A token that may register and remove runners on this repo
         id: runners
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ env.APP_CLIENT_ID }}
           private-key: ${{ env.APP_PRIVATE_KEY }}
