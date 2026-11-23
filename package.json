@@ -1,15 +1,15 @@
 {
   "name": "tooling",
   "private": true,
-  "packageManager": "pnpm@12.20.0",
+  "packageManager": "pnpm@12.21.0",
   "scripts": {
     "prepare": "turbo run build"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.7",
+    "@biomejs/biome": "2.6.8",
     "@plexus-ms/cli": "workspace:*",
     "@plexus-ms/config": "^0.120.0",
     "@plexus-ms/dev": "workspace:*",
-    "turbo": "^2.11.11"
+    "turbo": "^2.11.13"
   }
 }
