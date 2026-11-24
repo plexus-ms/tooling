@@ -66,20 +66,46 @@ if [ "$SCOPE" = org ]; then
 fi
 
 # A registration under this slot's name is its previous container's, which
-# never took a job (a stop, a reboot); the name has to be free again.
-api -H "$auth" "https://api.github.com/$base/actions/runners?per_page=100" |
-  jq -r --arg n "$name" '.runners[] | select(.name == $n) | .id' |
-  while read -r old; do
-    api -X DELETE -H "$auth" "https://api.github.com/$base/actions/runners/$old"
-    echo "removed the stale registration $old of $name"
-  done
+# never took a job (a stop, a reboot), or one a minting call left behind whose
+# answer never arrived; the name has to be free again. A removal the forge
+# refuses is said and not fatal: the minting call then says whether the name
+# is free.
+free_name() {
+  api -H "$auth" "https://api.github.com/$base/actions/runners?per_page=100" |
+    jq -r --arg n "$name" '.runners[] | select(.name == $n) | .id' |
+    while read -r old; do
+      if api -X DELETE -H "$auth" "https://api.github.com/$base/actions/runners/$old"; then
+        echo "removed the stale registration $old of $name"
+      else
+        echo "the stale registration $old of $name could not be removed" >&2
+      fi
+    done
+}
 
 labels=$(jq -nc --arg size "ci-$size" --arg extra "${EXTRA_LABELS:-}" \
   '[$size] + ($extra | split(",") | map(select(. != "")))')
 body=$(jq -nc --arg n "$name" --argjson g "$group_id" --argjson l "$labels" \
   '{name: $n, runner_group_id: $g, labels: $l, work_folder: "_work"}')
-jit=$(api -X POST -H "$auth" -d "$body" \
-  "https://api.github.com/$base/actions/runners/generate-jitconfig" | jq -er .encoded_jit_config)
+
+# Minting registers the runner, so the call is not one to repeat blindly: a
+# gateway error can hide a registration that was made, and the same call again
+# is then refused for the name. Hence no --retry here; each try frees the name
+# first and asks once, and the answer's status decides.
+jit=
+for try in 1 2 3; do
+  free_name || echo "ci-runner-jit: the registrations of $base could not be listed" >&2
+  answer=$(curl -sS --max-time 30 -w '\n%{http_code}' -X POST -d "$body" -H "$auth" \
+    -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "https://api.github.com/$base/actions/runners/generate-jitconfig") || answer=
+  status=${answer##*$'\n'}
+  if [ "$status" = 201 ]; then
+    jit=$(printf '%s' "${answer%$'\n'*}" | jq -er .encoded_jit_config)
+    break
+  fi
+  echo "ci-runner-jit: minting for $name answered ${status:-nothing}, try $try of 3" >&2
+  sleep 5
+done
+[ -n "$jit" ]
 
 # The runner reads the config from ACTIONS_RUNNER_INPUT_JITCONFIG and clears
 # the variable before any job step runs, so it is never on a command line.

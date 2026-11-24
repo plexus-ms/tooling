@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import type { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { Context } from '@plexus-ms/lib';
+import { Context, ExecError } from '@plexus-ms/lib';
 import { fakeIo } from '../testing/fakeIo.ts';
 import {
   createInstances,
@@ -126,13 +127,22 @@ test('launch under --dry-run performs nothing and reports the placeholder id', a
   assert.equal(result.id, '<instance-id>');
 });
 
-/** A cloud and a forge where the runners named in `online` come online, by the number of their creation. */
-function world(online: (created: number) => boolean) {
+/**
+ * A cloud and a forge where the runners come online by the number of their
+ * creation. The forge holds its registrations by name and answers 409 for a
+ * name it still has; `refuseDelete` makes it refuse to remove one (422), and
+ * `failStatus` makes its answer about a runner fail (502).
+ */
+function world(
+  online: (created: number) => boolean,
+  { refuseDelete = false, failStatus = false }: { refuseDelete?: boolean; failStatus?: boolean } = {},
+) {
   const calls: string[] = [];
   const updates: { id: string; name: string; labels: Record<string, string> }[] = [];
   const mails: string[] = [];
+  const registrations = new Map<string, number>();
+  const registered: { name: string; labels: string[] }[] = [];
   let created = 0;
-  let registered = 0;
   const io = fakeIo({}, () => undefined, {
     curl: (_cwd, _args, input = '') => {
       const url = input.match(/url = "([^"]+)"/)?.[1] ?? '';
@@ -141,16 +151,32 @@ function world(online: (created: number) => boolean) {
         return '';
       }
       const method = input.match(/request = "(\w+)"/)?.[1];
-      calls.push(`curl ${method} ${url.replace('https://api.github.com/repos/acme/web/actions/runners', '')}`);
+      const path = url.replace('https://api.github.com/repos/acme/web/actions/runners', '');
+      calls.push(`curl ${method} ${path}`);
       if (url.includes('generate-jitconfig')) {
-        registered += 1;
-        return JSON.stringify({ encoded_jit_config: `JIT${registered}`, runner: { id: 70 + registered } });
+        const body = JSON.parse(JSON.parse(input.match(/^data = (.*)$/m)?.[1] ?? '""')) as {
+          name: string;
+          labels: string[];
+        };
+        if (registrations.has(body.name))
+          throw new ExecError('curl', 22, 'curl: (22) The requested URL returned error: 409\n');
+        registered.push({ name: body.name, labels: body.labels });
+        registrations.set(body.name, 70 + registered.length);
+        return JSON.stringify({
+          encoded_jit_config: `JIT${registered.length}`,
+          runner: { id: 70 + registered.length },
+        });
       }
-      if (method === 'DELETE') return '';
+      if (method === 'DELETE') {
+        if (refuseDelete) throw new ExecError('curl', 22, 'curl: (22) The requested URL returned error: 422\n');
+        for (const [name, id] of registrations) if (path === `/${id}`) registrations.delete(name);
+        return '';
+      }
+      if (failStatus) throw new ExecError('curl', 22, 'curl: (22) The requested URL returned error: 502\n');
+      const name = decodeURIComponent(path.replace('?name=', ''));
+      const id = registrations.get(name);
       return JSON.stringify({
-        runners: [
-          { id: 70 + registered, name: options.label, status: online(created) ? 'online' : 'offline', busy: false },
-        ],
+        runners: id === undefined ? [] : [{ id, name, status: online(created) ? 'online' : 'offline', busy: false }],
       });
     },
     exo: (_cwd, args, input) => {
@@ -187,6 +213,14 @@ function world(online: (created: number) => boolean) {
     calls,
     updates,
     mails,
+    registered,
+    /** Everything narrated so far. */
+    said: () => {
+      const stderr = io.stderr as PassThrough;
+      let text = '';
+      for (let chunk = stderr.read(); chunk !== null; chunk = stderr.read()) text += String(chunk);
+      return text;
+    },
   };
 }
 
@@ -211,6 +245,28 @@ test('a miss is kept: stopped, renamed and labelled, mailed about, its registrat
   assert.equal(w.updates[0]?.labels.kept, '2026-11-04T10:40:27Z');
   assert.equal(w.updates[0]?.labels.run, '41');
   assert.deepEqual(w.mails, ['smtp://smtp.x:587']);
+  // The replacement's runner has a name of its own and the label the job asks for.
+  assert.deepEqual(w.registered, [
+    { name: 'exo-large-41-website-1', labels: ['exo-large-41-website-1'] },
+    { name: 'exo-large-41-website-1-r2', labels: ['exo-large-41-website-1'] },
+  ]);
+  const said = w.said();
+  assert.match(said, /GitHub's answers about exo-large-41-website-1: offline ×1/);
+  assert.match(said, /runner exo-large-41-website-1-r2 online after 5s/);
+});
+
+test('a registration GitHub refuses to remove does not stand in the replacement’s way', async () => {
+  const w = world((created) => created === 2, { refuseDelete: true });
+  const result = await launch(w.ctx, w.exo, w.github, options);
+  assert.equal(result.id, 'inst2');
+  assert.deepEqual(result.kept, ['inst1']);
+  assert.match(w.said(), /the registration exo-large-41-website-1 \(71\) could not be removed/);
+});
+
+test('an answer about the runner that fails counts as not online, and the miss says so', async () => {
+  const w = world(() => true, { failStatus: true });
+  await assert.rejects(launch(w.ctx, w.exo, w.github, options), /failed to come online and are kept/);
+  assert.match(w.said(), /GitHub's answers about exo-large-41-website-1: no answer ×1/);
 });
 
 test('a second miss is kept as well and fails the launch; nothing is deleted', async () => {
@@ -245,9 +301,8 @@ test('createInstances launches every leg and fails as one when a launch does', a
     w.exo,
     w.github,
     [
-      // The fake forge knows one runner, so both legs ask for its label.
       { label: 'exo-large-41-website-1', app: 'website' },
-      { label: 'exo-large-41-website-1', app: 'my-app' },
+      { label: 'exo-large-41-my-app-1', app: 'my-app' },
     ],
     shared,
   );

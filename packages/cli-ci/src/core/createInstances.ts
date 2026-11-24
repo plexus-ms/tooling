@@ -25,6 +25,14 @@
 // `kept=<time>`, which the cleanup and the sweep spare; and the alerts address
 // is mailed at once with its id. One replacement is created from a fresh JIT
 // config; a second miss is kept the same way and fails the launch.
+//
+// "Online" is what GitHub's runner listing says, and that listing can be out
+// of step with the runners themselves: a runner that is connected and
+// listening may be listed offline for minutes, and its registration may then
+// refuse to be removed. So the replacement's runner is registered under a name
+// of its own, `<label>-r2`, with the same one label the job asks for, and a
+// registration that stays behind is in nobody's way; the cleanup removes it
+// (destroyInstances.ts). A miss says what the listing answered, look by look.
 import { gzipSync } from 'node:zlib';
 import type { Context } from '@plexus-ms/lib';
 import { UsageError } from '@plexus-ms/lib';
@@ -185,10 +193,19 @@ export async function launch(ctx: Context, exo: Exo, github: GitHubRunners, opti
     // exits after it, which is what layer 1 keys on. Every instance gets a
     // config of its own: a kept one may have read its config before it was
     // stopped. If no instance comes to claim it, the registration is removed
-    // again instead of lingering offline.
-    const registration = await github.generateJitConfig(label, label);
+    // again instead of lingering offline; where GitHub refuses that, the log
+    // says so and the launch goes on.
+    const runner = attempt === 1 ? label : `${label}-r${attempt}`;
+    const registration = await github.generateJitConfig(runner, label);
     const unregister = async () => {
-      if (registration) await github.deleteRunner(registration.runnerId).catch(() => undefined);
+      if (!registration) return;
+      await github
+        .deleteRunner(registration.runnerId)
+        .catch(() =>
+          ctx.say(
+            `  the registration ${runner} (${registration.runnerId}) could not be removed; the cleanup tries again`,
+          ),
+        );
     };
     try {
       const request: CreateInstance = {
@@ -216,20 +233,21 @@ export async function launch(ctx: Context, exo: Exo, github: GitHubRunners, opti
       if (state !== 'success') throw new Error(`create-instance ended in state ${state}`);
       ctx.say(`created ${label} (${result.id}) in ${options.zone}, try ${attempt}`);
     } catch (error) {
-      ctx.say(`launch failed, removing the runner registration ${label}`);
+      ctx.say(`launch failed, removing the runner registration ${runner}`);
       await unregister();
       throw error;
     }
 
-    const waited = await waitOnline(github, label, options.onlineSeconds, options.sleep ?? sleep);
+    const { waited, answers } = await waitOnline(github, runner, options.onlineSeconds, options.sleep ?? sleep);
     if (waited !== undefined) {
-      ctx.say(`runner ${label} online after ${waited}s`);
+      ctx.say(`runner ${runner} online after ${waited}s`);
       ctx.say(
         `launched ${label} (${result.id}): no job by ${noJobDeadline}, dies at ${deathDeadline}, powers off ${options.deadlines.poweroffMinutes} minutes after creation`,
       );
       return result;
     }
     ctx.say(`✗ ${label} (${result.id}) did not come online within ${options.onlineSeconds}s`);
+    ctx.say(`  GitHub's answers about ${runner}: ${answers}`);
     await keep(ctx, exo, options, result.id, labels, now());
     result.kept.push(result.id);
     await unregister();
@@ -237,18 +255,28 @@ export async function launch(ctx: Context, exo: Exo, github: GitHubRunners, opti
   throw new Error(`${options.tries} instance(s) of ${label} failed to come online and are kept, giving up`);
 }
 
-/** Seconds until the runner showed online, or undefined after `seconds`. */
+/**
+ * Seconds until the runner `name` showed online, or none after `seconds`, and
+ * what GitHub answered meanwhile, in order: `offline ×20, no answer ×4`. A
+ * look GitHub does not answer is one more look that did not say online.
+ */
 async function waitOnline(
   github: GitHubRunners,
-  label: string,
+  name: string,
   seconds: number,
   wait: (ms: number) => Promise<void>,
-): Promise<number | undefined> {
+): Promise<{ waited?: number; answers: string }> {
+  const seen: { status: string; times: number }[] = [];
+  const answers = () => seen.map((s) => `${s.status} ×${s.times}`).join(', ');
   for (let waited = 0; waited < seconds; waited += 5) {
     await wait(5000);
-    if ((await github.status(label)) === 'online') return waited + 5;
+    const status = await github.status(name).catch(() => 'no answer');
+    const last = seen.at(-1);
+    if (last?.status === status) last.times += 1;
+    else seen.push({ status, times: 1 });
+    if (status === 'online') return { waited: waited + 5, answers: answers() };
   }
-  return undefined;
+  return { answers: answers() };
 }
 
 /** What the mail about a kept instance says. */
@@ -257,13 +285,13 @@ export function keptMail(options: LaunchOptions, id: string): { subject: string;
   return {
     subject: `plexus-ci: ${label} did not come online and is kept`,
     text: [
-      `The instance ${label} (app ${options.app ?? 'none'}) of ${run.repo} run ${run.runId} attempt ${run.attempt} did not register its runner within ${options.onlineSeconds} seconds.`,
+      `The instance ${label} (app ${options.app ?? 'none'}) of ${run.repo} run ${run.runId} attempt ${run.attempt} was not listed online by GitHub within ${options.onlineSeconds} seconds.`,
       '',
       `It is stopped and kept as ${label}-kept:`,
       `  id    ${id}`,
       `  zone  ${options.zone}`,
       '',
-      'Its disk holds the boot it stalled in. Snapshot it to read it; the daily sweep mails again after seven days and deletes the instance after fourteen.',
+      "Its disk holds its boot and the runner's log (/opt/runner/_diag), which say whether the boot stalled or GitHub listed a connected runner offline. Snapshot it to read them; the daily sweep mails again after seven days and deletes the instance after fourteen.",
       '',
     ].join('\n'),
   };
