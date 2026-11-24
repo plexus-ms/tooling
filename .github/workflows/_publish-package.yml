@@ -59,12 +59,25 @@ jobs:
       # The forge's package registry takes the job's own token, in a user-level
       # npmrc of the job's own; each package names the registry in its
       # `publishConfig`. npm needs nothing here: it trusts the workflow.
+      #
+      # `publishConfig` steers the publish alone. Before it, `changeset publish`
+      # asks `pnpm info <name>` which versions exist, and pnpm answers from the
+      # registry of the package's scope: npm, unless the scope is mapped. There
+      # a private package is a 404, so every version counts as unpublished and
+      # is published again, which the forge refuses with a 409. Hence the scope
+      # line; the scope is the repo's owner in lower case, as that registry
+      # requires.
       - name: Log in to the forge's package registry
         if: ${{ inputs.registry == 'github' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
         run: |
-          printf '//npm.pkg.github.com/:_authToken=%s\n' "$GITHUB_TOKEN" > "$RUNNER_TEMP/npmrc"
+          scope=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
+          {
+            printf '//npm.pkg.github.com/:_authToken=%s\n' "$GITHUB_TOKEN"
+            printf '@%s:registry=https://npm.pkg.github.com\n' "$scope"
+          } > "$RUNNER_TEMP/npmrc"
           echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
       - uses: jdx/mise-action@v5
       - run: pnpm install --frozen-lockfile
