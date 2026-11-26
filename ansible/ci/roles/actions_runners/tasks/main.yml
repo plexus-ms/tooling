@@ -239,6 +239,9 @@
       TimeoutStartSec=5min
       TimeoutStopSec=1min
       SuccessExitStatus=143
+      # The runner prints its worker log, thousands of lines a job; under
+      # journald's rate limit that flood takes the scripts' own errors with it.
+      LogRateLimitIntervalSec=0
       Restart=always
       RestartSec=5s
 
