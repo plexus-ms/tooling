@@ -216,3 +216,10 @@ test('templates that read from each other in a cycle are one error naming them, 
     ],
   );
 });
+
+test('a given answer that no template owns or reads is listed as unused and is no error; one that a template reads is used', () => {
+  const result = render([template(basket), template(crate)], { fruit: 'pear', trees: 3, rows: 1, colour: 'red' });
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.unused, ['colour']);
+  assert.deepEqual(result.answers, { fruit: 'pear' });
+});
