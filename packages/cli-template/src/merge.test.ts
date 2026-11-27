@@ -331,3 +331,31 @@ test('merge keeps a born-once path that no longer renders, its name rendering em
     calls: [],
   });
 });
+
+test('merge keeps the current file where all three sides differ and one is binary, by a NUL byte, and reports it as conflicted', async () => {
+  const binary = (...bytes: number[]) => ({ bytes, mode: REGULAR | 0o644 });
+  const result = await run({
+    old: { 'apple.png': binary(0xff, 0, 1), 'pear.txt': 'green\n', 'plum.png': binary(0xff, 0, 1) },
+    new: { 'apple.png': binary(0xff, 0, 2), 'pear.txt': binary(0xfe, 0, 2), 'plum.png': binary(0xff, 0, 2) },
+    current: { 'apple.png': binary(0xff, 0, 3), 'pear.txt': 'yellow\n', 'plum.png': binary(0xff, 0, 1) },
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.png': binary(0xff, 0, 3), 'pear.txt': 'yellow\n', 'plum.png': binary(0xff, 0, 2) },
+    report: ['apple.png: conflicted', 'pear.txt: conflicted', 'plum.png: clean'],
+    calls: [],
+  });
+});
+
+test('merge takes a file as binary by a NUL byte among its first 8000 bytes only, as git does', async () => {
+  const late = `${'a'.repeat(8000)}\0`;
+  const result = await run({
+    old: { 'apple.txt': `red\n${late}` },
+    new: { 'apple.txt': `green\n${late}` },
+    current: { 'apple.txt': `crimson\n${late}` },
+  });
+  assert.deepEqual(result.report, ['apple.txt: clean']);
+  assert.deepEqual(
+    result.calls.map((c) => c.path),
+    ['apple.txt'],
+  );
+});
