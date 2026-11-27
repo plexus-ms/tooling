@@ -25,8 +25,8 @@ export const OVERRIDE = 'PLX_PARITY_TEMPLATE_REPOS';
 
 /**
  * The git configuration of every git and copier run of the ring: an identity,
- * no signing, and nothing of the machine's own (a `merge.conflictStyle` there
- * would change what copier merges).
+ * no signing, no ignore or attributes file, and nothing else of the machine's
+ * own (a `merge.conflictStyle` there would change what copier merges).
  */
 export const GIT_CONFIG = `[user]
 \tname = parity
@@ -37,6 +37,9 @@ export const GIT_CONFIG = `[user]
 \tdefaultBranch = main
 [protocol "file"]
 \tallow = always
+[core]
+\texcludesFile = /dev/null
+\tattributesFile = /dev/null
 `;
 
 /** The process's environment, without any `GIT_*` variable (a hook sets some) and with `configFile` as git's only configuration. */

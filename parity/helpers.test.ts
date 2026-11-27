@@ -235,7 +235,7 @@ test('bytes are compared exactly: a missing final newline is a difference', () =
     'a.txt: bytes differ, at the end: copier 1 bytes, the engine 2 bytes',
   ]);
   assert.deepEqual(diffTrees(tree({ 'a.txt': 'x\r\n' }), tree({ 'a.txt': 'x\n' })), [
-    'a.txt: bytes differ, first at line 1: copier "x\r", the engine "x"',
+    'a.txt: bytes differ, first at line 1: copier "x\\r", the engine "x"',
   ]);
 });
 

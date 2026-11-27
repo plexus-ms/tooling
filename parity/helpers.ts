@@ -1,7 +1,10 @@
 // The helpers of the parity ring that decide something: how a copier tree is
 // made comparable to the engine's, how two trees are compared, and what a
 // consumer edits before a replay. Each has its test in helpers.test.ts.
+import { createRequire } from 'node:module';
+import { join } from 'node:path';
 import { type Answers, DIRECTORY, MODE_TYPE, SYMLINK, type Tree } from '../packages/cli-template/src/index.ts';
+import { ANSWERS_FILE } from '../packages/lib/src/copier.ts';
 import type { TemplateName } from './harness.ts';
 
 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -9,7 +12,6 @@ const encoder = new TextEncoder();
 
 /** The marker's name: the one file whose frontmatter copier writes and the engine does not. */
 export const MARKER = 'PLEXUS.md';
-const ANSWERS_FILE = '.copier-answers.yml';
 
 /**
  * The marker without the frontmatter copier's template wrote, and without the
@@ -95,10 +97,13 @@ export function diffTrees(
 
 function firstDifference(copier: Uint8Array, engine: Uint8Array, names: Names): string {
   const [c, e] = [Buffer.from(copier).toString('utf8').split('\n'), Buffer.from(engine).toString('utf8').split('\n')];
-  const at = c.findIndex((line, i) => line !== e[i]);
-  if (at === -1 && c.length === e.length) return 'not as text';
-  const line = at === -1 ? Math.min(c.length, e.length) : at;
-  return `first at line ${line + 1}: ${names.copier} ${JSON.stringify(c[line])}, ${names.engine} ${JSON.stringify(e[line])}`;
+  const at = c.slice(0, Math.min(c.length, e.length)).findIndex((line, i) => line !== e[i]);
+  if (at !== -1)
+    return `first at line ${at + 1}: ${names.copier} ${JSON.stringify(c[at])}, ${names.engine} ${JSON.stringify(e[at])}`;
+  if (copier.length !== engine.length) {
+    return `at the end: ${names.copier} ${copier.length} bytes, ${names.engine} ${engine.length} bytes`;
+  }
+  return 'not as text';
 }
 
 /** The lines of each side's conflict markers that carry a label. */
@@ -182,4 +187,73 @@ export function consumerEdits(old: Tree, next: Tree): ConsumerEdit[] {
     edits.push({ path: alone, kind: 'untouched', text: withLine(text(old.get(alone)) ?? '', 'local edit') });
   edits.push({ path: 'local/notes.md', kind: 'own', text: 'local notes\n' });
   return edits;
+}
+
+/** A tree with each text file's conflict labels of the side unified (unifyConflictLabels); other files as they are. */
+export function unifyTree(tree: Tree, side: keyof typeof LABELS): Tree {
+  return new Map(
+    [...tree].map(([path, entry]) => {
+      try {
+        return [path, { ...entry, bytes: encoder.encode(unifyConflictLabels(decoder.decode(entry.bytes), side)) }];
+      } catch {
+        return [path, entry];
+      }
+    }),
+  );
+}
+
+/** Where a copier template's file is in the port: npm leaves a file named `.gitignore` out of a package. */
+export const portedPath = (path: string): string => (/(^|\/)\.gitignore$/.test(path) ? `${path}.jinja` : path);
+
+/** What copier's manifest decides that the engine's manifest also states: see copierManifest. */
+export interface CopierManifest {
+  /** The paths copier does not write again where they exist, sorted. */
+  readonly skipIfExists: readonly string[];
+  /** The paths copier leaves out of an update, sorted. */
+  readonly excludedOnUpdate: readonly string[];
+  /** The commands a copy runs, as argument vectors, in order. */
+  readonly birth: readonly (readonly string[])[];
+}
+
+const yaml = createRequire(join(import.meta.dirname, '..', 'packages', 'lib', 'package.json'))('yaml') as {
+  parse(text: string): unknown;
+};
+const EXCLUDED_ON_UPDATE = /^\{% if _copier_operation == 'update' %\}(.+)\{% endif %\}$/;
+const ON_COPY = "{{ _copier_operation == 'copy' }}";
+const ON_UPDATE = "{{ _copier_operation == 'update' }}";
+
+/**
+ * The part of a `copier.yml` the engine's manifest restates: `_skip_if_exists`
+ * and `_exclude` (born-once files), and `_tasks` as a copy runs them (the
+ * engine's `birth`). The mapping is the spellings the three templates use and
+ * nothing more, and anything else is an error: an `_exclude` entry that is
+ * `{% if _copier_operation == 'update' %}<path>{% endif %}`; a task that is a
+ * command string or a command with a `when` that is the copy or the update
+ * operation; a command that is words separated by spaces, which the engine
+ * holds as an argument vector.
+ */
+export function copierManifest(source: string): CopierManifest {
+  const manifest = yaml.parse(source);
+  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new Error('copier.yml is not a mapping');
+  }
+  const list = (key: string): unknown[] => {
+    const value = (manifest as Record<string, unknown>)[key];
+    return value === undefined ? [] : (value as unknown[]);
+  };
+  const excludedOnUpdate = list('_exclude').map((entry) => {
+    const hit = EXCLUDED_ON_UPDATE.exec(String(entry));
+    if (!hit?.[1]) throw new Error(`_exclude entry in a form the mapping does not know: ${String(entry)}`);
+    return hit[1];
+  });
+  const birth = list('_tasks').flatMap((task) => {
+    const { command, when } =
+      typeof task === 'string' ? { command: task, when: undefined } : (task as { command: string; when?: string });
+    if (when === ON_UPDATE) return [];
+    if (when !== undefined && when !== ON_COPY) throw new Error(`a task whose when the mapping does not know: ${when}`);
+    if (/['"\\]/.test(command))
+      throw new Error(`a command with a quotation mark or backslash, which the mapping does not parse: ${command}`);
+    return [command.trim().split(/\s+/)];
+  });
+  return { skipIfExists: list('_skip_if_exists').map(String).sort(), excludedOnUpdate: excludedOnUpdate.sort(), birth };
 }
