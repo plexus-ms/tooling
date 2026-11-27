@@ -64,7 +64,7 @@ function configOf(text: string, dir: string): Pick<MarkerSite, 'config' | 'probl
   try {
     const config = parseMarkerConfig(text);
     if (dir !== '.' && config.version !== undefined)
-      return { problem: "`version` belongs in the repo's root marker only" };
+      return { problem: "`version` belongs in the repo's root marker only; remove it" };
     return { config };
   } catch (error) {
     return { problem: error instanceof Error ? error.message : String(error) };
@@ -82,10 +82,13 @@ export function siteAnswers(sites: readonly MarkerSite[], dir: string): Record<s
   const root = dir === '.' ? undefined : answersAt(sites, '.');
   if (!root) return { ...own };
   const both = Object.keys(own).filter((key) => Object.hasOwn(root, key));
-  if (both.length > 0)
+  if (both.length > 0) {
+    const keys = both.map((key) => `\`${key}\``).join(', ');
+    const [is, remove] = both.length === 1 ? ['is', 'it'] : ['are', 'each'];
     throw new Error(
-      `${join(dir, MARKER_FILE)}: ${both.map((key) => `\`${key}\``).join(', ')} are answered in the root marker already`,
+      `${join(dir, MARKER_FILE)}: ${keys} ${is} answered in the root marker as well; remove ${remove} from one of the two`,
     );
+  }
   return { ...root, ...own };
 }
 

@@ -375,15 +375,26 @@ function markerConfig(repo: RepoFacts): string[] {
 }
 
 function versionOfRoot(repo: RepoFacts): string[] {
-  const root = repo.sites?.find((s) => s.dir === '.')?.config;
+  const sites = repo.sites ?? [];
+  const root = sites.find((s) => s.dir === '.')?.config;
   if (!root) return [];
-  if (root.version === undefined)
-    return repo.sites?.some((s) => s.config?.templates !== undefined)
-      ? [`${MARKER_FILE} lists \`templates\` but sets no \`version\`; \`plx update\` writes it`]
-      : [];
+  if (root.version === undefined) {
+    const listing = sites.filter((s) => s.config?.templates !== undefined).map((s) => join(s.dir, MARKER_FILE));
+    if (listing.length === 0) return [];
+    const where =
+      listing.length === 1 && listing[0] === MARKER_FILE
+        ? 'it lists'
+        : `${listing.join(', ')} ${listing.length === 1 ? 'lists' : 'list'}`;
+    const set = repo.pin
+      ? `set \`version: ${repo.pin}\` in the root marker, the version mise.toml pins plx at`
+      : 'set `version` in the root marker to the Plexus version the repo is on, and pin plx at it in mise.toml';
+    return [`${MARKER_FILE} sets no \`version\`, though ${where} \`templates\`; ${set}`];
+  }
   const at = `\`version\` in ${MARKER_FILE} is ${root.version}, but mise.toml pins`;
-  if (repo.pin === undefined) return [`${at} no plx`];
-  return repo.pin === root.version ? [] : [`${at} plx ${repo.pin}; only \`plx update\` moves it`];
+  if (repo.pin === undefined) return [`${at} no plx; pin plx at ${root.version}, as \`plx update\` does`];
+  return repo.pin === root.version
+    ? []
+    : [`${at} plx ${repo.pin}; \`plx update\` moves both together, so undo whichever was edited by hand`];
 }
 
 // --- the diagnosis --------------------------------------------------------------
