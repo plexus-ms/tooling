@@ -319,3 +319,11 @@ test('a template whose question fails renders no files, so that the files using 
     { template: 'basket', other: undefined, path: undefined, question: 'fruit' },
   ]);
 });
+
+test('a template whose read fails renders no files, so that the files using the read add no second error', () => {
+  const box = 'name: box\nreads:\n  colour:\n';
+  const result = render([template(box, { '{{ colour }}.txt.jinja': '{{ colour }}' })], {});
+  assert.deepEqual(where(result.errors), [
+    { template: 'box', other: undefined, path: 'template.yml', question: 'colour' },
+  ]);
+});
