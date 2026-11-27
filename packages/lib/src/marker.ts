@@ -2,13 +2,24 @@
 // `profile` and the unit's `deviations`, then free-form prose that gives a
 // reason for each deviation. A repo with display versions also states their
 // `major` there (PLX-Releases), which plx-ci reads from the frontmatter by
-// itself. This is the one reader of the declaration; every verb that needs
-// one parses it here. Neither what a unit follows nor the
-// Plexus version is in a marker: a unit is bound by the contracts by being a
-// repo or an app, and a repo is on the version its `plx` pin names (§ 1.5 PLX).
-// Keys a marker of an earlier version still carries (`plexus`, `modules`) are
-// not read; the declaration names them, so that a verb can say they can go.
+// itself. This is the one reader of the marker; every verb that needs one
+// parses it here, in one of two readings.
+//
+// The declaration (`parseMarker`) is what the checks read today: the
+// profile and the deviations. Keys a marker of an earlier version still
+// carries (`plexus`, `modules`) are not read; the declaration names them, so
+// that a verb can say they can go.
+//
+// The configuration (`parseMarkerConfig`) is the frontmatter as the
+// templates' answers, which replaces copier's answers files: the frontmatter
+// is flat, `version`, `templates` and `deviations` are reserved, and every
+// other key is an answer, `profile` and `major` among them. `version` is the
+// Plexus version the repo's sites were last rendered at and belongs in the
+// repo's root marker only, which a reader of one marker cannot tell; that is
+// sites.ts's to enforce. A marker without `templates` is valid and renders
+// nothing.
 import { parse } from 'yaml';
+import { isPlexusVersion } from './version.ts';
 
 export interface Declaration {
   /** An app's profile as the marker states it (`stateless` or `stateful` when valid); absent when unset. */
@@ -33,11 +44,9 @@ export const MARKER_FILE = 'PLEXUS.md';
  */
 export function parseMarker(text: string): Declaration {
   const { data, body } = splitFrontmatter(text);
-  const { profile, deviations = [] } = data;
+  const { profile } = data;
   if (profile != null && typeof profile !== 'string') throw new Error('marker: `profile` must be a string');
-  const listed = deviations ?? [];
-  if (!Array.isArray(listed) || !listed.every((d) => typeof d === 'string'))
-    throw new Error('marker: `deviations` must be a list of requirement names');
+  const listed = deviationsOf(data);
   const obsolete = OBSOLETE_KEYS.filter((k) => k in data);
   return {
     ...(profile == null ? {} : { profile }),
@@ -45,6 +54,54 @@ export function parseMarker(text: string): Declaration {
     body,
     ...(obsolete.length > 0 ? { obsolete } : {}),
   };
+}
+
+/** The keys of a marker's frontmatter that are not answers. */
+export const RESERVED_KEYS = ['version', 'templates', 'deviations'] as const;
+
+/** A marker's frontmatter as configuration; a key the marker does not carry is absent. */
+export interface MarkerConfig {
+  /** The Plexus version the repo's sites were last rendered at; only in a repo's root marker. */
+  version?: string;
+  /** The templates the site is rendered from; absent in a marker that renders nothing. */
+  templates?: string[];
+  /** The names of the requirements the unit does not meet. */
+  deviations: string[];
+  /** Every key that is not reserved, by name, as the YAML gives it. */
+  answers: Record<string, unknown>;
+}
+
+/**
+ * A marker's frontmatter as configuration; throws when it does not parse,
+ * `version` is not a Plexus version, or `templates` or `deviations` is not a
+ * list of names. A key written without a value (`templates:`) is an empty list.
+ */
+export function parseMarkerConfig(text: string): MarkerConfig {
+  const { data } = splitFrontmatter(text);
+  const { version, templates } = data;
+  const answers = Object.fromEntries(Object.entries(data).filter(([key]) => !isReserved(key)));
+  if (version !== undefined && (typeof version !== 'string' || !isPlexusVersion(version)))
+    throw new Error('marker: `version` must be a Plexus version, as in `0.131.0`');
+  const listed = templates === undefined ? undefined : (templates ?? []);
+  if (listed !== undefined && !isNames(listed)) throw new Error('marker: `templates` must be a list of template names');
+  return {
+    ...(version === undefined ? {} : { version }),
+    ...(listed === undefined ? {} : { templates: listed }),
+    deviations: deviationsOf(data),
+    answers,
+  };
+}
+
+const isReserved = (key: string): boolean => (RESERVED_KEYS as readonly string[]).includes(key);
+
+const isNames = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((v) => typeof v === 'string');
+
+/** The frontmatter's `deviations`, none when absent or empty; throws when it is not a list of names. */
+function deviationsOf(data: Record<string, unknown>): string[] {
+  const listed = data.deviations ?? [];
+  if (!isNames(listed)) throw new Error('marker: `deviations` must be a list of requirement names');
+  return listed;
 }
 
 /** The YAML between the leading `---` lines, as a plain object, and the rest. */

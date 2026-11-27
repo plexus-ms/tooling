@@ -115,7 +115,16 @@ export {
   renderViolation,
   type Violation,
 } from './lints.ts';
-export { type Declaration, MARKER_FILE, parseMarker, reasonGiven, splitFrontmatter } from './marker.ts';
+export {
+  type Declaration,
+  MARKER_FILE,
+  type MarkerConfig,
+  parseMarker,
+  parseMarkerConfig,
+  RESERVED_KEYS,
+  reasonGiven,
+  splitFrontmatter,
+} from './marker.ts';
 export {
   type Directory,
   type GitFacet,
