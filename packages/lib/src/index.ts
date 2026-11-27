@@ -11,7 +11,7 @@
 // file shapes (marker.ts, copier.ts) live here, once, for every verb.
 // Conventions: compendium/miscellaneous/cli-design.md.
 
-export { type Applied, type ApplyOptions, apply, CROSSOVER_RUNBOOK, type SiteApplied } from './apply.ts';
+export { type Applied, type ApplyOptions, apply, CROSSOVER_RUNBOOK } from './apply.ts';
 export { BASELINE_FILE, type Compared, compareBaseline, parseBaseline, renderBaseline } from './baseline.ts';
 export { bumpWorkflowRefs, WORKFLOW_REF } from './bookkeeping.ts';
 export { bundledTemplatesRoot, loadTemplate, templateDirectory } from './bundled.ts';

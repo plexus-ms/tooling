@@ -15,7 +15,7 @@ const VERSION = '0.131.0';
 const TEMPLATES = {
   basket: {
     manifest: ['name: basket', 'questions:', '  fruit:', '    type: str', '  count:', '    default: 3', ''].join('\n'),
-    files: { 'list.txt.jinja': '{{ count }} {{ fruit }}s\nfresh\n' },
+    files: { 'list.txt.jinja': '{{ count }} {{ fruit }}s\nfresh\nsweet\n' },
   },
   shelf: {
     manifest: ['name: shelf', 'questions:', '  width:', '    type: int', '    default: 4', ''].join('\n'),
@@ -34,7 +34,7 @@ function fixture(extra: Files = {}) {
   const templates = templatesAt(scratch.fresh('templates'), TEMPLATES);
   const repo = repoWith(scratch.fresh('repo'), {
     'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: apple\n`),
-    'list.txt': '3 apples\nfresh\n',
+    'list.txt': '3 apples\nfresh\nsweet\n',
     ...extra,
   });
   return { templates, repo };
@@ -50,7 +50,7 @@ test('apply refuses when the running plx is not the version the root marker name
     assert.match(error.message, /0\.132\.0/);
     return true;
   });
-  assert.equal(text(repo, 'list.txt'), '3 apples\nfresh\n');
+  assert.equal(text(repo, 'list.txt'), '3 apples\nfresh\nsweet\n');
 });
 
 test('apply refuses when the root marker names no version although a site lists templates', async () => {
@@ -67,7 +67,7 @@ test('apply refuses in a repo that still tracks a copier answers file, and point
     assert.match(error.message, /crossover runbook/);
     return true;
   });
-  assert.equal(text(repo, 'list.txt'), '3 apples\nfresh\n');
+  assert.equal(text(repo, 'list.txt'), '3 apples\nfresh\nsweet\n');
 });
 
 test('a copier answers file that git does not track does not stop apply', async () => {
@@ -81,9 +81,9 @@ const pears = marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: pear\n`);
 
 test('apply renders a site whose answer changed, merging into the working tree and keeping the local edit', async () => {
   const { repo, templates } = fixture();
-  write(repo, { 'PLEXUS.md': pears, 'list.txt': '3 apples\nripe\n' });
+  write(repo, { 'PLEXUS.md': pears, 'list.txt': '3 apples\nfresh\nsour\n' });
   const applied = await apply(quietContext(), options(repo, templates));
-  assert.equal(text(repo, 'list.txt'), '3 pears\nripe\n');
+  assert.equal(text(repo, 'list.txt'), '3 pears\nfresh\nsour\n');
   assert.deepEqual(applied.sites, [{ dir: '.', report: [{ path: 'list.txt', outcome: 'clean' }], defaults: {} }]);
   assert.equal(applied.conflicted, 0);
   assert.equal(applied.applied, true);
@@ -113,7 +113,7 @@ test('apply re-renders a nested site that reads an answer of the root marker whe
   write(repo, { 'PLEXUS.md': pears });
   const applied = await apply(quietContext(), options(repo, templates));
   assert.equal(text(repo, 'apps/crate/crate.txt'), 'a crate of pears\n');
-  assert.equal(text(repo, 'list.txt'), '3 pears\nfresh\n');
+  assert.equal(text(repo, 'list.txt'), '3 pears\nfresh\nsweet\n');
   assert.deepEqual(
     applied.sites.map((s) => [s.dir, s.report]),
     [
