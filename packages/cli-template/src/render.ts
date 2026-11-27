@@ -23,7 +23,7 @@ import type { Answers, BirthCommand, Entry, Origin, RenderError, RenderResult, T
 /** The tree `templates` render with the `given` answers, and what it is made of. */
 export function render(templates: readonly Tree[], given: Answers): RenderResult {
   const errors: RenderError[] = [];
-  const read = templates.flatMap((tree, i) => readTemplate(tree, i + 1, errors) ?? []);
+  const read = readAll(templates, errors);
   ownersOf(read, errors);
   const resolved = read.map((template) => ({
     template,
@@ -49,6 +49,24 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   );
   if (errors.length > 0) return { tree: new Map(), answers, unused, files: new Map(), birth: [], errors };
   return { tree, answers, unused, files, birth, errors };
+}
+
+/** The templates read, in the order given; a template named like one before it is an error and is left out. */
+function readAll(templates: readonly Tree[], errors: RenderError[]): Template[] {
+  const positions = new Map<string, number>();
+  return templates.flatMap((tree, i) => {
+    const template = readTemplate(tree, i + 1, errors);
+    if (template === undefined) return [];
+    const { name } = template.manifest;
+    const first = positions.get(name);
+    if (first === undefined) {
+      positions.set(name, i + 1);
+      return [template];
+    }
+    const message = `templates ${first} and ${i + 1} are both named ${name}`;
+    errors.push({ template: name, other: name, path: MANIFEST, message });
+    return [];
+  });
 }
 
 /** The template that declares each question; a question two templates declare is an error naming both. */
