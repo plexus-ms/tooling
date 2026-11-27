@@ -290,16 +290,15 @@ test("a file of one template with another template's path below it is an error n
   assert.deepEqual(listing(result.tree), {});
 });
 
-test("an empty directory is written by one template: two leaving it empty is an error naming both, and one is implied by the other's files below it", () => {
+test("an empty directory several templates hold is one directory, owned by the first by name, and one is implied by another template's files below it", () => {
   const dir = { text: '', mode: DIRECTORY | 0o755 };
-  const both = render([template(basket, { attic: dir }), template(shelf, { '{{ book }}': dir })], {
-    fruit: 'pear',
-    book: 'attic',
-  });
-  assert.deepEqual(where(both.errors), [
-    { template: 'basket', other: 'shelf', path: 'files/attic', question: undefined },
-  ]);
-  assert.equal(both.errors[0]?.message, "basket's attic and shelf's {{ book }} both render to attic");
+  const held = [template(shelf, { '{{ book }}/{% if false %}x{% endif %}': 'x' }), template(basket, { attic: dir })];
+  for (const templates of [held, [...held].reverse()]) {
+    const both = render(templates, { fruit: 'pear', book: 'attic' });
+    assert.deepEqual(both.errors, []);
+    assert.deepEqual(listing(both.tree), { attic: dir });
+    assert.deepEqual(new Map(both.files), new Map([['attic', { template: 'basket', policy: 'merge' }]]));
+  }
   const below = render([template(basket, { attic: dir }), template(shelf, { '{{ book }}/old.txt': 'o' })], {
     fruit: 'pear',
     book: 'attic',
