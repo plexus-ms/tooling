@@ -154,3 +154,16 @@ test('a declared read that another template of the render owns sees the answer t
   assert.deepEqual(result.answers, { trees: 4, rows: 2 });
   assert.deepEqual(listing(result.tree), { 'orchard.txt': '4', 'crate.txt': '6' });
 });
+
+test('a read with a default sees the default when nothing supplies it, and a supplied value wins over it', () => {
+  const box = 'name: box\nreads:\n  trees: {default: 1}\n';
+  const files = { 'box.txt.jinja': '{{ trees }}' };
+  const alone = render([template(box, files)], {});
+  assert.deepEqual(alone.errors, []);
+  assert.deepEqual(listing(alone.tree), { 'box.txt': '1' });
+  const given = render([template(box, files)], { trees: 7 });
+  assert.deepEqual(listing(given.tree), { 'box.txt': '7' });
+  const owned = render([template(orchard), template(box, files)], { trees: '9' });
+  assert.deepEqual(owned.errors, []);
+  assert.deepEqual(listing(owned.tree), { 'box.txt': '9' });
+});
