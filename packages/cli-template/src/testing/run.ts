@@ -19,6 +19,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { DIRECTORY, MODE_TYPE } from '../types.ts';
 import type { Listing } from './trees.ts';
 
 const BIN = join(import.meta.dirname, '..', 'bin.ts');
@@ -48,10 +49,14 @@ export function plx(args: readonly string[], input = '', cwd?: string): Run {
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
-/** Writes `files` below `dir`: a string is a file of mode 0o644, `{ text, mode }` a file of its own mode. */
+/** Writes `files` below `dir`: a string is a file of mode 0o644, `{ text, mode }` a file of its own mode, or an empty directory where the mode says so. */
 export function put(dir: string, files: Listing): void {
   for (const [path, listed] of Object.entries(files)) {
     const file = join(dir, path);
+    if (typeof listed !== 'string' && (listed.mode & MODE_TYPE) === DIRECTORY) {
+      mkdirSync(file, { recursive: true });
+      continue;
+    }
     mkdirSync(dirname(file), { recursive: true });
     if (typeof listed === 'string') writeFileSync(file, listed, { mode: 0o644 });
     else if ('text' in listed) writeFileSync(file, listed.text);
