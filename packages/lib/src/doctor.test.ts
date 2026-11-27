@@ -1004,6 +1004,7 @@ const site = (dir: string, over: Partial<MarkerConfig> = {}): MarkerSite => ({ d
 const crossed = (sites: MarkerSite[], over: Partial<RepoFacts> = {}): RepoFacts =>
   repo({ pin: '0.131.0', sites, ...over });
 
+const VERSION_NESTED = "`version` belongs in the repo's root marker only; remove it";
 const ROOT = site('.', { version: '0.131.0', templates: ['repo-turbo'] });
 
 test('a repo whose root marker states the version its plx pin names passes', () => {
@@ -1014,7 +1015,8 @@ test('the root marker names a version other than the plx pin: a finding of no re
   const stale = crossed([site('.', { version: '0.130.0', templates: ['repo-turbo'] })]);
   const expected = [
     {
-      problem: '`version` in PLEXUS.md is 0.130.0, but mise.toml pins plx 0.131.0; only `plx update` moves it',
+      problem:
+        '`version` in PLEXUS.md is 0.130.0, but mise.toml pins plx 0.131.0; `plx update` moves both together, so undo whichever was edited by hand',
     },
   ];
   assert.deepEqual(findings(stale), expected);
@@ -1029,13 +1031,33 @@ test('the root marker names a version other than the plx pin: a finding of no re
 
 test('a repo with a version but no plx pin, or with templates but no version, fails', () => {
   assert.deepEqual(findings(crossed([ROOT], { pin: undefined })), [
-    { problem: '`version` in PLEXUS.md is 0.131.0, but mise.toml pins no plx' },
+    {
+      problem: '`version` in PLEXUS.md is 0.131.0, but mise.toml pins no plx; pin plx at 0.131.0, as `plx update` does',
+    },
   ]);
+  const tail = 'set `version: 0.131.0` in the root marker, the version mise.toml pins plx at';
   assert.deepEqual(findings(crossed([site('.', { templates: ['repo-turbo'] })])), [
-    { problem: 'PLEXUS.md lists `templates` but sets no `version`; `plx update` writes it' },
+    { problem: `PLEXUS.md sets no \`version\`, though it lists \`templates\`; ${tail}` },
   ]);
   assert.deepEqual(findings(crossed([site('.', { templates: [] })])), [
-    { problem: 'PLEXUS.md lists `templates` but sets no `version`; `plx update` writes it' },
+    { problem: `PLEXUS.md sets no \`version\`, though it lists \`templates\`; ${tail}` },
+  ]);
+  assert.deepEqual(findings(crossed([site('.'), site('apps/a', { templates: ['app-nextjs'] })])), [
+    { problem: `PLEXUS.md sets no \`version\`, though apps/a/PLEXUS.md lists \`templates\`; ${tail}` },
+  ]);
+  assert.deepEqual(
+    findings(crossed([site('.'), site('apps/a', { templates: [] }), site('apps/b', { templates: [] })])),
+    [
+      {
+        problem: `PLEXUS.md sets no \`version\`, though apps/a/PLEXUS.md, apps/b/PLEXUS.md list \`templates\`; ${tail}`,
+      },
+    ],
+  );
+  assert.deepEqual(findings(crossed([site('.', { templates: [] })], { pin: undefined })), [
+    {
+      problem:
+        'PLEXUS.md sets no `version`, though it lists `templates`; set `version` in the root marker to the Plexus version the repo is on, and pin plx at it in mise.toml',
+    },
   ]);
 });
 
@@ -1045,10 +1067,10 @@ test('a repo whose markers list no templates needs no version', () => {
 });
 
 test('a nested marker that carries `version` is a finding of the repo, once per marker', () => {
-  const nested = (dir: string): MarkerSite => ({ dir, problem: "`version` belongs in the repo's root marker only" });
+  const nested = (dir: string): MarkerSite => ({ dir, problem: VERSION_NESTED });
   assert.deepEqual(findings(crossed([ROOT, nested('apps/a'), nested('packages/x')])), [
-    { problem: "apps/a/PLEXUS.md: `version` belongs in the repo's root marker only" },
-    { problem: "packages/x/PLEXUS.md: `version` belongs in the repo's root marker only" },
+    { problem: `apps/a/PLEXUS.md: ${VERSION_NESTED}` },
+    { problem: `packages/x/PLEXUS.md: ${VERSION_NESTED}` },
   ]);
 });
 
@@ -1075,14 +1097,17 @@ test('a key set in both the root marker and a nested one is a finding naming the
     site('apps/b', { answers: { profile: 'stateless' } }),
   ];
   assert.deepEqual(findings(crossed(sites)), [
-    { problem: 'apps/a/PLEXUS.md: `tenant`, `ci` are answered in the root marker already' },
+    {
+      problem:
+        'apps/a/PLEXUS.md: `tenant`, `ci` are answered in the root marker as well; remove each from one of the two',
+    },
   ]);
 });
 
 test('the marker checks are skipped in a repo that still tracks a copier answers file, at any depth', () => {
   const failing = [
     site('.', { version: '0.130.0', templates: ['repo-turbo'], answers: { tenant: 'a' } }),
-    { dir: 'apps/a', problem: "`version` belongs in the repo's root marker only" },
+    { dir: 'apps/a', problem: VERSION_NESTED },
     site('apps/b', { answers: { tenant: 'b' } }),
   ];
   assert.equal(findings(crossed(failing)).length, 3, 'the same sites fail once the repo has crossed over');
@@ -1106,8 +1131,11 @@ test('doctor reads the plx pin and the tracked markers, and fails the repo for e
       [
         '.',
         [
-          { problem: '`version` in PLEXUS.md is 0.130.0, but mise.toml pins plx 0.131.0; only `plx update` moves it' },
-          { problem: "apps/site/PLEXUS.md: `version` belongs in the repo's root marker only" },
+          {
+            problem:
+              '`version` in PLEXUS.md is 0.130.0, but mise.toml pins plx 0.131.0; `plx update` moves both together, so undo whichever was edited by hand',
+          },
+          { problem: `apps/site/PLEXUS.md: ${VERSION_NESTED}` },
         ],
       ],
       ['apps/site', []],
