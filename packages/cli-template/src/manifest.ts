@@ -46,6 +46,7 @@ import {
   REGULAR,
   type Read,
   type RenderError,
+  SYMLINK,
   type Tree,
 } from './types.ts';
 
@@ -69,7 +70,7 @@ const VARIABLE = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 const utf8 = new TextDecoder('utf-8', { fatal: true });
 
-type Problem = (message: string, question?: string) => void;
+type Problem = (message: string, question?: string, path?: string) => void;
 type YamlMap = Record<string, unknown>;
 
 const isMap = (value: unknown): value is YamlMap =>
@@ -79,15 +80,19 @@ const isMap = (value: unknown): value is YamlMap =>
 export function readTemplate(tree: Tree, position: number, errors: RenderError[]): Template | undefined {
   let template = `#${position}`;
   let failed = false;
-  const problem: Problem = (message, question) => {
+  const problem: Problem = (message, question, path = MANIFEST) => {
     failed = true;
-    errors.push({ template, path: MANIFEST, ...(question === undefined ? {} : { question }), message });
+    errors.push({ template, path, ...(question === undefined ? {} : { question }), message });
   };
   const parsed = parseManifest(tree, problem);
   if (parsed === undefined) return undefined;
   const { data, doc } = parsed;
   if (typeof data.name === 'string' && NAME.test(data.name)) template = data.name;
   else problem('the name is lowercase letters, digits and hyphens, starting with a letter');
+  for (const [path, { mode }] of tree) {
+    if ((mode & MODE_TYPE) === SYMLINK)
+      problem(`${path} is a symlink, and a template may not hold one`, undefined, path);
+  }
   for (const key of Object.keys(data)) if (!KEYS.includes(key)) problem(`unknown key ${key}`);
   const files = new Map(
     [...tree].filter(([path]) => path.startsWith(FILES)).map(([path, entry]) => [path.slice(FILES.length), entry]),
