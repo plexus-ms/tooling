@@ -11,13 +11,15 @@
 // is copied as bytes, under the name without the suffix. A file whose Jinja
 // fails is an error naming its path in the template.
 //
+// A symlink in the template is an error.
+//
 // A directory that renders to a path and holds nothing in the result, because
 // the template holds nothing there or because every file below it was skipped,
 // lands as an empty directory, as copier creates it.
 import { messageOf } from './errors.ts';
 import { type Context, renderString } from './jinja.ts';
 import { FILES, type Template } from './manifest.ts';
-import { DIRECTORY, type Entry, MODE_TYPE, REGULAR, type RenderError } from './types.ts';
+import { DIRECTORY, type Entry, MODE_TYPE, REGULAR, type RenderError, SYMLINK } from './types.ts';
 
 /** A rendered entry, with the path below `files/` it came from. */
 export interface Rendered {
@@ -107,6 +109,14 @@ export function renderFiles(template: Template, context: Context, errors: Render
   for (const [source, entry] of template.files) {
     if ((entry.mode & MODE_TYPE) === DIRECTORY) {
       directoryOf(source);
+      continue;
+    }
+    if ((entry.mode & MODE_TYPE) === SYMLINK) {
+      errors.push({
+        template: template.manifest.name,
+        path: `${FILES}${source}`,
+        message: `${source} is a symlink, and a template may not hold one`,
+      });
       continue;
     }
     const isTemplate = source.endsWith(SUFFIX);
