@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { renderString } from './jinja.ts';
+import { evaluate, renderString } from './jinja.ts';
 
 test('render fills in the context and keeps every trailing newline', () => {
   assert.equal(renderString('Hello {{ name }}!\n', { name: 'World' }), 'Hello World!\n');
@@ -53,4 +53,16 @@ test('render keeps a raw block verbatim, with whitespace control on either tag',
 test('render carries line endings as they are', () => {
   assert.equal(renderString('a\r\n{{ x }}\r\n', { x: 1 }), 'a\r\n1\r\n');
   assert.equal(renderString('a\rb\r', {}), 'a\rb\r');
+});
+
+test('evaluate returns the native value of an expression', () => {
+  assert.equal(evaluate("'ghcr' if strategy == 'github' else 'own'", { strategy: 'hybrid' }), 'own');
+  assert.equal(evaluate("not publishes and strategy == 'hybrid'", { publishes: false, strategy: 'hybrid' }), true);
+  assert.equal(evaluate('age < 0', { age: 7 }), false);
+  assert.equal(evaluate('age + 1', { age: 7 }), 8);
+  assert.equal(evaluate('1.5', {}), 1.5);
+  assert.equal(evaluate('none', {}), null);
+  assert.deepEqual(evaluate("[1, 'a', true]", {}), [1, 'a', true]);
+  assert.deepEqual(evaluate("{'a': [1]}", {}), { a: [1] });
+  assert.equal(evaluate("reviewers | default('')", {}), '');
 });
