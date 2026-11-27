@@ -29,3 +29,13 @@ test('render lets a template ask whether a variable is defined, or give it a def
   assert.equal(renderString("[{{ missing | default('') }}] {{ missing | default('d') }}", {}), '[] d');
   assert.equal(renderString("{{ empty | default('d') }} {{ empty | default('d', true) }}", { empty: '' }), ' d');
 });
+
+test('render offers the Python string methods templates call', () => {
+  assert.equal(
+    renderString(`{% for r in s.split(',') %}"{{ r.strip() }}"{% if not loop.last %}, {% endif %}{% endfor %}`, {
+      s: 'alice, bob ,carol',
+    }),
+    '"alice", "bob", "carol"',
+  );
+  assert.equal(renderString("{{ s.startswith('ab') }} {{ s.startswith('b') }}", { s: 'abc' }), 'True False');
+});
