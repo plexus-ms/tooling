@@ -170,3 +170,17 @@ test('setMarkerKeys inserts a new reserved key above the comment lines that dire
     'a blank line ends the comment that belongs to the key',
   );
 });
+
+test('setMarkerKeys keeps the comment on the key line of a block value it replaces', () => {
+  const list = '---\ntemplates: # which\n  - a\n  # inside\n  - b\nnext: 1\n---\n';
+  assert.equal(
+    setMarkerKeys(list, { templates: ['c', 'd'] }),
+    '---\ntemplates: # which\n  - c\n  - d\nnext: 1\n---\n',
+    'a comment between the items goes with them',
+  );
+  const answer = '---\nextra: # which\n  - a\nnext: 1\n---\n';
+  assert.equal(setMarkerKeys(answer, { extra: 'x' }), '---\nextra: x # which\nnext: 1\n---\n');
+  assert.equal(setMarkerKeys(answer, { extra: [] }), '---\nextra: [] # which\nnext: 1\n---\n');
+  assert.deepEqual(parseMarkerConfig(setMarkerKeys(answer, { extra: [] })).answers.extra, []);
+  assert.equal(setMarkerKeys('---\na: | # c\n  text\nb: 1\n---\n', { a: 'y' }), '---\na: y # c\nb: 1\n---\n');
+});
