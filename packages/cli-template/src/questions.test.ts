@@ -414,9 +414,11 @@ test('choices may use the answers before their question', () => {
   assert.equal(basket(questions, { q: 'nuts' }).errors.length, 1);
 });
 
-// Ported from tests/test_complex_questions.py::test_selection_type_cast, as given answers, with
-// the pair syntax written as a map; the choices' values are cast as the answer is.
-test('yaml choices compare the cast values, so null, numbers and lists can be choices', () => {
+// Ported from tests/test_complex_questions.py::test_selection_type_cast, as given answers and with
+// the label-and-value pairs written as a map. As in copier, a choice whose value is null is chosen
+// by its label, and the answer is that label (`postgres` and `nulls` below); a choice of the
+// string "null" is the value null.
+test('a yaml choice with a null value is its label, and one of the string null is the value null', () => {
   const questions = `postgres:
   type: yaml
   default: 10
@@ -427,15 +429,110 @@ test('yaml choices compare the cast values, so null, numbers and lists can be ch
 nulls:
   type: yaml
   choices:
-    same as key: same as key
+    same as key: null
     yaml-casted to a real null: "null"
     becomes array: "[one, 2, -3.0]"`;
-  const none = basket(questions, { nulls: 'null' });
-  assert.deepEqual(none.errors, []);
-  assert.deepEqual(none.answers, { postgres: 10, nulls: null });
-  const picked = basket(questions, { postgres: null, nulls: '[one, 2, -3.0]' });
-  assert.deepEqual(picked.answers, { postgres: null, nulls: ['one', 2, -3] });
+  const result = basket(questions, { postgres: 'I will use an external PostgreSQL server', nulls: 'null' });
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, { postgres: 'I will use an external PostgreSQL server', nulls: null });
+  assert.deepEqual(basket(questions, { nulls: 'same as key' }).answers, { postgres: 10, nulls: 'same as key' });
+  assert.deepEqual(basket(questions, { postgres: 9.6, nulls: '[one, 2, -3.0]' }).answers, {
+    postgres: 9.6,
+    nulls: ['one', 2, -3],
+  });
+  assert.equal(basket(questions, { postgres: null, nulls: 'null' }).errors.length, 1);
   assert.equal(basket(questions, { postgres: 11, nulls: 'null' }).errors.length, 1);
+});
+
+// Ported from tests/test_copy.py::test_validate_init_data, the yaml choices with a null value.
+for (const [answer, valid] of [
+  ['one', true],
+  ['2', true],
+  ['null', true],
+  ['two', false],
+  ['three', false],
+] as const) {
+  test(`a yaml choice {one: null, two: 2, three: "null"} ${valid ? 'allows' : 'refuses'} the answer ${answer}`, () => {
+    const result = basket('q:\n  type: yaml\n  choices:\n    one: null\n    two: 2\n    three: "null"', { q: answer });
+    assert.equal(result.errors.length, valid ? 0 : 1);
+  });
+}
+
+// Ported from tests/test_copy.py::test_validate_init_data, the str choices of null values.
+test('a str choice with a null value is its label', () => {
+  const questions = 'q:\n  type: str\n  choices:\n    one: null\n    two: null\n    three: null';
+  assert.deepEqual(basket(questions, { q: 'one' }).answers, { q: 'one' });
+  assert.equal(basket(questions, { q: 'four' }).errors.length, 1);
+});
+
+// Ported from tests/test_copy.py::test_validate_init_data, the yaml choices of collections.
+for (const [what, spec, answer] of [
+  ['a string holding a list', 'choices:\n  array: "[a, b]"', '[a, b]'],
+  ['a string holding a map', 'choices:\n  object: "k: v"', 'k: v'],
+  ['a map as an item', 'choices:\n  - {one: 1, two: 2}', 'one: 1\ntwo: 2'],
+] as const) {
+  test(`a yaml choice of ${what} is chosen by its value`, () => {
+    assert.deepEqual(basket(`q:\n  type: yaml\n${spec.replace(/^/gm, '  ')}`, { q: answer }).errors, []);
+  });
+}
+
+test('templated choices that hold maps or lists match the answer deeply and print as they are', () => {
+  const questions = 'q:\n  type: yaml\n  choices: "[{a: 1}, {b: 2}, [c]]"';
+  assert.deepEqual(basket(questions, { q: 'a: 1' }).answers, { q: { a: 1 } });
+  assert.deepEqual(basket(questions, { q: '[c]' }).answers, { q: ['c'] });
+  const wrong = basket(questions, { q: 'd: 3' });
+  assert.match(wrong.errors[0]?.message ?? '', /is not one of {"a":1}, {"b":2}, \["c"\]/);
+});
+
+test('the top level of templated choices keeps its order, with integer-like labels', () => {
+  const result = basket('q:\n  type: int\n  choices: "{3: 3, 1: 1, 2: 2}"', { q: 4 });
+  assert.match(result.errors[0]?.message ?? '', /is not one of 3, 1, 2/);
+});
+
+test('a choice outside the allowed ones that casts is an error listing them', () => {
+  const result = basket('q:\n  type: int\n  choices:\n    one: 1\n    two: 2', { q: 3 });
+  assert.match(result.errors[0]?.message ?? '', /3 is not one of 1, 2/);
+});
+
+test('choices of an empty list restrict nothing', () => {
+  assert.deepEqual(basket('q:\n  choices: []', { q: 'any' }).answers, { q: 'any' });
+  assert.deepEqual(basket('q:\n  choices: "[]"', { q: 'any' }).answers, { q: 'any' });
+});
+
+test('templated choices that render to a scalar or to nothing are an error naming the question', () => {
+  for (const choices of ['"one"', '""', '"{{ \'\' }}"', '"null"']) {
+    const result = basket(`q:\n  default: one\n  choices: ${choices}`, {});
+    assert.equal(result.errors.length, 1, choices);
+    assert.equal(result.errors[0]?.question, 'q');
+    assert.match(result.errors[0]?.message ?? '', /choices/);
+  }
+});
+
+test('choices are compared strictly: true is not a choice of 1, nor 1 one of true', () => {
+  assert.equal(basket('q:\n  type: yaml\n  choices: [1, two]', { q: true }).errors.length, 1);
+  assert.equal(basket('q:\n  type: yaml\n  choices: [true]', { q: 1 }).errors.length, 1);
+  assert.deepEqual(basket('q:\n  type: yaml\n  choices: [1, two]', { q: 1 }).errors, []);
+});
+
+// Deliberate difference from copier: a two-item list among choices is a value, not a label and a value.
+test('a two-item list among choices is a list value', () => {
+  const questions = 'q:\n  type: yaml\n  choices:\n    - [a, b]\n    - c';
+  assert.deepEqual(basket(questions, { q: '[a, b]' }).answers, { q: ['a', 'b'] });
+  assert.equal(basket(questions, { q: 'a' }).errors.length, 1);
+});
+
+// Deliberate difference from copier: in a list a null item is the value null; a label stands in for
+// null only in a map.
+test('a null item of a list of choices is the value null', () => {
+  const questions = 'q:\n  type: yaml\n  choices: [~, two]';
+  assert.deepEqual(basket(questions, { q: null }).answers, { q: null });
+  assert.deepEqual(basket(questions, { q: 'two' }).answers, { q: 'two' });
+});
+
+// The choices below a yaml string are read as YAML 1.1, as copier reads them.
+test('templated choices are read as YAML 1.1', () => {
+  assert.deepEqual(basket('q:\n  type: yaml\n  choices: "[yes, 010]"', { q: 'yes' }).answers, { q: true });
+  assert.deepEqual(basket('q:\n  type: yaml\n  choices: "[yes, 010]"', { q: '010' }).answers, { q: 8 });
 });
 
 // Ported from tests/test_copy.py::test_validate_default_value (the str validator case) and
