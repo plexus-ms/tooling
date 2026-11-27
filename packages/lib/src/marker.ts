@@ -26,6 +26,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import {
   Document,
+  isAlias,
   isCollection,
   isMap,
   isNode,
@@ -220,6 +221,7 @@ function replaceValue(yaml: string, doc: Document, pair: Pair, key: string, valu
   const old = pair.value;
   if (!isNode(old) || !old.range || !isNode(pair.key) || !pair.key.range)
     throw new Error(`marker: \`${key}\` has no value plx can replace`);
+  refuseShared(doc, old, key);
   if (isDeepStrictEqual(old.toJSON(), value)) return yaml;
   const [from, to] = old.range;
   // The key starts its line, and its colon follows it there: not an explicit key (`? a` above `: value`).
@@ -258,6 +260,25 @@ function replaceValue(yaml: string, doc: Document, pair: Pair, key: string, valu
   // comment, or at the line's end. The value goes right after the colon instead.
   if (from === to) return onKeyLine(yaml, key, colonEnd, from, oneLine(node, old, key));
   return yaml.slice(0, from) + oneLine(node, old, key) + yaml.slice(to);
+}
+
+/**
+ * Throws when the value is an alias (`*x`), or carries an anchor (`&x`) an
+ * alias elsewhere refers to: setting it would change another key, or a key
+ * written as the same value as another.
+ */
+function refuseShared(doc: Document, value: Node, key: string): void {
+  if (isAlias(value)) throw new Error(`marker: \`${key}\` is an alias of another value; set it by hand`);
+  const referred = new Set<string>();
+  visit(doc, { Alias: (_, alias) => void referred.add(alias.source) });
+  visit(value, {
+    Node: (_, node) => {
+      if (node.anchor && referred.has(node.anchor))
+        throw new Error(
+          `marker: \`${key}\` carries the anchor \`${node.anchor}\`, which an alias refers to; set it by hand`,
+        );
+    },
+  });
 }
 
 /** Quotings a new string can take over from the one it replaces; a block scalar spans lines. */
