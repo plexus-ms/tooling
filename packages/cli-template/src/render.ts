@@ -41,6 +41,14 @@
 // reads. Templates whose reads form a cycle, and the templates that read from
 // them, are one error naming them all by name, and none of them is resolved.
 //
+// Nor does the order given change the rest of the result, but for the birth
+// commands: `tree` and `files` come in path order, `answers` and `unused` in
+// name order, and `errors` by template name, each template's in the order its
+// passes found them (its reads and questions in its manifest's order, its
+// files in its tree's). An error between two templates names in `template` the
+// one whose name sorts first; two templates of one name are named by their
+// position in the list, which is all that tells them apart.
+//
 // Scope. A template sees only its own slice of the namespace: the engine's
 // variables, its declared reads, and its own questions. Its questions'
 // defaults, `when`, choices and validators see the scope (the engine's
@@ -84,7 +92,7 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   const errors: RenderError[] = [];
   // In the order given for the birth commands, and by name for everything else.
   const listed = readAll(templates, errors);
-  const read = listed.toSorted((a, b) => (a.manifest.name < b.manifest.name ? -1 : 1));
+  const read = listed.toSorted((a, b) => compare(a.manifest.name, b.manifest.name));
   const owners = ownersOf(read, errors);
   const engine = engineVariables(read);
   const resolved = new Map<Template, Resolved>();
@@ -104,7 +112,9 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   });
   const tree = new Map<string, Entry>();
   const files = new Map<string, Origin>();
-  for (const [path, { entry, source, owner }] of renderFiles(renderings, errors)) {
+  for (const [path, { entry, source, owner }] of [...renderFiles(renderings, errors)].sort(([a], [b]) =>
+    compare(a, b),
+  )) {
     tree.set(path, entry);
     files.set(path, { template: owner.manifest.name, policy: owner.manifest.policies.get(source) ?? 'merge' });
   }
@@ -112,14 +122,23 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
     manifest.birth.map((command) => ({ template: manifest.name, command })),
   );
 
-  const answers: Answers = Object.assign({}, ...read.map((template) => resolved.get(template)?.resolution.answers));
+  const answers: Answers = Object.fromEntries(
+    read
+      .flatMap((template) => Object.entries(resolved.get(template)?.resolution.answers ?? {}))
+      .sort(([a], [b]) => compare(a, b)),
+  );
   const unused = unusedAnswers(
     read.map(({ manifest }) => manifest),
     given,
-  );
+  ).sort(compare);
+  // By template, and within one in the order the passes found them.
+  errors.sort((a, b) => compare(a.template ?? '', b.template ?? ''));
   if (errors.length > 0) return { tree: new Map(), answers, unused, files: new Map(), birth: [], errors };
   return { tree, answers, unused, files, birth, errors };
 }
+
+/** The order of two names or paths, by code unit, as JavaScript sorts strings. */
+const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /** The templates read, in the order given; a template named like one before it is an error and is left out. */
 function readAll(templates: readonly Tree[], errors: RenderError[]): Template[] {
@@ -174,7 +193,7 @@ function resolutionOrder(
     order.push(...pending.splice(next, 1));
   }
   if (pending.length === 0) return order;
-  const left = pending.toSorted((a, b) => (a.manifest.name < b.manifest.name ? -1 : 1));
+  const left = pending.toSorted((a, b) => compare(a.manifest.name, b.manifest.name));
   const names = left.map(({ manifest }) => manifest.name);
   const waits = left.flatMap((template) =>
     edges(template)

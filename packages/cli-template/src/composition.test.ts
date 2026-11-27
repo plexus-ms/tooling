@@ -397,8 +397,8 @@ test("a read of a question that fails in its owner adds no error, and the reader
   const box = 'name: box\nquestions:\n  lid:\n    type: str\nreads:\n  trees:\n';
   const result = render([template(box, { 'box.txt.jinja': '{{ trees }}' }), template(owner)], {});
   assert.deepEqual(where(result.errors), [
-    { template: 'orchard', other: undefined, path: undefined, question: 'trees' },
     { template: 'box', other: undefined, path: undefined, question: 'lid' },
+    { template: 'orchard', other: undefined, path: undefined, question: 'trees' },
   ]);
 });
 

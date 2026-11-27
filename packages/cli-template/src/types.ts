@@ -43,8 +43,8 @@
 // sentence for a person with the template, the path and the question it
 // concerns where there is one. An error between two templates, a question both
 // declare, a path both write, a cycle of reads or a read of a question its
-// owner skips, names the first in `template` and the second in `other`, and its
-// message names both. A render with errors writes nothing:
+// owner skips, names one in `template` and the other in `other`, and its
+// message names both; render.ts says which is which. A render with errors writes nothing:
 // its tree, its files and its birth commands are empty.
 //
 // Each rendered path has an owner, the template that wrote it, and a policy:

@@ -77,7 +77,7 @@ test('a directory whose part renders empty is skipped with its files, and one th
   const off = render([basket], { do_it: false });
   assert.deepEqual(off.errors, []);
   assert.deepEqual(listing(off.tree), { 'two.txt': 'two', five: dir, void: dir });
-  assert.deepEqual([...off.files.keys()], ['two.txt', 'five', 'void']);
+  assert.deepEqual([...off.files.keys()], ['five', 'two.txt', 'void']);
 });
 
 const where = 'name: basket\nquestions:\n  target:\n    type: str\n';
