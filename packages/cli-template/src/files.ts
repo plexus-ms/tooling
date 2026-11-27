@@ -27,11 +27,12 @@
 // path and holds nothing in the result, because the template holds nothing
 // there or because every file below it was skipped, lands as an empty
 // directory, as copier creates it; only the innermost of nested ones is kept.
-// A symlink anywhere in a template is rejected where the template is read.
+// A symlink anywhere in a template is rejected where the template is read
+// (manifest.ts).
 import { messageOf } from './errors.ts';
 import { type Context, renderString } from './jinja.ts';
 import { FILES, type Template } from './manifest.ts';
-import { DIRECTORY, type Entry, MODE_TYPE, REGULAR, type RenderError, SYMLINK } from './types.ts';
+import { DIRECTORY, type Entry, MODE_TYPE, REGULAR, type RenderError } from './types.ts';
 
 /** A rendered entry, with the path below `files/` it came from. */
 export interface Rendered {
@@ -132,12 +133,8 @@ export function renderFiles(template: Template, context: Context, errors: Render
       directoryOf(source);
       continue;
     }
-    if ((entry.mode & MODE_TYPE) === SYMLINK) {
-      fail(source, `${source} is a symlink, and a template may not hold one`);
-      continue;
-    }
     const isTemplate = source.endsWith(SUFFIX);
-    if (source === SUFFIX || source.endsWith(`/${SUFFIX}`)) {
+    if (nameOf(source) === SUFFIX) {
       fail(source, `${source} has no name besides the ${SUFFIX} suffix`);
       continue;
     }
