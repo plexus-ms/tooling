@@ -193,3 +193,10 @@ test('setMarkerKeys leaves the line breaks of lines it does not set as they are'
     "a new line takes the page's line break",
   );
 });
+
+test('setMarkerKeys refuses a key that is not written as `key: value`, and takes a quoted one', () => {
+  assert.throws(() => setMarkerKeys('---\n? a\n:\n  - 1\n---\n', { a: [2] }), /`a` is not written as `a: value`/);
+  assert.throws(() => setMarkerKeys('---\n? a\n: 1\nb: 2\n---\n', { a: 3 }), /`a` is not written as `a: value`/);
+  assert.equal(setMarkerKeys('---\n"a" : 1\n---\n', { a: 2 }), '---\n"a" : 2\n---\n');
+  assert.equal(setMarkerKeys('---\n? a\n: 1\n---\n', { b: 2 }), '---\n? a\n: 1\nb: 2\n---\n', 'another key');
+});
