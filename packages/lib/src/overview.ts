@@ -271,7 +271,7 @@ async function facetsOf(
   if (files.has(MARKER_FILE)) {
     await facet(ctx, dir, MARKER_FILE, (text) => {
       dir.declaration = parseMarker(text);
-      // A marker that does not read as configuration is reported by findSites; here it only has no config.
+      // A marker that does not read as configuration has no config here, and this scan says nothing of it; `plx doctor` names it, in a repo that has crossed over from copier.
       try {
         dir.config = parseMarkerConfig(text);
       } catch {}

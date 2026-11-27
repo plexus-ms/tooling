@@ -61,11 +61,11 @@ export interface Unit {
   repo?: Directory;
 }
 
-/** The template the operations repo is rendered from (§ 1.6 PLX). */
-const OPERATIONS_TEMPLATE = 'template-repo-operations';
-
-/** The same template as a marker's `templates` names it: the repo's name without `template-`. */
+/** The operations template as a marker's `templates` names it. */
 const OPERATIONS_TEMPLATE_NAME = 'repo-operations';
+
+/** The template repo it is rendered from (§ 1.6 PLX), as an answers file's source names it. */
+const OPERATIONS_TEMPLATE = `template-${OPERATIONS_TEMPLATE_NAME}`;
 
 /** Whether the directory carries a marker, readable or not. */
 export const hasMarker = (dir: Directory): boolean =>

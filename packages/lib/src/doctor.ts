@@ -29,8 +29,11 @@
 // markers, and a marker that cannot be read as configuration is named. They
 // bind a repo that has crossed over from copier: one in which git tracks no
 // `.copier-answers.yml` at any depth (`crossedOver`), as the crossover deletes
-// every answers file. Until then they are skipped, so that this can ship
-// before the cutover. A repo that lists no `templates` needs no `version`.
+// every answers file. Until then they are skipped: a repo still on copier
+// keeps its answers in the answers files, so its markers are not yet its
+// configuration; its markers are not read for them either. A tracked marker
+// that cannot be read as a file is a finding of its repo, not a failed run.
+// A repo that lists no `templates` needs no `version`.
 //
 //   plx doctor          # this repo and its apps, from anywhere inside it
 //   plx doctor ~/dev    # every Plexus repo beneath, and its apps
@@ -364,9 +367,11 @@ function markerConfig(repo: RepoFacts): string[] {
   if (!crossedOver(repo.tracked)) return [];
   if (repo.sitesProblem) return [`the tracked ${MARKER_FILE} files could not be read: ${repo.sitesProblem}`];
   const sites = repo.sites ?? [];
+  // A root marker PLX-Repo/Marker reports (the repo's marker read as a declaration) is not named a second time.
   const problems = sites
     .filter((s) => s.problem !== undefined && !(s.dir === '.' && repo.marker?.problem))
     .map((s) => `${join(s.dir, MARKER_FILE)}: ${s.problem}`);
+  // A nested marker's answers are the root's plus its own, so they can only be compared when the root reads.
   const rootRead = sites.some((s) => s.dir === '.' && s.config);
   for (const { dir, config } of sites)
     if (rootRead && dir !== '.' && config)
