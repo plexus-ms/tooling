@@ -334,3 +334,25 @@ test('a policies file that does not describe its render exactly is an input erro
     }
   });
 });
+
+test('a target that is one of the renders, and one render given twice, are errors in the inputs, code 3', () => {
+  withDirectories({ 'a.txt': 'one\n' }, { 'a.txt': 'two\n' }, { 'a.txt': 'one\n' }, (s) => {
+    const same = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('new')]);
+    assert.equal(same.code, 3, same.stderr);
+    assert.deepEqual(
+      JSON.parse(same.stdout).errors.map((e: { path: string }) => e.path),
+      [s.path('new')],
+    );
+    const old = plxTemplate(['merge', s.path('old'), s.path('new'), `${s.path('old')}/`]);
+    assert.equal(old.code, 3, old.stderr);
+    const twice = plxTemplate(['merge', s.path('old'), s.path('old'), s.path('target')]);
+    assert.equal(twice.code, 3, twice.stderr);
+    assert.deepEqual(
+      JSON.parse(twice.stdout).errors.map((e: { path: string }) => e.path),
+      [s.path('old')],
+    );
+    assert.equal(readFileSync(s.path('new/a.txt'), 'utf8'), 'two\n');
+    assert.equal(readFileSync(s.path('old/a.txt'), 'utf8'), 'one\n');
+    assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'one\n');
+  });
+});
