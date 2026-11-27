@@ -71,6 +71,7 @@ async function leaf(path: string, mode: number): Promise<Entry | undefined> {
 export async function requireDirectory(path: string): Promise<void> {
   const st = await stat(path);
   if (st === undefined) throw new InputError('there is no such directory', path);
+  if (st.isSymbolicLink()) throw new InputError('is a symlink, which is not followed: name the directory itself', path);
   if (!st.isDirectory()) throw new InputError('not a directory', path);
 }
 
@@ -207,6 +208,7 @@ async function remove(root: string, path: string, keep: ReadonlySet<string>): Pr
 export async function requireEmpty(path: string): Promise<void> {
   const st = await stat(path);
   if (st === undefined) return;
+  if (st.isSymbolicLink()) throw new InputError('is a symlink, which is not followed: name the directory itself', path);
   if (!st.isDirectory()) throw new InputError('exists and is not a directory', path);
   if ((await readdir(path)).length > 0) throw new InputError('is not empty', path);
 }
