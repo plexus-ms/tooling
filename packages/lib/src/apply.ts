@@ -34,6 +34,8 @@
 // The one gap: an answer edited and committed without `apply` is not noticed
 // afterwards. HEAD then already holds the new marker, so apply sees no
 // difference, and no lock file records what the files were rendered from.
+
+import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { bundledTemplatesRoot } from './bundled.ts';
 import type { Context } from './context.ts';
@@ -69,23 +71,74 @@ function sourceAt(sites: readonly MarkerSite[], dir: string): Source {
     : { templates: [], answers: {} };
 }
 
+/** The top of the repo that `dir` is inside; rejects, saying so, when it is inside none. */
+async function topOf(ctx: Context, dir: string): Promise<string> {
+  try {
+    return (await ctx.read('git', ['rev-parse', '--show-toplevel'], { cwd: dir })).trim();
+  } catch {
+    throw new Error(`${dir} is not inside a git repository`);
+  }
+}
+
+/** Every marker with a problem, as the lines of one refusal; none when all are readable. */
+function problemsOf(now: readonly MarkerSite[], before: readonly MarkerSite[]): string[] {
+  const lines = [
+    ...now.map((s) => ({ s, where: 'in the working tree' })),
+    ...before.map((s) => ({ s, where: 'at HEAD' })),
+  ]
+    .filter(({ s }) => s.problem !== undefined)
+    .map(({ s, where }) => `${join(s.dir, MARKER_FILE)} ${where}: ${s.problem}`);
+  return lines.length === 0
+    ? []
+    : [
+        ...lines,
+        'apply compares the markers in the working tree with those at HEAD, so every one must be readable: fix it, and commit the fix where HEAD has the problem; nothing was written',
+      ];
+}
+
+/** The refusal that the root marker's `version` is not the running plx's, at HEAD and in the working tree; none when it is. */
+function versionRefusal(
+  now: readonly MarkerSite[],
+  before: readonly MarkerSite[],
+  plxVersion: string,
+): string | undefined {
+  const [current, committed] = [now, before].map((sites) => sites.find((s) => s.dir === '.')?.config?.version);
+  const root = MARKER_FILE;
+  if (current === undefined)
+    return `the root ${root} names no version, so plx cannot tell which templates the files were rendered with: set \`version: ${plxVersion}\` there (the plx pin in mise.toml names it) and commit it, then run apply again`;
+  if (committed !== current)
+    return `the root ${root} names version ${current} in the working tree and ${committed ?? 'none'} at HEAD: the version is not edited by hand, only \`plx update\` writes it; restore it with git checkout HEAD -- ${root} (or undo that line)`;
+  if (current !== plxVersion)
+    return `the root ${root} names version ${current}, and this plx is ${plxVersion}: apply with the plx that version pins (mise.toml)`;
+  return undefined;
+}
+
 export async function apply(ctx: Context, options: ApplyOptions): Promise<Applied> {
-  const { repo, plxVersion } = options;
+  const { plxVersion } = options;
+  const repo = await topOf(ctx, options.repo);
+  if (repo !== options.repo) ctx.say(`using the top of the repo, ${repo}`);
   const tracked = (await ctx.read('git', ['ls-files', '-z'], { cwd: repo })).split('\0');
   if (!crossedOver(tracked))
     throw new Error(
       `${repo} still tracks a ${ANSWERS_FILE}, so it has not crossed over from copier to the markers: follow ${CROSSOVER_RUNBOOK}`,
     );
+  if (
+    !(await ctx.read('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: repo }).then(
+      () => true,
+      () => false,
+    ))
+  )
+    throw new Error(
+      `${repo} has no commit yet: apply compares the markers in the working tree with HEAD, so commit them first`,
+    );
   const now = await findSites(ctx, repo);
   const before = await findSites(ctx, repo, 'HEAD');
-  const lists = [...now, ...before].some((s) => s.config?.templates !== undefined);
-  const version = now.find((s) => s.dir === '.')?.config?.version;
-  if (lists && version !== plxVersion)
-    throw new Error(
-      version === undefined
-        ? `the root ${MARKER_FILE} names no version, and plx ${plxVersion} cannot tell which one the repo is on`
-        : `the root ${MARKER_FILE} names version ${version}, and this plx is ${plxVersion}: apply with the plx that version pins`,
-    );
+  const problems = problemsOf(now, before);
+  if (problems.length > 0) throw new Error(problems.join('\n'));
+  if ([...now, ...before].some((s) => s.config?.templates !== undefined)) {
+    const refusal = versionRefusal(now, before, plxVersion);
+    if (refusal !== undefined) throw new Error(refusal);
+  }
   const sides: SiteSides[] = [];
   for (const dir of new Set([...now, ...before].map((s) => s.dir))) {
     const [old, next] = [sourceAt(before, dir), sourceAt(now, dir)];
