@@ -162,7 +162,7 @@ export function setMarkerKeys(text: string, keys: Record<string, unknown>): stri
   let written = yaml;
   for (const [key, value] of Object.entries(keys)) {
     if (value === undefined) throw new Error(`marker: no value for \`${key}\`; a key is set, never removed`);
-    written = setKey(written, key, value).replace(/\r?\n/g, eol);
+    written = setKey(written, key, value, eol);
   }
   return text.slice(0, start) + written + text.slice(start + yaml.length);
 }
@@ -170,8 +170,11 @@ export function setMarkerKeys(text: string, keys: Record<string, unknown>): stri
 /** How a written value is serialised: on one line however long, flow lists without padding. */
 const STYLE = { lineWidth: 0, flowCollectionPadding: false } as const;
 
-/** One key set in a frontmatter's YAML (ending in a line break, or empty) by splicing its text. */
-function setKey(yaml: string, key: string, value: unknown): string {
+/**
+ * One key set in a frontmatter's YAML (ending in a line break, or empty) by
+ * splicing its text; a line written ends in `eol`, the page's line break.
+ */
+function setKey(yaml: string, key: string, value: unknown, eol: string): string {
   const doc = parseDocument(yaml);
   if (doc.errors.length > 0) throw new Error(`frontmatter is not YAML: ${doc.errors[0]?.message}`);
   const map = doc.contents;
@@ -179,7 +182,9 @@ function setKey(yaml: string, key: string, value: unknown): string {
   if (map?.flow) throw new Error('frontmatter is a flow mapping (`{…}`); write it as a block mapping');
   const pairs = map?.items ?? [];
   const pair = pairs.find((p) => nameOf(p) === key);
-  return pair ? replaceValue(yaml, doc, pair, key, value) : insertKey(yaml, pairs, key, doc.createNode(value));
+  return pair
+    ? replaceValue(yaml, doc, pair, key, value, eol)
+    : insertKey(yaml, pairs, key, doc.createNode(value), eol);
 }
 
 type Pair = NonNullable<YAMLMap['items'][number]>;
@@ -191,7 +196,7 @@ const nameOf = (pair: Pair): string | undefined => (isScalar(pair.key) ? String(
  * the first key that is an answer or a later reserved key, and above the
  * comment lines directly over that key, which are about it; an answer last.
  */
-function insertKey(yaml: string, pairs: readonly Pair[], key: string, node: Node): string {
+function insertKey(yaml: string, pairs: readonly Pair[], key: string, node: Node, eol: string): string {
   if (isCollection(node)) node.flow = true;
   const rank = RESERVED_KEYS.indexOf(key as (typeof RESERVED_KEYS)[number]);
   const next =
@@ -203,7 +208,7 @@ function insertKey(yaml: string, pairs: readonly Pair[], key: string, node: Node
         });
   const at =
     isNode(next?.key) && next.key.range ? aboveComments(yaml, lineStart(yaml, next.key.range[0])) : yaml.length;
-  return yaml.slice(0, at) + pairText(key, node) + yaml.slice(at);
+  return yaml.slice(0, at) + pairText(key, node, eol) + yaml.slice(at);
 }
 
 /**
@@ -211,7 +216,7 @@ function insertKey(yaml: string, pairs: readonly Pair[], key: string, node: Node
  * text as it is when already so. A block list or mapping replaced by one
  * that has items keeps its key line; every other value goes on one line.
  */
-function replaceValue(yaml: string, doc: Document, pair: Pair, key: string, value: unknown): string {
+function replaceValue(yaml: string, doc: Document, pair: Pair, key: string, value: unknown, eol: string): string {
   const old = pair.value;
   if (!isNode(old) || !old.range || !isNode(pair.key) || !pair.key.range)
     throw new Error(`marker: \`${key}\` has no value plx can replace`);
@@ -228,7 +233,8 @@ function replaceValue(yaml: string, doc: Document, pair: Pair, key: string, valu
     const rest = yaml.slice(lastLineEnd(yaml, to));
     if (isCollection(node) && node.items.length > 0) {
       const column = from - lineStart(yaml, from);
-      const written = pairText(key, node, column > 0 ? { indent: column, indentSeq: true } : { indentSeq: false });
+      const indent = column > 0 ? { indent: column, indentSeq: true } : { indentSeq: false };
+      const written = pairText(key, node, eol, indent);
       return yaml.slice(0, below) + written.slice(written.indexOf('\n') + 1) + rest;
     }
     return onKeyLine(yaml.slice(0, below) + rest, key, colonEnd, colonEnd, oneLine(node, old, key));
@@ -285,11 +291,16 @@ function onKeyLine(yaml: string, key: string, colonEnd: number, rest: number, in
   return `${yaml.slice(0, colonEnd)} ${value}${yaml.slice(end)}`;
 }
 
-/** `key: value` and a line break. */
-function pairText(key: string, node: unknown, options: { indent?: number; indentSeq?: boolean } = {}): string {
+/** `key: value` and a line break, each line ending in `eol`. */
+function pairText(
+  key: string,
+  node: unknown,
+  eol: string,
+  options: { indent?: number; indentSeq?: boolean } = {},
+): string {
   const doc = new Document({ [key]: null });
   doc.set(key, node);
-  return doc.toString({ ...STYLE, ...options });
+  return doc.toString({ ...STYLE, ...options }).replace(/\n/g, eol);
 }
 
 /** The start of the run of comment lines directly above the line at `at`, or `at` itself; a blank line ends the run. */
