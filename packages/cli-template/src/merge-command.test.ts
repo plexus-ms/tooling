@@ -356,3 +356,18 @@ test('a target that is one of the renders, and one render given twice, are error
     assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'one\n');
   });
 });
+
+test('a directory argument that is a symlink is refused as one, in both commands', () => {
+  withDirectories({ 'a.txt': 'one\n' }, { 'a.txt': 'two\n' }, { 'a.txt': 'one\n' }, (s) => {
+    symlinkSync(s.path('target'), s.path('link'));
+    const merge = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('link')]);
+    assert.equal(merge.code, 3);
+    assert.match(JSON.parse(merge.stdout).errors[0].message, /symlink/);
+    const render = plxTemplate(['render', s.path('link'), s.path('old')]);
+    assert.equal(render.code, 3);
+    assert.match(JSON.parse(render.stdout).errors[0].message, /symlink/);
+    const template = plxTemplate(['render', s.path('fresh'), s.path('link')]);
+    assert.equal(template.code, 3);
+    assert.match(JSON.parse(template.stdout).errors[0].message, /symlink/);
+  });
+});
