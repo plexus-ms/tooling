@@ -325,7 +325,7 @@ function fixture(name: string): void {
   const prim = up('tooling');
   for (const c of ['host', 'platform', 'infrastructure', 'ci'])
     put(join(prim, `ansible/${c}/galaxy.yml`), 'version: 0.1.0                # mirrors the Plexus version tag\n');
-  for (const p of ['cli', 'cli-ci', 'lib'])
+  for (const p of ['cli', 'cli-ci', 'cli-template', 'lib'])
     put(join(prim, `packages/${p}/package.json`), `{\n  "name": "@plexus-ms/${p}",\n  "version": "0.1.0"\n}\n`);
   put(
     join(prim, 'package.json'),
@@ -579,7 +579,10 @@ test('dry run previews both phases and the consumers in scratch clones, and chan
     'phase two',
   );
   assert.ok(
-    has(out, '⏳ [dry-run] would wait for @plexus-ms/cli@0.2.0, @plexus-ms/cli-ci@0.2.0, @plexus-ms/lib@0.2.0 on npm'),
+    has(
+      out,
+      '⏳ [dry-run] would wait for @plexus-ms/cli@0.2.0, @plexus-ms/cli-ci@0.2.0, @plexus-ms/cli-template@0.2.0, @plexus-ms/lib@0.2.0 on npm',
+    ),
     'the wait is a step of the preview',
   );
   assert.ok(!fakeLog().some((l) => l.startsWith('npm ')), 'registry not polled');
@@ -672,7 +675,7 @@ test('happy path: tooling first, the npm wait, the rest, and no pull request in 
   // Phase one: tooling's bookkeeping, tag, release.
   const prim = up('tooling');
   assert.match(read(join(prim, 'ansible/host/galaxy.yml')), /^version: 0\.2\.0 /);
-  for (const p of ['cli', 'cli-ci', 'lib'])
+  for (const p of ['cli', 'cli-ci', 'cli-template', 'lib'])
     assert.match(read(join(prim, `packages/${p}/package.json`)), /"version": "0\.2\.0"/, `${p} at the Plexus version`);
   assert.match(read(join(prim, 'package.json')), /"@plexus-ms\/config": "\^0\.0\.1"/, 'the config range left alone');
   assert.match(read(join(prim, '.github/workflows/pipeline.yml')), /ci\.yml@0\.2\.0/);
@@ -701,7 +704,12 @@ test('happy path: tooling first, the npm wait, the rest, and no pull request in 
     log.filter((l) => has(l, 'npm view @plexus-ms/cli@0.2.0')).length >= 2,
     'polled more than once, until the publish',
   );
-  assert.ok(has(out, '✓ @plexus-ms/cli@0.2.0, @plexus-ms/cli-ci@0.2.0, @plexus-ms/lib@0.2.0 on npm'));
+  assert.ok(
+    has(
+      out,
+      '✓ @plexus-ms/cli@0.2.0, @plexus-ms/cli-ci@0.2.0, @plexus-ms/cli-template@0.2.0, @plexus-ms/lib@0.2.0 on npm',
+    ),
+  );
   assert.ok(has(out, '→ phase: tooling\n'), 'phase one narrated');
 
   // Phase two: the templates and the compendium.
@@ -977,7 +985,7 @@ test('a registry that never answers stops the run resumably; the re-run skips wh
   delete process.env.FAKE_NPM_NEVER;
   assert.match(
     first.error ?? '',
-    /@plexus-ms\/cli, @plexus-ms\/cli-ci, @plexus-ms\/lib not on npm at 0\.2\.0 after \d+ min/,
+    /@plexus-ms\/cli, @plexus-ms\/cli-ci, @plexus-ms\/cli-template, @plexus-ms\/lib not on npm at 0\.2\.0 after \d+ min/,
   );
   assert.match(first.error ?? '', /re-run with --to 0\.2\.0/);
   assert.ok(tagged('tooling', '0.2.0') && remoteTagged('tooling', '0.2.0') && released('tooling', '0.2.0'));

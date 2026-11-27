@@ -1,0 +1,373 @@
+// `plx-template merge` as a process: two renders and a directory with local
+// edits, in a scratch directory. The renders are written by hand, with the
+// policies file beside each that `render` writes (render-command.test.ts).
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { test } from 'node:test';
+import { plxTemplate, put, read, type Scratch, scratch } from './testing/run.ts';
+import type { Listing } from './testing/trees.ts';
+
+/** The policies file beside a render, for the paths it holds: all `merge` but those named born-once. */
+function policies(paths: readonly string[], bornOnce: readonly string[] = []): string {
+  const files = Object.fromEntries(
+    paths.map((p) => [p, { template: 'basket', policy: bornOnce.includes(p) ? 'born-once' : 'merge' }]),
+  );
+  return JSON.stringify({ version: 1, files });
+}
+
+/** A scratch directory with the renders `old` and `new` and the directory `target`. */
+function withDirectories(
+  old: Listing,
+  next: Listing,
+  target: Listing,
+  body: (s: Scratch) => void,
+  bornOnce: readonly string[] = [],
+): void {
+  const s = scratch();
+  try {
+    mkdirSync(s.path('old'));
+    mkdirSync(s.path('new'));
+    put(s.path('old'), old);
+    put(s.path('new'), next);
+    mkdirSync(s.path('target'));
+    put(s.path('target'), target);
+    put(s.dir, {
+      'old.plx-template.json': policies(Object.keys(old), bornOnce),
+      'new.plx-template.json': policies(Object.keys(next), bornOnce),
+    });
+    body(s);
+  } finally {
+    s.remove();
+  }
+}
+
+const OLD = {
+  'clean.txt': 'a\nb\nc\n',
+  'conflict.txt': 'x\n',
+  'removed.txt': 'gone\n',
+  'edited-removed.txt': 'gone too\n',
+  'born.md': 'first\n',
+  'bin/tool.sh': '#!/bin/sh\necho 1\n',
+};
+const NEW = {
+  'clean.txt': 'a\nb\nc\nd\n',
+  'conflict.txt': 'y\n',
+  'added.txt': 'new\n',
+  'born.md': 'second\n',
+  'bin/tool.sh': { text: '#!/bin/sh\necho 1\n', mode: 0o755 },
+};
+const TARGET = {
+  'clean.txt': 'A\nb\nc\n',
+  'conflict.txt': 'z\n',
+  'removed.txt': 'gone\n',
+  'edited-removed.txt': 'gone too, edited\n',
+  'born.md': 'mine\n',
+  'bin/tool.sh': '#!/bin/sh\necho 1\n',
+  'mine.txt': "not the template's\n",
+};
+
+test('merge applies what the template changed to the directory, and reports each path', () => {
+  withDirectories(
+    OLD,
+    NEW,
+    TARGET,
+    (s) => {
+      const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+      assert.equal(run.code, 0, run.stderr);
+      assert.deepEqual(JSON.parse(run.stdout), {
+        report: [
+          { path: 'added.txt', outcome: 'added' },
+          { path: 'bin/tool.sh', outcome: 'clean' },
+          { path: 'born.md', outcome: 'kept' },
+          { path: 'clean.txt', outcome: 'clean' },
+          { path: 'conflict.txt', outcome: 'conflicted' },
+          { path: 'edited-removed.txt', outcome: 'conflicted' },
+          { path: 'removed.txt', outcome: 'deleted' },
+        ],
+      });
+      assert.deepEqual(read(s.path('target')), {
+        'added.txt': 'new\n',
+        'bin/tool.sh': { text: '#!/bin/sh\necho 1\n', mode: 0o755 },
+        'born.md': 'mine\n',
+        'clean.txt': 'A\nb\nc\nd\n',
+        'conflict.txt': '<<<<<<< current\nz\n=======\ny\n>>>>>>> new render\n',
+        'edited-removed.txt': 'gone too, edited\n',
+        'mine.txt': "not the template's\n",
+      });
+    },
+    ['born.md'],
+  );
+});
+
+test('a render without its policies file, a malformed one, or a directory that is missing is code 3, every error listed, nothing written', () => {
+  withDirectories(OLD, NEW, TARGET, (s) => {
+    rmSync(s.path('old.plx-template.json'));
+    writeFileSync(s.path('new.plx-template.json'), '{"files": {"clean.txt": {"policy": "sometimes"}}}');
+    const before = read(s.path('target'));
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 3);
+    const { errors } = JSON.parse(run.stdout);
+    assert.deepEqual(
+      errors.map((e: { path: string }) => e.path),
+      [s.path('old.plx-template.json'), s.path('new.plx-template.json')],
+    );
+    assert.match(errors[0].message, /render/);
+    for (const e of errors) assert.ok(run.stderr.includes(e.message), e.message);
+    assert.deepEqual(read(s.path('target')), before);
+
+    writeFileSync(s.path('new.plx-template.json'), policies(Object.keys(NEW)));
+    const missing = plxTemplate(['merge', s.path('no-old'), s.path('new'), s.path('no-target')]);
+    assert.equal(missing.code, 3);
+    assert.deepEqual(
+      JSON.parse(missing.stdout).errors.map((e: { path: string }) => e.path),
+      [s.path('no-old'), s.path('no-target')],
+    );
+  });
+});
+
+/** The permission bits of `path` below the scratch directory. */
+const permissions = (s: Scratch, path: string): number => statSync(s.path(path)).mode & 0o777;
+
+test('merge changes only the executable bits of a file that exists, and never widens its permissions', () => {
+  const old = { 'a.sh': 'echo\n', 'b.sh': 'echo\n', 'c.sh': 'echo\n' };
+  const next = {
+    'a.sh': { text: 'echo\n', mode: 0o755 },
+    'b.sh': { text: 'echo\n', mode: 0o755 },
+    'c.sh': { text: 'echo\n', mode: 0o644 },
+  };
+  withDirectories(old, next, old, (s) => {
+    chmodSync(s.path('target/a.sh'), 0o600);
+    chmodSync(s.path('target/b.sh'), 0o640);
+    chmodSync(s.path('target/c.sh'), 0o755);
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(
+      JSON.parse(run.stdout).report.map((e: { outcome: string }) => e.outcome),
+      ['clean', 'clean'],
+    );
+    assert.equal(permissions(s, 'target/a.sh'), 0o700, 'owner only stays owner only');
+    assert.equal(permissions(s, 'target/b.sh'), 0o750, 'group read becomes group execute, nothing else moves');
+    assert.equal(permissions(s, 'target/c.sh'), 0o755, 'a file the template did not change is not touched');
+  });
+});
+
+test('merge never writes or deletes through a symlink', () => {
+  const old = { link: 'one\n', 'dir/file.txt': 'one\n', 'gone.txt': 'one\n' };
+  const next = { link: 'two\n', 'dir/file.txt': 'two\n', 'new/file.txt': 'two\n' };
+  withDirectories(old, next, {}, (s) => {
+    put(s.dir, { 'outside/target.txt': 'one\n', 'outside/file.txt': 'one\n', 'outside/gone.txt': 'one\n' });
+    symlinkSync(s.path('outside/target.txt'), s.path('target/link'));
+    symlinkSync(s.path('outside'), s.path('target/dir'));
+    symlinkSync(s.path('outside'), s.path('target/new'));
+    symlinkSync(s.path('outside/gone.txt'), s.path('target/gone.txt'));
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(read(s.path('outside')), { 'target.txt': 'one\n', 'file.txt': 'one\n', 'gone.txt': 'one\n' });
+    assert.ok(lstatSync(s.path('target/link')).isSymbolicLink());
+    assert.ok(lstatSync(s.path('target/gone.txt')).isSymbolicLink());
+    for (const e of JSON.parse(run.stdout).report) assert.notEqual(e.outcome, 'clean', e.path);
+  });
+});
+
+test('a deletion removes the directories it leaves empty, up to the target, and no others', () => {
+  const old = { 'a/b/c.txt': 'x\n', 'a/keep.txt': 'x\n', 'd/e/f.txt': 'x\n', 'g/h/i.txt': 'x\n' };
+  const next = { 'a/keep.txt': 'x\n', 'g/h': { text: '', mode: 0o040755 } };
+  withDirectories(old, next, old, (s) => {
+    mkdirSync(s.path('target/empty-before'));
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(Object.keys(read(s.path('target'))).sort(), ['a/keep.txt', 'empty-before/', 'g/h/']);
+  });
+});
+
+test('merge reads only what the renders name: an unreadable directory elsewhere in the target is no matter', () => {
+  withDirectories({ 'a.txt': 'one\n' }, { 'a.txt': 'two\n' }, { 'a.txt': 'one\n' }, (s) => {
+    put(s.path('target'), { 'node_modules/x/y.js': 'big\n', '.git/HEAD': 'ref\n' });
+    chmodSync(s.path('target/node_modules'), 0o000);
+    chmodSync(s.path('target/.git'), 0o000);
+    try {
+      const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+      assert.equal(run.code, 0, run.stderr);
+      assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'two\n');
+    } finally {
+      chmodSync(s.path('target/node_modules'), 0o755);
+      chmodSync(s.path('target/.git'), 0o755);
+    }
+  });
+});
+
+test('merge adds an empty directory of the new render, and a file the user deleted stays deleted', () => {
+  const old = { 'a.txt': 'one\n' };
+  const next = { 'a.txt': 'two\n', 'shelf/empty': { text: '', mode: 0o040755 } };
+  withDirectories(old, next, {}, (s) => {
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(read(s.path('target')), { 'shelf/empty/': '' });
+    assert.deepEqual(JSON.parse(run.stdout).report, [
+      { path: 'a.txt', outcome: 'kept' },
+      { path: 'shelf/empty', outcome: 'added' },
+    ]);
+  });
+});
+
+test('a file of both renders against a directory of the target is a conflict, whether the directory holds a file or nothing', () => {
+  const old = { x: 'one\n', e: 'one\n' };
+  const next = { x: 'two\n', e: 'two\n' };
+  withDirectories(old, next, {}, (s) => {
+    put(s.path('target'), { 'x/inside.txt': 'mine\n' });
+    mkdirSync(s.path('target/e'));
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(JSON.parse(run.stdout).report, [
+      { path: 'e', outcome: 'conflicted' },
+      { path: 'x', outcome: 'conflicted' },
+    ]);
+    assert.deepEqual(read(s.path('target')), { 'x/inside.txt': 'mine\n', 'e/': '' });
+  });
+});
+
+test('a deletion that empties the target leaves the target itself', () => {
+  const old = { 'a/b/only.txt': 'x\n', 'top.txt': 'x\n' };
+  withDirectories(old, {}, old, (s) => {
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(
+      JSON.parse(run.stdout).report.map((e: { outcome: string }) => e.outcome),
+      ['deleted', 'deleted'],
+    );
+    assert.ok(statSync(s.path('target')).isDirectory());
+    assert.deepEqual(read(s.path('target')), {});
+  });
+});
+
+test('a file whose content changes and whose executable bit does not keeps its permissions exactly', () => {
+  const old = { 'a.sh': { text: 'one\n', mode: 0o755 }, 'b.txt': 'one\n' };
+  const next = { 'a.sh': { text: 'two\n', mode: 0o755 }, 'b.txt': 'two\n' };
+  withDirectories(old, next, old, (s) => {
+    chmodSync(s.path('target/a.sh'), 0o744);
+    chmodSync(s.path('target/b.txt'), 0o640);
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 0, run.stderr);
+    assert.equal(readFileSync(s.path('target/a.sh'), 'utf8'), 'two\n');
+    assert.equal(permissions(s, 'target/a.sh'), 0o744, 'not widened to 0o755');
+    assert.equal(permissions(s, 'target/b.txt'), 0o640);
+  });
+});
+
+test('a render directory that holds a pipe is an error in the inputs, code 3, naming the path', () => {
+  withDirectories({ 'a.txt': 'one\n' }, { 'a.txt': 'two\n' }, { 'a.txt': 'one\n' }, (s) => {
+    execFileSync('mkfifo', [s.path('new/pipe')]);
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 3, run.stderr);
+    assert.deepEqual(
+      JSON.parse(run.stdout).errors.map((e: { path: string }) => e.path),
+      [s.path('new/pipe')],
+    );
+    assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'one\n');
+  });
+});
+
+test('a symlink in a render directory is an error in the inputs, code 3, with JSON naming the path, and nothing is written', () => {
+  withDirectories({ 'a.txt': 'one\n' }, { 'a.txt': 'two\n' }, { 'a.txt': 'one\n' }, (s) => {
+    symlinkSync('a.txt', s.path('old/link'));
+    symlinkSync('a.txt', s.path('new/link'));
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 3, run.stderr);
+    assert.deepEqual(
+      JSON.parse(run.stdout).errors.map((e: { path: string }) => e.path),
+      [s.path('old/link'), s.path('new/link')],
+    );
+    assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'one\n');
+  });
+});
+
+test('a failure while applying names the path that failed and says that the paths before it were applied', () => {
+  const old = { 'a.txt': 'one\n', 'b.txt': 'one\n', 'c.txt': 'one\n' };
+  const next = { 'a.txt': 'two\n', 'b.txt': 'two\n', 'c.txt': 'two\n' };
+  withDirectories(old, next, old, (s) => {
+    chmodSync(s.path('target/b.txt'), 0o444);
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 1);
+    assert.equal(run.stdout, '');
+    assert.match(run.stderr, /b\.txt/);
+    assert.match(run.stderr, /already applied/);
+    assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'two\n');
+    assert.equal(readFileSync(s.path('target/c.txt'), 'utf8'), 'one\n');
+  });
+});
+
+/** The `files` of a policies file for `paths`, all `merge`. */
+const merging = (paths: readonly string[]) =>
+  Object.fromEntries(paths.map((p) => [p, { template: 'basket', policy: 'merge' }]));
+
+test('a policies file that does not describe its render exactly is an input error, code 3, and nothing is deleted', () => {
+  const old = { 'born.md': 'first\n', 'a.txt': 'one\n' };
+  withDirectories(old, {}, old, (s) => {
+    const before = read(s.path('target'));
+    const wrong: [string, string, RegExp][] = [
+      ['an empty map', '{"version": 1, "files": {}}', /born\.md/],
+      ['a list', '{"version": 1, "files": []}', /files/],
+      ['null', 'null', /version/],
+      ['no version', JSON.stringify({ files: merging(Object.keys(old)) }), /version/],
+      ['a later version', JSON.stringify({ version: 2, files: merging(Object.keys(old)) }), /version 2/],
+      [
+        'a path the render lacks',
+        JSON.stringify({ version: 1, files: merging([...Object.keys(old), 'z.txt']) }),
+        /z\.txt/,
+      ],
+      [
+        'an unknown policy',
+        JSON.stringify({ version: 1, files: { ...merging(['a.txt']), 'born.md': { policy: 'sometimes' } } }),
+        /born\.md/,
+      ],
+      ['a bare policy', JSON.stringify({ version: 1, files: { 'a.txt': 'merge', 'born.md': 'merge' } }), /a\.txt/],
+    ];
+    for (const [what, text, about] of wrong) {
+      writeFileSync(s.path('old.plx-template.json'), text);
+      const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+      assert.equal(run.code, 3, `${what}: ${run.stderr}`);
+      const [error] = JSON.parse(run.stdout).errors;
+      assert.equal(error.path, s.path('old.plx-template.json'), what);
+      assert.match(error.message, about, what);
+      assert.deepEqual(read(s.path('target')), before, what);
+    }
+  });
+});
+
+test('a target that is one of the renders, and one render given twice, are errors in the inputs, code 3', () => {
+  withDirectories({ 'a.txt': 'one\n' }, { 'a.txt': 'two\n' }, { 'a.txt': 'one\n' }, (s) => {
+    const same = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('new')]);
+    assert.equal(same.code, 3, same.stderr);
+    assert.deepEqual(
+      JSON.parse(same.stdout).errors.map((e: { path: string }) => e.path),
+      [s.path('new')],
+    );
+    const old = plxTemplate(['merge', s.path('old'), s.path('new'), `${s.path('old')}/`]);
+    assert.equal(old.code, 3, old.stderr);
+    const twice = plxTemplate(['merge', s.path('old'), s.path('old'), s.path('target')]);
+    assert.equal(twice.code, 3, twice.stderr);
+    assert.deepEqual(
+      JSON.parse(twice.stdout).errors.map((e: { path: string }) => e.path),
+      [s.path('old')],
+    );
+    assert.equal(readFileSync(s.path('new/a.txt'), 'utf8'), 'two\n');
+    assert.equal(readFileSync(s.path('old/a.txt'), 'utf8'), 'one\n');
+    assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'one\n');
+  });
+});
+
+test('a directory argument that is a symlink is refused as one, in both commands', () => {
+  withDirectories({ 'a.txt': 'one\n' }, { 'a.txt': 'two\n' }, { 'a.txt': 'one\n' }, (s) => {
+    symlinkSync(s.path('target'), s.path('link'));
+    const merge = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('link')]);
+    assert.equal(merge.code, 3);
+    assert.match(JSON.parse(merge.stdout).errors[0].message, /symlink/);
+    const render = plxTemplate(['render', s.path('link'), s.path('old')]);
+    assert.equal(render.code, 3);
+    assert.match(JSON.parse(render.stdout).errors[0].message, /symlink/);
+    const template = plxTemplate(['render', s.path('fresh'), s.path('link')]);
+    assert.equal(template.code, 3);
+    assert.match(JSON.parse(template.stdout).errors[0].message, /symlink/);
+  });
+});
