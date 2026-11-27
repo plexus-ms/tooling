@@ -3,6 +3,7 @@
 // holds no decision of its own.
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { text as readAll } from 'node:stream/consumers';
 import { parseArgs } from 'node:util';
 import { applyChanges, readTree, requireEmpty } from './directory.ts';
 import { InputError, messageOf } from './errors.ts';
@@ -99,7 +100,7 @@ async function readAnswers(source: string | undefined): Promise<Answers> {
   if (source === undefined) return {};
   let text: string;
   try {
-    text = await readFile(source, 'utf8');
+    text = source === '-' ? await readAll(process.stdin) : await readFile(source, 'utf8');
   } catch (error) {
     throw new InputError(`cannot read the answers: ${messageOf(error)}`, source);
   }
