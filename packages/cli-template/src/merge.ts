@@ -15,11 +15,12 @@ const EMPTY: Entry = { bytes: new Uint8Array(), mode: REGULAR | 0o644 };
 
 /** The current tree with the changes from the old render to the new one merged in, and a report per touched path. */
 export async function merge(input: MergeInput, mergeFile: MergeFile): Promise<MergeResult> {
-  const { old, new: next, current } = input;
+  const { old, new: next, current, files } = input;
   const tree = new Map(current);
   const report: MergeEntry[] = [];
   for (const path of [...new Set([...old.keys(), ...next.keys()])].sort()) {
-    const outcome = await mergePath(path, old.get(path), next.get(path), tree, mergeFile);
+    const bornOnce = files.new.get(path)?.policy === 'born-once';
+    const outcome = await mergePath(path, old.get(path), next.get(path), bornOnce, tree, mergeFile);
     if (outcome !== undefined) report.push({ path, outcome });
   }
   return { tree, report };
@@ -30,16 +31,17 @@ async function mergePath(
   path: string,
   o: Entry | undefined,
   n: Entry | undefined,
+  bornOnce: boolean,
   tree: Map<string, Entry>,
   mergeFile: MergeFile,
 ): Promise<Outcome | undefined> {
   const c = tree.get(path);
-  if (same(o, n)) return undefined;
-  if (c === undefined) {
-    if (n === undefined || o !== undefined) return 'kept';
+  if (c === undefined && n !== undefined && (bornOnce || o === undefined)) {
     tree.set(path, n);
     return 'added';
   }
+  if (same(o, n)) return undefined;
+  if (bornOnce || c === undefined) return 'kept';
   if (n === undefined) {
     if (!same(c, o)) return 'conflicted';
     tree.delete(path);
