@@ -6,30 +6,47 @@
 // written here (only `plx update` moves it).
 //
 // The procedure.
-//   1. Refuse, before reading anything else, when git tracks a
-//      `.copier-answers.yml` at any depth (the repo has not crossed over from
-//      copier, and its markers are not yet its configuration), pointing to the
-//      crossover runbook; and when the root marker names no version or one
-//      that is not the running plx's, since the templates this plx bundles
-//      are the ones that version was rendered with.
+//   1. Find the repo's top from the directory given. Refuse, before anything
+//      else, a directory in no repo, a repo without a commit (there is no HEAD
+//      to compare with), and a repo in which git tracks a `.copier-answers.yml`
+//      at any depth (it has not crossed over from copier, and its markers are
+//      not yet its configuration), pointing to the crossover runbook.
 //   2. Read the markers twice (sites.ts): old as `HEAD` has them, new as the
 //      working tree has them. A site is a directory with a tracked marker, so
-//      a new marker needs `git add` before it is a site.
-//   3. Take each site whose templates or answers differ between the two, a
-//      nested site's answers being the root's plus its own, so that a root
-//      answer changed reaches every nested site. A site that listed no
-//      templates on either side renders nothing, and one that did not change
-//      is not rendered at all, so it cannot fail.
-//   4. Plan (sync.ts): render the old side and the new side of each site with
-//      the templates below the root of templates, merge them into the site's
-//      directory by the engine's rules, and work out the defaults of
-//      questions that became applicable. Nothing is written yet, and every
-//      render error of every site is reported together.
-//   5. Confirm, then perform: write the merges and splice the defaults into
+//      a new marker needs `git add` before it is a site. Refuse when any
+//      marker on either side has a problem (it cannot be read, a nested one
+//      carries `version`), naming the marker and the side: a marker that is
+//      not read cannot stand for a site with no templates.
+//   3. When any marker lists templates, refuse unless the root marker's
+//      `version` is the running plx's both at HEAD and in the working tree:
+//      the templates this plx bundles are the ones that version was rendered
+//      with, and only `plx update` writes the version.
+//   4. Take each site whose own marker changed (its `templates` or its own
+//      answers, or it is new or gone), and each nested site that lists a
+//      template which owns or reads a root answer that changed. A site that
+//      listed no templates on either side renders nothing, and one not taken
+//      is not rendered at all, so it cannot fail or write back a file its
+//      user deleted.
+//   5. Plan (sync.ts): render the old side and the new side of each taken
+//      site with the templates below the root of templates, the root first,
+//      its resolved answers given to the nested sites; merge them into the
+//      site's directory by the engine's rules; and work out the defaults of
+//      questions that became applicable. Nothing is written yet, every render
+//      error of every site is reported together, and a default that would
+//      stand in two markers is refused.
+//   6. Confirm, then perform: write the merges and splice the defaults into
 //      the markers. A conflict stays in the file; a file the template dropped
 //      and the user had edited is kept; both are reported `conflicted`, and
-//      the caller exits non-zero.
+//      the caller exits non-zero. A dry run, or a no, writes nothing.
 // Birth commands of a template are never run: they belong to creating a repo.
+//
+// A second apply without a commit in between compares with the same HEAD and
+// finds the files as the first left them: the bytes stay as they are, a
+// conflicted file is reported `conflicted` again and the exit is non-zero
+// again, and the other outcomes differ, since the files now hold what the
+// first run wrote (a file it `added` is `clean`, one it `deleted` or a
+// born-once file is `kept`). The defaults are in the marker by then, so none
+// is written twice.
 //
 // The one gap: an answer edited and committed without `apply` is not noticed
 // afterwards. HEAD then already holds the new marker, so apply sees no
