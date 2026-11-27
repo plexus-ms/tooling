@@ -1,22 +1,33 @@
 // A template's files rendered: which file lands where, and with what bytes.
+// Ported from copier v9.19.1 (MIT, see LICENSE.copier): `_render_path` and
+// `_render_parts` for the paths, and the render-or-copy part of `_render_file`
+// of copier/_main.py for the content and the mode.
 //
 // Every part of a path is Jinja and is rendered by itself, so that a part can
 // be a condition: a part that renders empty skips the file, or the whole
-// subtree for a directory. A file whose name ends in `.jinja` is rendered with
-// the context and lands without the suffix; any other is copied as bytes, unless
-// a `.jinja` file of the template stands beside it, by its own name or by the
-// name it renders to: the template wins and the file is not written. The
-// mode is reduced to 0o644 or, where its owner may execute it, 0o755, as
-// types.ts states. A `.jinja` file that is not valid text
-// is copied as bytes, under the name without the suffix. A file whose Jinja
-// fails is an error naming its path in the template.
+// subtree for a directory. A directory part is rendered once per source
+// directory, not once per file below it, which is why an error in it is
+// reported once. A rendered part may hold slashes and lands nested; `.` and
+// `..` are resolved, and a path that leaves the output, is absolute, holds a
+// NUL character, or is a file at the output's root is an error.
 //
-// A symlink in the template is an error, and so are two sources
-// that render to one path.
+// A file whose name ends in `.jinja` is rendered with the context and lands
+// without the suffix; any other is copied as bytes, unless a `.jinja` file of
+// the template stands beside it, by its own name or by the name it renders to:
+// the template wins and the file is not written, as in copier. A `.jinja` file
+// that is not valid text is copied as bytes, under the name without the
+// suffix; its content is otherwise carried as it is, a byte order mark
+// included. The mode is reduced to 0o644 or, where its owner may execute it,
+// 0o755, as types.ts states. A file whose Jinja fails is an error naming its
+// path in the template.
 //
-// A directory that renders to a path and holds nothing in the result, because
-// the template holds nothing there or because every file below it was skipped,
-// lands as an empty directory, as copier creates it.
+// Every path is written once: two sources that render to one path are an
+// error naming both, as is a file with another path rendered below it. Two
+// directories at one path are one directory. A directory that renders to a
+// path and holds nothing in the result, because the template holds nothing
+// there or because every file below it was skipped, lands as an empty
+// directory, as copier creates it; only the innermost of nested ones is kept.
+// A symlink anywhere in a template is rejected where the template is read.
 import { messageOf } from './errors.ts';
 import { type Context, renderString } from './jinja.ts';
 import { FILES, type Template } from './manifest.ts';
@@ -48,6 +59,9 @@ function textOf(bytes: Uint8Array): string | undefined {
   }
 }
 
+/** The last part of a source path. */
+const nameOf = (source: string): string => source.slice(source.lastIndexOf('/') + 1);
+
 /** The directory of a source path: everything before its last `/`, or `''`. */
 const parentOf = (source: string): string => source.slice(0, Math.max(0, source.lastIndexOf('/')));
 
@@ -63,60 +77,54 @@ function join(parent: string, part: string): string | undefined {
   return parts.join('/');
 }
 
+/**
+ * Where a source name lands. A path of `''` is the output's root. Both
+ * `skipped` (an empty part, or a parent that is skipped or failed) and
+ * `failed` (an error was recorded) leave nothing to write.
+ */
+type Location = { readonly path: string } | 'skipped' | 'failed';
+
 /** The entries `template` renders in `context`, by rendered path; its problems go to `errors`. */
 export function renderFiles(template: Template, context: Context, errors: RenderError[]): Map<string, Rendered> {
+  const fail = (source: string, message: string): 'failed' => {
+    errors.push({ template: template.manifest.name, path: `${FILES}${source}`, message });
+    return 'failed';
+  };
+
   const rendered = new Map<string, Rendered>();
   const put = (path: string, value: Rendered): void => {
     const first = rendered.get(path);
-    if (first === undefined) {
-      rendered.set(path, value);
-      return;
-    }
-    errors.push({
-      template: template.manifest.name,
-      path: `${FILES}${value.source}`,
-      message: `${first.source} and ${value.source} both render to ${path}`,
-    });
+    if (first === undefined) rendered.set(path, value);
+    else fail(value.source, `${first.source} and ${value.source} both render to ${path}`);
   };
 
-  // The rendered path of each source directory, or undefined where it is skipped.
-  const directories = new Map<string, string | undefined>([['', '']]);
-  const directoryOf = (source: string): string | undefined => {
-    if (directories.has(source)) return directories.get(source);
-    const path = place(directoryOf(parentOf(source)), source.slice(source.lastIndexOf('/') + 1), source, true);
-    directories.set(source, path);
-    return path;
-  };
-
-  // The path a source name renders to below its rendered directory, or
-  // undefined where it is skipped or leaves the output, the latter an error.
-  const place = (
-    parent: string | undefined,
-    name: string,
-    source: string,
-    isDirectory: boolean,
-  ): string | undefined => {
-    let part = '';
+  // Where the source name `name`, which is the last part of `source`, lands below the rendered directory `parent`.
+  const locate = (parent: Location, name: string, source: string): Location => {
+    if (typeof parent === 'string') return 'skipped';
+    let part: string;
     try {
-      if (parent !== undefined) part = renderString(name, context);
+      part = renderString(name, context);
     } catch (error) {
-      errors.push({
-        template: template.manifest.name,
-        path: `${FILES}${source}`,
-        message: `error rendering template path ${source}: ${messageOf(error)}`,
-      });
+      return fail(source, `error rendering template path ${source}: ${messageOf(error)}`);
     }
-    if (part === '') return undefined;
-    const path = join(parent ?? '', part);
-    if (path === undefined || (path === '' && !isDirectory)) {
-      const shown = parent === '' ? part : `${parent}/${part}`;
-      errors.push({
-        template: template.manifest.name,
-        path: `${FILES}${source}`,
-        message: `"${shown}" is forbidden: it is not inside the output`,
-      });
+    if (part === '') return 'skipped';
+    const path = join(parent.path, part);
+    if (path === undefined) {
+      const shown = parent.path === '' ? part : `${parent.path}/${part}`;
+      return fail(source, `"${shown}" is forbidden: it is not inside the output`);
     }
-    return path || undefined;
+    return { path };
+  };
+
+  // Each source directory is located once, with the root as `''`.
+  const directories = new Map<string, Location>([['', { path: '' }]]);
+  const directoryOf = (source: string): Location => {
+    const known = directories.get(source);
+    if (known !== undefined) return known;
+    const located = locate(directoryOf(parentOf(source)), nameOf(source), source);
+    const here = typeof located !== 'string' && located.path === '' ? 'skipped' : located;
+    directories.set(source, here);
+    return here;
   };
 
   for (const [source, entry] of template.files) {
@@ -125,18 +133,20 @@ export function renderFiles(template: Template, context: Context, errors: Render
       continue;
     }
     if ((entry.mode & MODE_TYPE) === SYMLINK) {
-      errors.push({
-        template: template.manifest.name,
-        path: `${FILES}${source}`,
-        message: `${source} is a symlink, and a template may not hold one`,
-      });
+      fail(source, `${source} is a symlink, and a template may not hold one`);
       continue;
     }
     const isTemplate = source.endsWith(SUFFIX);
-    const name = source.slice(source.lastIndexOf('/') + 1, isTemplate ? -SUFFIX.length : undefined);
-    const path = place(directoryOf(parentOf(source)), name, source, false);
-    if (path === undefined) continue;
-    // As copier does, a template beside a file wins, by either name.
+    const name = isTemplate ? nameOf(source).slice(0, -SUFFIX.length) : nameOf(source);
+    const located = locate(directoryOf(parentOf(source)), name, source);
+    if (typeof located === 'string') continue;
+    const path = located.path;
+    if (path === '') {
+      fail(source, `${source} renders to the output's root, which is no file`);
+      continue;
+    }
+    // As copier does, a `.jinja` file beside a file wins. A rendered path is
+    // looked up among the source paths, as copier does.
     if (!isTemplate && (template.files.has(source + SUFFIX) || template.files.has(path + SUFFIX))) continue;
     const text = isTemplate ? textOf(entry.bytes) : undefined;
     if (text === undefined) {
@@ -144,17 +154,23 @@ export function renderFiles(template: Template, context: Context, errors: Render
       continue;
     }
     try {
-      const bytes = encoder.encode(renderString(text, context));
-      put(path, { entry: written(bytes, entry.mode), source });
+      put(path, { entry: written(encoder.encode(renderString(text, context)), entry.mode), source });
     } catch (error) {
-      errors.push({ template: template.manifest.name, path: `${FILES}${source}`, message: messageOf(error) });
+      fail(source, messageOf(error));
     }
   }
 
-  const paths = [...directories.values(), ...rendered.keys()];
-  for (const [source, path] of directories) {
-    if (path === undefined || path === '' || paths.some((other) => other?.startsWith(`${path}/`))) continue;
-    put(path, { entry: EMPTY_DIRECTORY, source });
+  // A directory is kept where nothing is written below it.
+  const places = [...directories.values()].flatMap((located) => (typeof located === 'string' ? [] : [located.path]));
+  const taken = [...rendered.keys(), ...places];
+  for (const [source, located] of directories) {
+    if (
+      typeof located === 'string' ||
+      located.path === '' ||
+      taken.some((other) => other.startsWith(`${located.path}/`))
+    )
+      continue;
+    put(located.path, { entry: EMPTY_DIRECTORY, source });
   }
   return rendered;
 }
