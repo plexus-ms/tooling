@@ -39,7 +39,7 @@
 // before, or the render still holds as an empty directory (`keep`), stays.
 import { chmod, lstat, mkdir, readdir, readFile, readlink, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { InputError } from './errors.ts';
+import { InputError, messageOf } from './errors.ts';
 import { DIRECTORY, type Entry, isExecutable, MODE_TYPE, REGULAR, SYMLINK, type Tree } from './types.ts';
 
 const EMPTY = new Uint8Array();
@@ -165,8 +165,12 @@ export async function applyChanges(
 ): Promise<void> {
   await mkdir(root, { recursive: true });
   for (const [path, entry] of changes) {
-    if (entry === undefined) await remove(root, path, keep);
-    else await write(root, path, entry);
+    try {
+      if (entry === undefined) await remove(root, path, keep);
+      else await write(root, path, entry);
+    } catch (error) {
+      throw new Error(`${path}: ${messageOf(error)}; the paths before it in path order were already applied`);
+    }
   }
 }
 
