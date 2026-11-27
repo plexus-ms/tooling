@@ -513,19 +513,13 @@ test('merge never deletes a directory, and reports none it does not add', async 
 
 test('merge keeps a path that is a file on one side and a directory on another as the current tree has it, and reports it as conflicted', async () => {
   const result = await run({
-    old: { apple: 'red\n', fig: 'purple\n' },
-    new: { apple: directory(), fig: directory(), pear: 'green\n', plum: directory(), 'cherry/stone.txt': 'hard\n' },
+    old: { apple: 'red\n' },
+    new: { apple: directory(), pear: 'green\n', plum: directory(), 'cherry/stone.txt': 'hard\n' },
     current: { apple: 'red\n', 'pear/seed.txt': 'small\n', plum: 'blue\n', cherry: 'dark red\n' },
   });
   assert.deepEqual(result, {
     tree: { apple: 'red\n', 'pear/seed.txt': 'small\n', plum: 'blue\n', cherry: 'dark red\n' },
-    report: [
-      'apple: conflicted',
-      'cherry/stone.txt: conflicted',
-      'fig: conflicted',
-      'pear: conflicted',
-      'plum: conflicted',
-    ],
+    report: ['apple: conflicted', 'cherry/stone.txt: conflicted', 'pear: conflicted', 'plum: conflicted'],
     calls: [],
   });
 });
@@ -542,4 +536,12 @@ test('merge never touches a born-once path that the current tree holds as a dire
     report: ['apple: kept', 'pear: kept', 'plum: kept'],
     calls: [],
   });
+});
+
+test('merge leaves absent a path the user deleted where the template turns a file into a directory or back, and reports it as kept', async () => {
+  const result = await run({
+    old: { fig: 'purple\n', date: directory() },
+    new: { fig: directory(), date: 'brown\n' },
+  });
+  assert.deepEqual(result, { tree: {}, report: ['date: kept', 'fig: kept'], calls: [] });
 });
