@@ -58,6 +58,18 @@ const TEMPLATES = {
     manifest: ['name: lidroot', 'questions:', '  lid_color:', '    default: blue', ''].join('\n'),
     files: { 'lidroot.txt.jinja': '{{ lid_color }}\n' },
   },
+  lida: {
+    manifest: ['name: lida', 'questions:', '  lid_color:', '    default: blue', ''].join('\n'),
+    files: { 'a.txt': 'a\n' },
+  },
+  lidb: {
+    manifest: ['name: lidb', 'questions:', '  lid_color:', '    default: red', ''].join('\n'),
+    files: { 'b.txt': 'b\n' },
+  },
+  lidreader: {
+    manifest: ['name: lidreader', 'reads:', '  lid_color:', ''].join('\n'),
+    files: { 'lr.txt.jinja': 'lid is {{ lid_color }}\n' },
+  },
   need: {
     manifest: ['name: need', 'questions:', '  token:', '    type: str', ''].join('\n'),
     files: { 'token.txt.jinja': '{{ token }}\n' },
@@ -588,4 +600,105 @@ test('apply gives the nested site of the old side the root defaults of the old s
     applied.sites.map((s) => [s.dir, s.report]),
     [['apps/x', []]],
   );
+});
+
+test('apply takes a nested site that reads a root answer that changes only through its default', async () => {
+  const { repo, templates } = fixture({
+    'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [lida]\n`),
+    'a.txt': 'a\n',
+    'apps/x/PLEXUS.md': marker('templates: [lidreader]\n'),
+    'apps/x/lr.txt': 'lid is blue\n',
+  });
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [lidb]\n`) });
+  await apply(quietContext(), options(repo, templates));
+  assert.equal(text(repo, 'apps/x/lr.txt'), 'lid is red\n');
+});
+
+test('apply refuses a root default for a key that a nested site declares, taken or not', async () => {
+  const { repo, templates } = fixture({
+    'apps/x/PLEXUS.md': marker('templates: [lid]\n'),
+    'apps/x/lid.txt': 'a blue lid\n',
+    'apps/x/born-lid.txt': 'lid born\n',
+  });
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket, lidroot]\nfruit: apple\n`) });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), /lid_color.*apps\/x\/PLEXUS\.md/s);
+  assert.equal(existsSync(join(repo, 'lidroot.txt')), false);
+});
+
+test('apply reports a no as declined', async () => {
+  const { repo, templates } = fixture();
+  write(repo, { 'PLEXUS.md': pears });
+  const no = loggingContext({}, false);
+  const applied = await apply(no.ctx, options(repo, templates));
+  assert.equal(applied.declined, true);
+  assert.equal(applied.applied, false);
+});
+
+test('apply gives each nested site the root answers, not those of a nested site rendered before it', async () => {
+  const { repo, templates } = fixture({ 'apps/a/PLEXUS.md': EMPTY, 'apps/b/PLEXUS.md': EMPTY });
+  write(repo, { 'apps/a/PLEXUS.md': marker('templates: [lid]\n'), 'apps/b/PLEXUS.md': marker('templates: [lid]\n') });
+  await apply(quietContext(), options(repo, templates));
+  assert.equal(text(repo, 'apps/a/PLEXUS.md'), marker('templates: [lid]\nlid_color: blue\n'));
+  assert.equal(text(repo, 'apps/b/PLEXUS.md'), marker('templates: [lid]\nlid_color: blue\n'));
+});
+
+test("a nested site's own answer wins over a default of the root's, which nobody wrote", async () => {
+  const { repo, templates } = fixture({
+    'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [lidroot]\n`),
+    'lidroot.txt': 'blue\n',
+    'apps/x/PLEXUS.md': marker('templates: [lid]\nlid_color: green\n'),
+    'apps/x/lid.txt': 'a green lid\n',
+    'apps/x/born-lid.txt': 'lid born\n',
+  });
+  write(repo, { 'apps/x/PLEXUS.md': marker('templates: [lid]\nlid_color: red\n') });
+  await apply(quietContext(), options(repo, templates));
+  assert.equal(text(repo, 'apps/x/lid.txt'), 'a red lid\n');
+});
+
+test('apply takes a nested site whose template cannot be loaded when a root answer changes, so that the error shows', async () => {
+  const { repo, templates } = fixture({ 'apps/x/PLEXUS.md': marker('templates: [ghost]\n') });
+  write(repo, { 'PLEXUS.md': pears });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), /apps\/x: no template ghost/);
+});
+
+test('apply reads the bundled templates to tell whether a nested site reads a changed root answer', async () => {
+  const repo = repoWith(scratch.fresh('repo'), {
+    'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: []\n`),
+    'apps/x/PLEXUS.md': marker('templates: [app-nextjs]\n'),
+  });
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: []\nzzz: 1\n`) });
+  assert.deepEqual((await apply(quietContext(), { repo, plxVersion: VERSION })).sites, []);
+});
+
+test('apply says it works from the top of the repo when it was given a directory inside it, and not otherwise', async () => {
+  const { repo, templates } = fixture({ 'apps/crate/PLEXUS.md': CRATE });
+  write(repo, { 'PLEXUS.md': pears });
+  const inside = loggingContext();
+  await apply(inside.ctx, options(join(repo, 'apps/crate'), templates));
+  assert.match(inside.log(), new RegExp(`^using the top of the repo, ${repo}$`, 'm'));
+  const top = loggingContext();
+  await apply(top.ctx, options(repo, templates));
+  assert.doesNotMatch(top.log(), /using the top/);
+});
+
+test('planSync renders the root first, whatever order the sites are given in', async () => {
+  const { repo, templates } = fixture({ 'apps/x/PLEXUS.md': EMPTY });
+  const none = { templates: [], answers: {} };
+  const plan = await planSync(quietContext(), repo, templates, [
+    { dir: 'apps/x', old: none, new: { templates: ['app'], answers: {} } },
+    { dir: '.', old: none, new: { templates: ['owner'], answers: {} } },
+  ]);
+  assert.deepEqual(
+    plan.sites.map((s) => s.dir),
+    ['.', 'apps/x'],
+  );
+});
+
+test('apply says a doubled key is at HEAD when only HEAD has it', async () => {
+  const { repo, templates } = fixture({
+    'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: apple\nlid_color: red\n`),
+    'apps/x/PLEXUS.md': marker('templates: [lid]\nlid_color: green\n'),
+  });
+  write(repo, { 'apps/x/PLEXUS.md': marker('templates: [lid]\n') });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), /lid_color.*the markers at HEAD/s);
 });

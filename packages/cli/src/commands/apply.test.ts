@@ -155,7 +155,7 @@ test('nothing to apply is said, and exits 0', async () => {
   put(repo, { 'PLEXUS.md': marker('apple') });
   const { stderr, code } = await plx('-y', 'apply', '--templates', templates, repo);
   assert.equal(code, 0);
-  assert.match(stderr, /✓ nothing to apply: no marker differs from HEAD\n$/);
+  assert.match(stderr, /✓ nothing to apply: no site that lists templates changed since HEAD\n$/);
 });
 
 test('an answer of no writes nothing and fails: the outcome says so', () => {
