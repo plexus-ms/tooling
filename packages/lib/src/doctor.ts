@@ -28,10 +28,9 @@
 // `templates`), no nested marker carries `version`, no key is answered in two
 // markers, and a marker that cannot be read as configuration is named. They
 // bind a repo that has crossed over from copier: one in which git tracks no
-// `.copier-answers.yml` at any depth (`crossedOver`; § 7 of the template
-// composition decisions: the crossover deletes every answers file). Until then
-// they are skipped, so that this can ship before the cutover. A repo that
-// lists no `templates` needs no `version`.
+// `.copier-answers.yml` at any depth (`crossedOver`), as the crossover deletes
+// every answers file. Until then they are skipped, so that this can ship
+// before the cutover. A repo that lists no `templates` needs no `version`.
 //
 //   plx doctor          # this repo and its apps, from anywhere inside it
 //   plx doctor ~/dev    # every Plexus repo beneath, and its apps
@@ -57,7 +56,7 @@ import { REQUIREMENT_NAME } from './lints.ts';
 import { type Declaration, MARKER_FILE, reasonGiven } from './marker.ts';
 import { type Directory, hasMarker, isOperations, type Kind } from './model.ts';
 import { appsOf, directoryAt, overview } from './overview.ts';
-import { type MarkerSite, siteAnswers } from './sites.ts';
+import { findSites, type MarkerSite, siteAnswers } from './sites.ts';
 import { bundledIndex } from './standardIndex.ts';
 
 export type Profile = 'stateless' | 'stateful';
@@ -586,6 +585,8 @@ async function readRepo(ctx: Context, dir: Directory, path: string, kind: RepoFa
     tracked,
     ...(conflicted?.length ? { conflicted } : {}),
     apps: [],
+    ...(dir.pin ? { pin: dir.pin } : {}),
+    ...(tracked === undefined ? {} : { sites: await findSites(ctx, dir.path) }),
   };
 }
 
