@@ -26,7 +26,7 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   const read = readAll(templates, errors);
   const owners = ownersOf(read, errors);
   const resolved = new Map<Template, Resolved>();
-  for (const template of resolutionOrder(read, owners)) {
+  for (const template of resolutionOrder(read, owners, errors)) {
     const scope = scopeOf(readsOf(template, owners, resolved, given, errors));
     resolved.set(template, { scope, resolution: resolveAnswers(template.manifest, given, scope, errors) });
   }
@@ -78,17 +78,60 @@ interface Resolved {
   readonly resolution: Resolution;
 }
 
-/** The templates in the order they resolve: each after the owners of the answers it reads, else in the order given. */
-function resolutionOrder(read: readonly Template[], owners: ReadonlyMap<string, Template>): Template[] {
-  const ownersOfReads = (template: Template): Template[] =>
-    template.manifest.reads.flatMap(({ name }) => owners.get(name) ?? []);
+/**
+ * The templates in the order they resolve: each after the owners of the answers
+ * it reads, else in the order given. Templates whose reads form a cycle are an
+ * error naming them, and are left out with every template that reads from them.
+ */
+function resolutionOrder(
+  read: readonly Template[],
+  owners: ReadonlyMap<string, Template>,
+  errors: RenderError[],
+): Template[] {
+  /** The reads of `template` that another template owns, each with its owner. */
+  const edges = (template: Template) =>
+    template.manifest.reads.flatMap(({ name }) => {
+      const owner = owners.get(name);
+      return owner === undefined ? [] : [{ name, owner }];
+    });
   const order: Template[] = [];
   const pending = [...read];
   for (;;) {
-    const next = pending.findIndex((template) => ownersOfReads(template).every((owner) => order.includes(owner)));
-    if (next === -1) return [...order, ...pending];
+    const next = pending.findIndex((template) => edges(template).every(({ owner }) => order.includes(owner)));
+    if (next === -1) break;
     order.push(...pending.splice(next, 1));
   }
+  // Each pending template reads from another pending one. Following those
+  // reads from each leads into a cycle, which is reported the first time a
+  // walk meets it.
+  const walked = new Set<Template>();
+  for (const start of pending) {
+    const walk: Template[] = [];
+    let at: Template | undefined = start;
+    while (at !== undefined && !walked.has(at)) {
+      walked.add(at);
+      walk.push(at);
+      at = edges(at).find(({ owner }) => pending.includes(owner))?.owner;
+    }
+    if (at === undefined || !walk.includes(at)) continue;
+    const cycle = walk.slice(walk.indexOf(at));
+    const first = cycle.reduce((a, b) => (read.indexOf(b) < read.indexOf(a) ? b : a));
+    const ordered = [...cycle.slice(cycle.indexOf(first)), ...cycle.slice(0, cycle.indexOf(first))];
+    const names = ordered.map(({ manifest }) => manifest.name);
+    const steps = ordered.map((template, i) => {
+      const owner = ordered[(i + 1) % ordered.length];
+      const name = edges(template).find((edge) => edge.owner === owner)?.name;
+      return `${template.manifest.name} reads ${name} from ${owner?.manifest.name}`;
+    });
+    const listed = `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+    errors.push({
+      template: names[0],
+      other: names[1],
+      path: MANIFEST,
+      message: `the reads of ${listed} form a cycle: ${steps.join(', ')}`,
+    });
+  }
+  return order;
 }
 
 /** The template that declares each question; a question two templates declare is an error naming both. */
