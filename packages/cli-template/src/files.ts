@@ -136,6 +136,10 @@ export function renderFiles(template: Template, context: Context, errors: Render
       continue;
     }
     const isTemplate = source.endsWith(SUFFIX);
+    if (source === SUFFIX || source.endsWith(`/${SUFFIX}`)) {
+      fail(source, `${source} has no name besides the ${SUFFIX} suffix`);
+      continue;
+    }
     const name = isTemplate ? nameOf(source).slice(0, -SUFFIX.length) : nameOf(source);
     const located = locate(directoryOf(parentOf(source)), name, source);
     if (typeof located === 'string') continue;
