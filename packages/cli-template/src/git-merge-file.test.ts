@@ -53,10 +53,11 @@ test('gitMergeFile leaves a conflict in the file between its labels, current fir
 
 // Ported from tests/test_updatediff.py, test_update_with_new_file_in_template_and_project.
 test('gitMergeFile merges against an empty old side, and keeps what both sides share outside the conflict', async () => {
-  const current = 'tests:\n    stage: test\n    script:\n        - ./test.sh\n\npages:\n    stage: deploy\n';
+  const current =
+    'tests:\n    stage: test\n    script:\n        - ./test.sh\n\npages:\n    stage: deploy\n    script:\n        - ./deploy.sh\n';
   const next = 'tests:\n    stage: test\n    script:\n        - ./test.sh --slow\n';
   assert.deepEqual(await mergeTexts('', next, current), {
-    text: 'tests:\n    stage: test\n    script:\n<<<<<<< current\n        - ./test.sh\n\npages:\n    stage: deploy\n=======\n        - ./test.sh --slow\n>>>>>>> new render\n',
+    text: 'tests:\n    stage: test\n    script:\n<<<<<<< current\n        - ./test.sh\n\npages:\n    stage: deploy\n    script:\n        - ./deploy.sh\n=======\n        - ./test.sh --slow\n>>>>>>> new render\n',
     conflicted: true,
   });
 });

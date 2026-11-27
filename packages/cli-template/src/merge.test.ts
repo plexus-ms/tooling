@@ -257,9 +257,21 @@ test('merge keeps the user’s edits to a file the template renames, as a deleti
 });
 
 // Ported from tests/test_updatediff.py, test_update_deleted_path: the user
-// deleted a file the template changes; names as copier's parameters have them.
+// deleted a file the template changes, with every name of copier's parameters.
 test('merge leaves absent a path the user deleted, even where the template changed or dropped it, and reports it as kept', async () => {
-  const names = ['normal_file', 'unicode_âñ', 'file with whitespace', ' leading_whitespace', '!special', 'back\\slash'];
+  const names = [
+    'normal_file',
+    'unicode_âñ',
+    'file with whitespace',
+    ' leading_whitespace',
+    'trailing_whitespace ',
+    '   multi_whitespace   ',
+    '\tother_whitespace\t\\t',
+    '\x07\f\n\t\vcontrol\x07\f\n\t\vcharacters\v\t\n\f\x07',
+    'back\\slash',
+    '!special',
+    'dont_wildmatch*',
+  ];
   const result = await run({
     old: { ...Object.fromEntries(names.map((name) => [name, 'foo'])), 'pear.txt': 'green\n' },
     new: Object.fromEntries(names.map((name) => [name, 'bar'])),
@@ -272,9 +284,21 @@ test('merge leaves absent a path the user deleted, even where the template chang
 });
 
 // Ported from tests/test_updatediff.py, test_skip_update_deleted: a born-once
-// file the user deleted is written again, names as copier's parameters have them.
+// file the user deleted is written again, with every name of copier's parameters.
 test('merge writes a born-once path the current tree lacks, changed or not, and reports it as added', async () => {
-  const names = ['skip_normal_file', 'skip file with whitespace', ' skip_leading_whitespace', '!skip_special'];
+  const names = [
+    'skip_normal_file',
+    'skip_unicode_âñ',
+    'skip file with whitespace',
+    ' skip_leading_whitespace',
+    'skip_trailing_whitespace ',
+    '   skip_multi_whitespace   ',
+    '\tskip_other_whitespace\t\\t',
+    '\x07\f\n\t\vskip_control\x07\f\n\t\vcharacters\v\t\n\f\x07',
+    'skip_back\\slash',
+    '!skip_special',
+    'sk\\ip_with_backslash_in_skip_pattern',
+  ];
   const result = await run({
     old: { ...Object.fromEntries(names.map((name) => [name, '1'])), 'apple.txt': 'red\n' },
     new: { ...Object.fromEntries(names.map((name) => [name, '1'])), 'apple.txt': 'green\n' },
