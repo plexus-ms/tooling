@@ -26,3 +26,15 @@ test('render gives each path its template and its policy, born-once where the ma
     ]),
   );
 });
+
+test('render returns the birth commands in the manifest order, as argument vectors it does not run', () => {
+  const result = render(
+    [template('name: basket\nbirth:\n  - [weave, --tight]\n  - [fill, basket, "with fruit"]\n', { 'a.txt': 'a' })],
+    {},
+  );
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.birth, [
+    { template: 'basket', command: ['weave', '--tight'] },
+    { template: 'basket', command: ['fill', 'basket', 'with fruit'] },
+  ]);
+});
