@@ -9,7 +9,15 @@ export async function merge(input: MergeInput, _mergeFile: MergeFile): Promise<M
   const tree = new Map(current);
   const report: MergeEntry[] = [];
   for (const path of [...new Set([...old.keys(), ...next.keys()])].sort()) {
-    if (same(old.get(path), next.get(path))) continue;
+    const o = old.get(path);
+    const n = next.get(path);
+    const c = tree.get(path);
+    if (same(o, n)) continue;
+    if (n !== undefined && same(c, o)) {
+      tree.set(path, n);
+      report.push({ path, outcome: 'clean' });
+      continue;
+    }
     throw new Error(`merge: ${path} changed, which is not merged yet`);
   }
   return { tree, report };
