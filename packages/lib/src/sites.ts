@@ -13,7 +13,11 @@
 // A marker that cannot be read, or that carries `version` below the root,
 // where it does not belong, gives its site a problem instead of a
 // configuration, so that a check can name every such site at once.
-import { join } from 'node:path';
+//
+// A site's answers, which a render is given, are the root marker's answers
+// and the site's own: a nested site shares the root's answers and adds its
+// own, and a key answered in both markers is an error, never an override.
+import { dirname, join } from 'node:path';
 import type { Context } from './context.ts';
 import { MARKER_FILE, type MarkerConfig, parseMarkerConfig } from './marker.ts';
 import { isMissing } from './overview.ts';
@@ -47,7 +51,7 @@ export async function findSites(ctx: Context, repo: string, ref?: string): Promi
           throw error;
         });
     if (text === undefined) continue;
-    const dir = path === MARKER_FILE ? '.' : path.slice(0, -MARKER_FILE.length - 1);
+    const dir = dirname(path);
     sites.push({ dir, ...configOf(text, dir) });
   }
   return sites.sort((a, b) => Number(b.dir === '.') - Number(a.dir === '.') || (a.dir < b.dir ? -1 : 1));
@@ -62,4 +66,29 @@ function configOf(text: string, dir: string): Pick<MarkerSite, 'config' | 'probl
   } catch (error) {
     return { problem: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * The answers of the site at `dir` among `sites`: the root marker's and the
+ * site's own; the root's alone for the root. Throws when either marker has a
+ * problem, when both answer a key, or when no site is at `dir`.
+ */
+export function siteAnswers(sites: readonly MarkerSite[], dir: string): Record<string, unknown> {
+  const own = answersAt(sites, dir);
+  if (!own) throw new Error(`no marker in ${dir}`);
+  const root = dir === '.' ? undefined : answersAt(sites, '.');
+  if (!root) return { ...own };
+  const both = Object.keys(own).filter((key) => Object.hasOwn(root, key));
+  if (both.length > 0)
+    throw new Error(
+      `${join(dir, MARKER_FILE)}: ${both.map((key) => `\`${key}\``).join(', ')} are answered in the root marker already`,
+    );
+  return { ...root, ...own };
+}
+
+/** The answers of the marker in `dir`, or undefined when there is none; throws on its problem. */
+function answersAt(sites: readonly MarkerSite[], dir: string): Record<string, unknown> | undefined {
+  const site = sites.find((s) => s.dir === dir);
+  if (site?.problem !== undefined) throw new Error(`${join(dir, MARKER_FILE)}: ${site.problem}`);
+  return site?.config?.answers;
 }
