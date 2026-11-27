@@ -2,6 +2,7 @@
 // template's changes applied (types.ts states the shapes).
 import {
   type Entry,
+  type MergedFile,
   type MergeEntry,
   type MergeFile,
   type MergeInput,
@@ -51,14 +52,25 @@ async function mergePath(
     return 'deleted';
   }
   const base = o ?? EMPTY;
-  if (same(c, base) || same(c, n)) {
-    tree.set(path, n);
-    return 'clean';
-  }
-  if ([base, n, c].some(({ bytes }) => binary(bytes))) return 'conflicted';
-  const merged = await mergeFile({ path, old: base.bytes, new: n.bytes, current: c.bytes });
-  tree.set(path, { bytes: merged.bytes, mode: n.mode });
+  const merged = await mergeContent(path, base.bytes, n.bytes, c.bytes, mergeFile);
+  if (merged === undefined) return 'conflicted';
+  const bit = executable(base) === executable(n) ? executable(c) : executable(n);
+  tree.set(path, { bytes: merged.bytes, mode: REGULAR | (bit ? 0o755 : 0o644) });
   return merged.conflicted ? 'conflicted' : 'clean';
+}
+
+/** The three sides' content merged; nothing where all three differ and one is binary. */
+async function mergeContent(
+  path: string,
+  old: Uint8Array,
+  next: Uint8Array,
+  current: Uint8Array,
+  mergeFile: MergeFile,
+): Promise<MergedFile | undefined> {
+  if (equal(current, old) || equal(current, next)) return { bytes: next, conflicted: false };
+  if (equal(next, old)) return { bytes: current, conflicted: false };
+  if ([old, next, current].some(binary)) return undefined;
+  return mergeFile({ path, old, new: next, current });
 }
 
 /** Whether git takes `bytes` as binary: a NUL byte among the first 8000, as its `buffer_is_binary` decides. */
