@@ -306,3 +306,16 @@ test("an empty directory is written by one template: two leaving it empty is an 
   assert.deepEqual(listing(below.tree), { 'attic/old.txt': 'o' });
   assert.deepEqual(new Map(below.files), new Map([['attic/old.txt', { template: 'shelf', policy: 'merge' }]]));
 });
+
+test('a template whose question fails renders no files, so that the files using its answer add no second error', () => {
+  const result = render(
+    [
+      template(basket, { '{{ fruit }}.txt.jinja': '{{ fruit }}', 'kind.txt.jinja': 'a {{ fruit }}' }),
+      template(shelf, { 'shelf.txt.jinja': '{{ book }}' }),
+    ],
+    { book: 'atlas' },
+  );
+  assert.deepEqual(where(result.errors), [
+    { template: 'basket', other: undefined, path: undefined, question: 'fruit' },
+  ]);
+});
