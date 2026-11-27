@@ -151,3 +151,16 @@ test('merge reports as clean a path the user already changed as the template did
   });
   assert.deepEqual(result, { tree: { 'apple.txt': 'green\n' }, report: ['apple.txt: clean'], calls: [] });
 });
+
+test('merge writes a path the new render adds and the current tree lacks, and reports it as added', async () => {
+  const result = await run({
+    old: { 'apple.txt': 'red\n' },
+    new: { 'apple.txt': 'red\n', 'basket/pear.txt': 'green\n' },
+    current: { 'apple.txt': 'red\n' },
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.txt': 'red\n', 'basket/pear.txt': 'green\n' },
+    report: ['basket/pear.txt: added'],
+    calls: [],
+  });
+});
