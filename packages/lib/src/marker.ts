@@ -205,14 +205,30 @@ function replaceValue(yaml: string, doc: Document, pair: Pair, key: string, valu
 
   const inline = new Document(node).toString(STYLE).replace(/\n$/, '');
   const [from, to] = old.range;
-  // A key written without a value (`key:`) has an empty range right after the colon: a space goes between.
-  if (!block && !inline.includes('\n')) return yaml.slice(0, from) + (from === to ? ' ' : '') + inline + yaml.slice(to);
+  const colonEnd = yaml.indexOf(':', pair.key.range[1]) + 1;
+  // A key written without a value (`key:`) has an empty range where the value would start: before a
+  // comment, or at the line's end. The value goes right after the colon instead.
+  if (from === to && !inline.includes('\n')) return afterColon(yaml, key, colonEnd, from, inline);
+  if (!block && !inline.includes('\n')) return yaml.slice(0, from) + inline + yaml.slice(to);
 
   // A block value is written with its key, through the end of the old value's last line, indented as the
   // old one was: the column of its first item (`- a`) or key, and a sequence at column 0 not indented at all.
   const column = from - lineStart(yaml, from);
   const indent = block && column > 0 ? { indent: column, indentSeq: true } : { indentSeq: column > 0 };
   return yaml.slice(0, pair.key.range[0]) + pairText(key, node, indent) + yaml.slice(lastLineEnd(yaml, to));
+}
+
+/**
+ * The key line with `inline` as its value, one space after the colon that
+ * ends at `colonEnd`; what the line holds from `rest` on may only be a
+ * comment, which stays after the value.
+ */
+function afterColon(yaml: string, key: string, colonEnd: number, rest: number, inline: string): string {
+  const end = lineBreakAt(yaml, rest);
+  const comment = yaml.slice(rest, end).trim();
+  if (comment !== '' && !comment.startsWith('#'))
+    throw new Error(`marker: \`${key}\` holds \`${comment}\` on its line besides a value; set it by hand`);
+  return yaml.slice(0, colonEnd) + ` ${inline}${comment === '' ? '' : ` ${comment}`}` + yaml.slice(end);
 }
 
 /** `key: value` and a line break. */
@@ -224,6 +240,13 @@ function pairText(key: string, node: unknown, options: { indent?: number; indent
 
 /** Where the line holding `at` starts. */
 const lineStart = (text: string, at: number): number => text.lastIndexOf('\n', at - 1) + 1;
+
+/** Where the line holding `at` ends, before its line break (`\n` or `\r\n`), or the end of the text. */
+function lineBreakAt(text: string, at: number): number {
+  const lineBreak = text.indexOf('\n', at);
+  if (lineBreak === -1) return text.length;
+  return text[lineBreak - 1] === '\r' ? lineBreak - 1 : lineBreak;
+}
 
 /**
  * Where the line that a range ending at `to` ends on is over, past its line
