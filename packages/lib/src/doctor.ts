@@ -218,6 +218,10 @@ function loopbackPort(compose: Compose): string[] {
     if (!isLoopback(port))
       problems.push(`the ${APP_SERVICE} service publishes \`${renderPort(port)}\`, not ${LOOPBACK_FORM}`);
   for (const [name, service] of Object.entries(compose.services)) {
+    if (service.network_mode === 'host')
+      problems.push(
+        `service \`${name}\` runs in the host's network (\`network_mode: host\`), reachable beyond loopback`,
+      );
     if (name === APP_SERVICE) continue;
     for (const port of portsOf(service)) {
       if (hostIpOf(port) !== '127.0.0.1')

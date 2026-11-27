@@ -343,6 +343,33 @@ test('PLX-App/LoopbackPort: a data service publishes only on 127.0.0.1 and fixes
   );
 });
 
+test("PLX-App/LoopbackPort: no service runs in the host's network; another container's is fine", () => {
+  const text = `services:
+  web:
+    image: \${PLEXUS_DEPLOYMENT_IMAGE}
+    env_file: [{ path: .env, required: false }, { path: .env.secret, required: false }]
+    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT:?set}:3000"]
+    network_mode: host
+    labels: { plexus.tenant: t }
+    healthcheck: { test: [CMD, "true"] }
+  agent:
+    image: agent
+    labels: { plexus.tenant: t }
+    network_mode: host
+  sidecar:
+    image: sidecar
+    labels: { plexus.tenant: t }
+    network_mode: service:web
+`;
+  assert.deepEqual(
+    named(appOf(text), 'PLX-App/LoopbackPort').map((f) => f.problem),
+    [
+      "service `web` runs in the host's network (`network_mode: host`), reachable beyond loopback",
+      "service `agent` runs in the host's network (`network_mode: host`), reachable beyond loopback",
+    ],
+  );
+});
+
 test('PLX-App/LoopbackPort takes only the :? spelling of the variable, over TCP; without it an unset port is random, a default fixes one', () => {
   const ported = (ports: unknown[]) =>
     named(app('stateless', { compose: { services: { web: web({ ports }) } } }), 'PLX-App/LoopbackPort').length;
