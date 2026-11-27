@@ -137,3 +137,20 @@ test('a given answer that no template of the render owns satisfies a declared re
   assert.deepEqual(result.answers, { label: 'pear x3' });
   assert.deepEqual(listing(result.tree), { 'pear/label.txt': 'pear x3, 4 next time' });
 });
+
+const orchard =
+  'name: orchard\nquestions:\n  trees:\n    type: int\n  rows:\n    type: int\n    default: "{{ trees // 2 }}"\n';
+const crate = 'name: crate\nreads:\n  trees:\n  rows:\n';
+
+test('a declared read that another template of the render owns sees the answer that template resolved', () => {
+  const result = render(
+    [
+      template(orchard, { 'orchard.txt.jinja': '{{ trees }}' }),
+      template(crate, { 'crate.txt.jinja': '{{ trees + rows }}' }),
+    ],
+    { trees: '4' },
+  );
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, { trees: 4, rows: 2 });
+  assert.deepEqual(listing(result.tree), { 'orchard.txt': '4', 'crate.txt': '6' });
+});
