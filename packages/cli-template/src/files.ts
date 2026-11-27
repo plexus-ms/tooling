@@ -159,17 +159,17 @@ export function renderFiles(template: Template, context: Context, errors: Render
     }
   }
 
-  // A directory is kept where nothing is written below it.
-  const places = [...directories.values()].flatMap((located) => (typeof located === 'string' ? [] : [located.path]));
-  const taken = [...rendered.keys(), ...places];
+  // A directory is kept where nothing is written below it. Directories at one
+  // path are one, and the first source names it.
+  const candidates = new Map<string, string>();
   for (const [source, located] of directories) {
-    if (
-      typeof located === 'string' ||
-      located.path === '' ||
-      taken.some((other) => other.startsWith(`${located.path}/`))
-    )
-      continue;
-    put(located.path, { entry: EMPTY_DIRECTORY, source });
+    if (typeof located !== 'string' && located.path !== '' && !candidates.has(located.path)) {
+      candidates.set(located.path, source);
+    }
+  }
+  const taken = [...rendered.keys(), ...candidates.keys()];
+  for (const [path, source] of candidates) {
+    if (!taken.some((other) => other.startsWith(`${path}/`))) put(path, { entry: EMPTY_DIRECTORY, source });
   }
   return rendered;
 }
