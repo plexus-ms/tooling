@@ -273,3 +273,89 @@ test('planSync takes an old side that arrived rendered, with its policies', asyn
   assert.equal(existsSync(join(repo, 'old.txt')), false);
   assert.equal(text(repo, 'mine.txt'), 'mine\n');
 });
+
+test('apply refuses a marker it cannot read, naming it and the side, and deletes nothing', async () => {
+  const { repo, templates } = fixture({ 'apps/crate/PLEXUS.md': CRATE, 'apps/crate/crate.txt': 'a crate of apples\n' });
+  write(repo, { 'apps/crate/PLEXUS.md': marker('templates: [crate\n') });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), (error: Error) => {
+    assert.match(error.message, /apps\/crate\/PLEXUS\.md/);
+    assert.match(error.message, /working tree/);
+    return true;
+  });
+  assert.equal(text(repo, 'apps/crate/crate.txt'), 'a crate of apples\n');
+});
+
+test('apply refuses a marker at HEAD it cannot read, even when the working tree has fixed it, and says to commit the fix', async () => {
+  const { repo, templates } = fixture({ 'apps/crate/PLEXUS.md': marker('templates: [crate\n') });
+  write(repo, { 'apps/crate/PLEXUS.md': CRATE });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), (error: Error) => {
+    assert.match(error.message, /apps\/crate\/PLEXUS\.md at HEAD/);
+    assert.match(error.message, /commit/);
+    return true;
+  });
+  assert.equal(existsSync(join(repo, 'apps/crate/crate.txt')), false);
+});
+
+test('apply refuses a nested marker that carries version', async () => {
+  const { repo, templates } = fixture({ 'apps/crate/PLEXUS.md': CRATE });
+  write(repo, { 'apps/crate/PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [crate]\n`) });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), /apps\/crate\/PLEXUS\.md.*version/s);
+});
+
+test('apply reports an unreadable root marker as that, not as a missing version', async () => {
+  const { repo, templates } = fixture();
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket\nfruit: pear\n`) });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), (error: Error) => {
+    assert.match(error.message, /PLEXUS\.md/);
+    assert.doesNotMatch(error.message, /names no version/);
+    return true;
+  });
+});
+
+test('apply says what to do when the root marker names no version', async () => {
+  const { repo, templates } = fixture();
+  write(repo, { 'PLEXUS.md': marker('templates: [basket]\nfruit: pear\n') });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), /set `version: 0\.131\.0`/);
+});
+
+test('apply refuses a version edited by hand, even to the running plx, and says only plx update writes it', async () => {
+  const templates = templatesAt(scratch.fresh('templates'), TEMPLATES);
+  const repo = repoWith(scratch.fresh('repo'), {
+    'PLEXUS.md': marker('version: 0.130.0\ntemplates: [basket]\nfruit: apple\n'),
+    'list.txt': '3 apples\nfresh\nsweet\n',
+  });
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: pear\n`) });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), (error: Error) => {
+    assert.match(error.message, /0\.130\.0/);
+    assert.match(error.message, /only `plx update` writes it/);
+    return true;
+  });
+  assert.equal(text(repo, 'list.txt'), '3 apples\nfresh\nsweet\n');
+});
+
+test('apply finds the repo from a subdirectory instead of taking a nested marker for the root', async () => {
+  const { repo, templates } = fixture({ 'apps/crate/PLEXUS.md': CRATE, 'apps/crate/crate.txt': 'a crate of apples\n' });
+  write(repo, { 'PLEXUS.md': pears });
+  const applied = await apply(quietContext(), options(join(repo, 'apps/crate'), templates));
+  assert.deepEqual(
+    applied.sites.map((s) => s.dir),
+    ['.', 'apps/crate'],
+  );
+  assert.equal(text(repo, 'list.txt'), '3 pears\nfresh\nsweet\n');
+});
+
+test('apply says a directory that is no repo is none, and a repo without a commit has nothing to compare with', async () => {
+  const { templates } = fixture();
+  const plain = scratch.fresh('plain');
+  write(plain, { 'a.txt': 'a' });
+  await assert.rejects(apply(quietContext(), options(plain, templates)), /not inside a git repository/);
+  const empty = scratch.fresh('empty');
+  write(empty, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: apple\n`) });
+  git(empty, 'init', '-q', '-b', 'main');
+  git(empty, 'add', '-A');
+  await assert.rejects(apply(quietContext(), options(empty, templates)), (error: Error) => {
+    assert.match(error.message, /no commit/);
+    assert.doesNotMatch(error.message, /exited with/);
+    return true;
+  });
+});
