@@ -63,6 +63,7 @@ test('render writes the tree beside the policies, and prints the result as JSON'
       errors: [],
     });
     assert.deepEqual(JSON.parse(read(s.dir)['out.plx-template.json'] as string), {
+      version: 1,
       files: JSON.parse(run.stdout).files,
     });
   });

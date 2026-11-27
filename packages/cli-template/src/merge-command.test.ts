@@ -13,7 +13,7 @@ function policies(paths: readonly string[], bornOnce: readonly string[] = []): s
   const files = Object.fromEntries(
     paths.map((p) => [p, { template: 'basket', policy: bornOnce.includes(p) ? 'born-once' : 'merge' }]),
   );
-  return JSON.stringify({ files });
+  return JSON.stringify({ version: 1, files });
 }
 
 /** A scratch directory with the renders `old` and `new` and the directory `target`. */
@@ -294,5 +294,43 @@ test('a failure while applying names the path that failed and says that the path
     assert.match(run.stderr, /already applied/);
     assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'two\n');
     assert.equal(readFileSync(s.path('target/c.txt'), 'utf8'), 'one\n');
+  });
+});
+
+/** The `files` of a policies file for `paths`, all `merge`. */
+const merging = (paths: readonly string[]) =>
+  Object.fromEntries(paths.map((p) => [p, { template: 'basket', policy: 'merge' }]));
+
+test('a policies file that does not describe its render exactly is an input error, code 3, and nothing is deleted', () => {
+  const old = { 'born.md': 'first\n', 'a.txt': 'one\n' };
+  withDirectories(old, {}, old, (s) => {
+    const before = read(s.path('target'));
+    const wrong: [string, string, RegExp][] = [
+      ['an empty map', '{"version": 1, "files": {}}', /born\.md/],
+      ['a list', '{"version": 1, "files": []}', /files/],
+      ['null', 'null', /version/],
+      ['no version', JSON.stringify({ files: merging(Object.keys(old)) }), /version/],
+      ['a later version', JSON.stringify({ version: 2, files: merging(Object.keys(old)) }), /version 2/],
+      [
+        'a path the render lacks',
+        JSON.stringify({ version: 1, files: merging([...Object.keys(old), 'z.txt']) }),
+        /z\.txt/,
+      ],
+      [
+        'an unknown policy',
+        JSON.stringify({ version: 1, files: { ...merging(['a.txt']), 'born.md': { policy: 'sometimes' } } }),
+        /born\.md/,
+      ],
+      ['a bare policy', JSON.stringify({ version: 1, files: { 'a.txt': 'merge', 'born.md': 'merge' } }), /a\.txt/],
+    ];
+    for (const [what, text, about] of wrong) {
+      writeFileSync(s.path('old.plx-template.json'), text);
+      const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+      assert.equal(run.code, 3, `${what}: ${run.stderr}`);
+      const [error] = JSON.parse(run.stdout).errors;
+      assert.equal(error.path, s.path('old.plx-template.json'), what);
+      assert.match(error.message, about, what);
+      assert.deepEqual(read(s.path('target')), before, what);
+    }
   });
 });
