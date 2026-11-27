@@ -380,3 +380,24 @@ test('a read of a question its owner skips without a default takes the read defa
   ]);
   assert.equal(required.errors[0]?.message, 'box reads honey, which pantry owns and skips without a default');
 });
+
+test('a read that nothing supplies adds no error when a template of the render failed to read, and the reader renders no files', () => {
+  const box = 'name: box\nreads:\n  trees:\n';
+  const broken = render(
+    [
+      template('name: orchard\nquestions:\n  trees:\n    type: tree\n'),
+      template(box, { 'box.txt.jinja': '{{ trees }}' }),
+    ],
+    {},
+  );
+  assert.deepEqual(where(broken.errors), [
+    { template: 'orchard', other: undefined, path: 'template.yml', question: 'trees' },
+  ]);
+  const twice = render(
+    [template('name: orchard\n'), template(orchard), template(box, { 'box.txt.jinja': '{{ trees }}' })],
+    {},
+  );
+  assert.deepEqual(where(twice.errors), [
+    { template: 'orchard', other: 'orchard', path: 'template.yml', question: undefined },
+  ]);
+});
