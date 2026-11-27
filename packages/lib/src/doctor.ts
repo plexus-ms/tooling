@@ -35,6 +35,14 @@
 // that cannot be read as a file is a finding of its repo, not a failed run.
 // A repo that lists no `templates` needs no `version`.
 //
+// Given the templates this plx bundles (`RepoFacts.templates`), the same
+// guard adds the checks of the markers against them (siteTemplates.ts): every
+// name in `templates` is bundled, every key is reserved or a question or read
+// of a listed template, and every answer is valid for its question. Where no
+// templates are given, those three are skipped. Reading the bundled templates
+// from disk into the facts is the one join still open: `readRepo` does not
+// fill them yet, so `plx doctor` itself runs none of the three.
+//
 //   plx doctor          # this repo and its apps, from anywhere inside it
 //   plx doctor ~/dev    # every Plexus repo beneath, and its apps
 import { realpath } from 'node:fs/promises';
