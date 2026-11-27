@@ -181,6 +181,9 @@ function setKey(yaml: string, key: string, value: unknown, eol: string): string 
   const map = doc.contents;
   if (map !== null && !isMap(map)) throw new Error('frontmatter is not a mapping');
   if (map?.flow) throw new Error('frontmatter is a flow mapping (`{…}`); write it as a block mapping');
+  // A line after `...` would be a YAML document of its own.
+  if (/^\.\.\.(?:[ \t]|\r?$)/m.test(yaml))
+    throw new Error('frontmatter ends its YAML document early with `...`; remove that line');
   const pairs = map?.items ?? [];
   const pair = pairs.find((p) => nameOf(p) === key);
   return pair
@@ -221,8 +224,6 @@ function replaceValue(yaml: string, doc: Document, pair: Pair, key: string, valu
   const old = pair.value;
   if (!isNode(old) || !old.range || !isNode(pair.key) || !pair.key.range)
     throw new Error(`marker: \`${key}\` has no value plx can replace`);
-  refuseShared(doc, old, key);
-  if (isDeepStrictEqual(old.toJSON(), value)) return yaml;
   const [from, to] = old.range;
   // The key starts its line, and its colon follows it there: not an explicit key (`? a` above `: value`).
   const [keyStart, keyEnd] = pair.key.range;
@@ -230,6 +231,13 @@ function replaceValue(yaml: string, doc: Document, pair: Pair, key: string, valu
   if (colon === undefined || yaml.slice(lineStart(yaml, keyStart), keyStart).trim() !== '')
     throw new Error(`marker: \`${key}\` is not written as \`${key}: value\` on a line of its own; set it by hand`);
   const colonEnd = keyEnd + colon.length;
+  refuseShared(doc, old, key);
+  // A tag stands before the value's range and would stay, typing the new value as the old one.
+  if (old.tag !== undefined) {
+    const tag = /!\S*/.exec(yaml.slice(colonEnd, from))?.[0] ?? old.tag;
+    throw new Error(`marker: \`${key}\` carries the tag \`${tag}\`; set it by hand`);
+  }
+  if (isDeepStrictEqual(old.toJSON(), value)) return yaml;
   const node = doc.createNode(value);
 
   if (isCollection(old) && !old.flow) {
@@ -298,7 +306,8 @@ function oneLine(node: Node, old: Node, key: string): string {
   });
   if (isScalar(node) && isScalar(old) && typeof node.value === 'string' && typeof old.value === 'string')
     if (!node.value.includes('\n') && ONE_LINE_STRINGS.includes(old.type ?? '')) node.type = old.type;
-  const text = new Document(node).toString(STYLE).replace(/\n$/, '');
+  // Rendered as the value of a stand-in key, not as a document of its own, where `---` is no plain string.
+  const text = pairText('k', node, '\n').replace(/^k: |\n$/g, '');
   if (text.includes('\n')) throw new Error(`marker: the value for \`${key}\` does not fit on one line`);
   return text;
 }
