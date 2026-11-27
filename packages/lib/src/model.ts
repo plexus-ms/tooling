@@ -3,7 +3,7 @@
 // marker file is. What a directory *is* (an app, the operations repo, a repo)
 // is derived from where it sits and what it carries, never stored.
 import type { Answers } from './copier.ts';
-import { type Declaration, MARKER_FILE } from './marker.ts';
+import { type Declaration, MARKER_FILE, type MarkerConfig } from './marker.ts';
 import { templateOf } from './templates.ts';
 
 export interface Directory {
@@ -15,6 +15,8 @@ export interface Directory {
   template?: TemplateFacet;
   copier?: Answers;
   declaration?: Declaration;
+  /** The marker as configuration (`version`, `templates`, answers); absent when it cannot be read as such, which `findSites` (sites.ts) reports. */
+  config?: MarkerConfig;
   /** The `plx` pin of the directory's `mise.toml`: the Plexus version a repo is on (§ 1.5 PLX). */
   pin?: string;
   /** Marker files that could not be read; shown, never fatal. */
@@ -62,6 +64,9 @@ export interface Unit {
 /** The template the operations repo is rendered from (§ 1.6 PLX). */
 const OPERATIONS_TEMPLATE = 'template-repo-operations';
 
+/** The same template as a marker's `templates` names it: the repo's name without `template-`. */
+const OPERATIONS_TEMPLATE_NAME = 'repo-operations';
+
 /** Whether the directory carries a marker, readable or not. */
 export const hasMarker = (dir: Directory): boolean =>
   Boolean(dir.declaration || dir.problems?.some((p) => p.startsWith(MARKER_FILE)));
@@ -80,10 +85,12 @@ export const holdsApp = (entries: readonly { name: string }[]): boolean =>
 
 /**
  * The operations repo is the one rendered from the operations template: its
- * root answers file names it, under its current or an earlier name.
+ * root answers file names it, under its current or an earlier name, or, once
+ * the repo has crossed over from copier, its root marker's `templates` does.
  */
 export const isOperations = (dir: Directory): boolean =>
-  dir.copier?.src !== undefined && templateOf(dir.copier.src, [OPERATIONS_TEMPLATE]) !== undefined;
+  (dir.copier?.src !== undefined && templateOf(dir.copier.src, [OPERATIONS_TEMPLATE]) !== undefined) ||
+  dir.config?.templates?.includes(OPERATIONS_TEMPLATE_NAME) === true;
 
 /**
  * Every unit of a scanned tree, in tree order, as overview labels them. What

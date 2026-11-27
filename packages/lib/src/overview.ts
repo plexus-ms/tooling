@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE, parseAnswers, TEMPLATE_FILES } from './copier.ts';
 import type { DirEntry } from './io.ts';
-import { MARKER_FILE, parseMarker } from './marker.ts';
+import { MARKER_FILE, parseMarker, parseMarkerConfig } from './marker.ts';
 import {
   APPS_DIR,
   type Directory,
@@ -271,6 +271,10 @@ async function facetsOf(
   if (files.has(MARKER_FILE)) {
     await facet(ctx, dir, MARKER_FILE, (text) => {
       dir.declaration = parseMarker(text);
+      // A marker that does not read as configuration is reported by findSites; here it only has no config.
+      try {
+        dir.config = parseMarkerConfig(text);
+      } catch {}
     });
   }
   if (files.has(MISE_FILE)) {
