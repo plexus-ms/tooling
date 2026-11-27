@@ -53,7 +53,7 @@ const web = (over: Mapping = {}): Mapping => ({
     { path: '.env', required: false },
     { path: '.env.secret', required: false },
   ],
-  ports: ['127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000'],
+  ports: ['127.0.0.1:${PLEXUS_LOOPBACK_PORT:?set}:3000'],
   labels: tenant,
   healthcheck: { test: ['CMD', 'true'] },
   ...over,
@@ -146,7 +146,9 @@ const FAILING: Record<string, { unit: (deviations?: string[]) => Facts; problem:
         {
           compose: {
             services: {
-              web: web({ ports: ['127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000', '127.0.0.1:${PLEXUS_LOOPBACK_PORT}:9229'] }),
+              web: web({
+                ports: ['127.0.0.1:${PLEXUS_LOOPBACK_PORT:?set}:3000', '127.0.0.1:${PLEXUS_LOOPBACK_PORT:?set}:9229'],
+              }),
             },
           },
         },
@@ -300,7 +302,7 @@ test('the compose checks read either spelling compose accepts', () => {
     image: \${PLEXUS_DEPLOYMENT_IMAGE}
     env_file: [{ path: ./.env }, { path: .env.secret, required: "false" }]
     ports:
-      - { target: 3000, host_ip: 127.0.0.1, published: "\${PLEXUS_LOOPBACK_PORT}" }
+      - { target: 3000, host_ip: 127.0.0.1, published: "\${PLEXUS_LOOPBACK_PORT:?set}" }
     labels: [plexus.tenant=t]
     healthcheck: { test: curl -f localhost:3000 }
 `;
@@ -323,31 +325,36 @@ test('PLX-App/LoopbackPort: a data service may publish no fixed host port, the a
   assert.deepEqual(
     named(appOf(text), 'PLX-App/LoopbackPort').map((f) => f.problem),
     [
-      'the web service publishes `127.0.0.1:${PLEXUS_LOOPBACK_PORT:-3000}:3000`, not 127.0.0.1:${PLEXUS_LOOPBACK_PORT}:<container-port>',
+      'the web service publishes `127.0.0.1:${PLEXUS_LOOPBACK_PORT:-3000}:3000`, not 127.0.0.1:${PLEXUS_LOOPBACK_PORT:?<message>}:<container-port>',
       'service `cache` fixes host port `6379` (`127.0.0.1:6379:6379`)',
     ],
   );
 });
 
-test('PLX-App/LoopbackPort takes the bare, the :? and the $ spellings of the variable, over TCP; a default fixes a port', () => {
+test('PLX-App/LoopbackPort takes only the :? spelling of the variable, over TCP; without it an unset port is random, a default fixes one', () => {
   const ported = (ports: unknown[]) =>
     named(app('stateless', { compose: { services: { web: web({ ports }) } } }), 'PLX-App/LoopbackPort').length;
   for (const spec of [
-    '127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000',
-    '127.0.0.1:${PLEXUS_LOOPBACK_PORT:?set by the platform}:3000',
-    '127.0.0.1:$PLEXUS_LOOPBACK_PORT:3000',
-    '127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000/tcp',
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORT:?set}:3000',
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORT:?set by the platform playbook}:3000',
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORT:?}:3000',
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORT:?set}:3000/tcp',
   ])
     assert.equal(ported([spec]), 0, spec);
   assert.equal(ported([{ target: 3000, host_ip: '127.0.0.1', published: '${PLEXUS_LOOPBACK_PORT:?x}' }]), 0);
   for (const spec of [
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000',
+    '127.0.0.1:$PLEXUS_LOOPBACK_PORT:3000',
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORT?set}:3000',
     '127.0.0.1:${PLEXUS_LOOPBACK_PORT:-3000}:3000',
-    '127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000/udp',
-    '127.0.0.1:${PLEXUS_LOOPBACK_PORTX}:3000',
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORT:?set}:3000/udp',
+    '127.0.0.1:${PLEXUS_LOOPBACK_PORTX:?set}:3000',
   ])
     assert.equal(ported([spec]), 1, spec);
+  for (const published of ['${PLEXUS_LOOPBACK_PORT}', '$PLEXUS_LOOPBACK_PORT'])
+    assert.equal(ported([{ target: 3000, host_ip: '127.0.0.1', published }]), 1, published);
   assert.equal(
-    ported([{ target: 3000, host_ip: '127.0.0.1', published: '${PLEXUS_LOOPBACK_PORT}', protocol: 'udp' }]),
+    ported([{ target: 3000, host_ip: '127.0.0.1', published: '${PLEXUS_LOOPBACK_PORT:?set}', protocol: 'udp' }]),
     1,
   );
 });
@@ -370,7 +377,7 @@ test('a service that extends another of the same file is judged merged with it',
   web:
     extends: base
     env_file: [{ path: .env.secret, required: false }]
-    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT}:3000"]
+    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT:?set}:3000"]
     labels: { team: x }
     healthcheck: { test: [CMD, "true"] }
 `,
@@ -405,7 +412,7 @@ test('a chain of extends within the file is merged all the way, as compose merge
   base:
     image: base
     labels: { a: "1" }
-    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT}:3000"]
+    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT:?set}:3000"]
     healthcheck: { test: [CMD, "true"], interval: 5s }
   middle:
     extends: base
@@ -421,7 +428,7 @@ test('a chain of extends within the file is merged all the way, as compose merge
   assert.deepEqual(compose.services.web, {
     image: 'base',
     labels: { a: '1', b: '2', c: '3' },
-    ports: ['127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000'],
+    ports: ['127.0.0.1:${PLEXUS_LOOPBACK_PORT:?set}:3000'],
     healthcheck: { test: ['CMD', 'true'], interval: '5s' },
     env_file: ['.env'],
     environment: { X: '1' },
@@ -439,14 +446,14 @@ test('lists both sides of an extends give are concatenated without duplicates, a
     `services:
   base:
     image: base
-    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT}:3000", "9000:9000"]
+    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT:?set}:3000", "9000:9000"]
     expose: ["3000"]
     dns: [1.1.1.1]
     env_file: [.env, { path: .env.secret, required: false }]
     volumes: [data:/data]
   web:
     extends: base
-    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT}:3000"]
+    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT:?set}:3000"]
     expose: ["3000", "4000"]
     dns: [1.1.1.1, 8.8.8.8]
     env_file: [.env, { path: .env.secret, required: false }]
@@ -455,7 +462,7 @@ test('lists both sides of an extends give are concatenated without duplicates, a
     'c',
   );
   const web = compose.services.web ?? {};
-  assert.deepEqual(web.ports, ['127.0.0.1:${PLEXUS_LOOPBACK_PORT}:3000', '9000:9000']);
+  assert.deepEqual(web.ports, ['127.0.0.1:${PLEXUS_LOOPBACK_PORT:?set}:3000', '9000:9000']);
   assert.deepEqual(web.expose, ['3000', '4000']);
   assert.deepEqual(web.dns, ['1.1.1.1', '8.8.8.8']);
   assert.deepEqual(web.env_file, ['.env', { path: '.env.secret', required: false }]);
@@ -561,7 +568,7 @@ const COMPOSE = `services:
   web:
     image: \${PLEXUS_DEPLOYMENT_IMAGE:?rendered by the deploy verb}
     env_file: [{ path: .env, required: false }, { path: .env.secret, required: false }]
-    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT}:3000"]
+    ports: ["127.0.0.1:\${PLEXUS_LOOPBACK_PORT:?set}:3000"]
     labels: { plexus.tenant: t }
     healthcheck: { test: [CMD, "true"] }
 `;

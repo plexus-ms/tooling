@@ -196,15 +196,18 @@ function singlePort(compose: Compose): string[] {
 }
 
 /** The platform's binding of the app's port (§ 4 PLX-App), as the compose file spells it. */
-const LOOPBACK_PORT = `\${PLEXUS_LOOPBACK_PORT}`;
+const LOOPBACK_PORT = `\${PLEXUS_LOOPBACK_PORT:?<message>}`;
 const LOOPBACK_FORM = `127.0.0.1:${LOOPBACK_PORT}:<container-port>`;
 
 /**
- * The host port the platform sets: `${PLEXUS_LOOPBACK_PORT}`, with a
- * `:?message` that fails loudly when it is unset, or `$PLEXUS_LOOPBACK_PORT`.
- * A default (`:-3000`) fixes a port, and is not it.
+ * The app service's host port: `${PLEXUS_LOOPBACK_PORT:?message}`, which fails
+ * when the variable is unset or empty. Without the `:?` compose publishes on a
+ * random port instead, and with a default (`:-3000`) on a fixed one.
  */
-const isLoopbackVar = (host: string): boolean =>
+const isLoopbackVar = (host: string): boolean => /^\$\{PLEXUS_LOOPBACK_PORT:\?[^}]*\}$/.test(host);
+
+/** Any spelling of the platform's port: not a host port a service fixes of its own. */
+const namesLoopbackVar = (host: string): boolean =>
   /^(?:\$\{PLEXUS_LOOPBACK_PORT(?::\?[^}]*)?\}|\$PLEXUS_LOOPBACK_PORT)$/.test(host);
 
 function loopbackPort(compose: Compose): string[] {
@@ -218,7 +221,7 @@ function loopbackPort(compose: Compose): string[] {
     if (name === APP_SERVICE) continue;
     for (const port of portsOf(service)) {
       const host = hostPortOf(port);
-      if (host && !isLoopbackVar(host))
+      if (host && !namesLoopbackVar(host))
         problems.push(`service \`${name}\` fixes host port \`${host}\` (\`${renderPort(port)}\`)`);
     }
   }
