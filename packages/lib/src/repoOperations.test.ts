@@ -70,8 +70,11 @@ test('the answers are the questions’ defaults, and the org follows the tenant'
 
 test('the tenant is required, and the error carries its help', async () => {
   const result = await renderBundled(['repo-operations'], {});
-  assert.equal(result.errors.length, 1);
-  assert.equal(result.errors[0]?.question, 'tenant');
+  // The org defaults to the tenant, so its question fails with it.
+  assert.deepEqual(
+    result.errors.map((e) => e.question),
+    ['tenant', 'github_org'],
+  );
   assert.match(result.errors[0]?.message ?? '', /Tenant slug/);
 });
 

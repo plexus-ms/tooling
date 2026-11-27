@@ -1,0 +1,30 @@
+{% raw %}name: housekeeping
+
+# Generated from plexus-ms/template-repo-operations: edit the template, never this file.
+# The daily housekeeping of the tenant's CI: its throwaway instances, its registry buckets (§ 8 PLX-Delivery).
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only list what would be deleted
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  housekeeping:
+    uses: plexus-ms/tooling/.github/workflows/_housekeeping.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      registry: {% endraw %}{{ 'own' if ci_registry == 'own' else 'none' }}{% raw %}
+      dry-run: ${{ inputs.dry_run || false }}
+      alerts-email: '{% endraw %}{{ alerts_email }}{% raw %}'
+    secrets:
+      op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+{% endraw %}

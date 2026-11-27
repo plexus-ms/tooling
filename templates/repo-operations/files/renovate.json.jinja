@@ -1,0 +1,5 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>plexus-ms/tooling//renovate/default", "github>plexus-ms/tooling//renovate/operations"]{% if pr_reviewers %},
+  "reviewers": [{% for r in pr_reviewers.split(',') %}"{{ r.strip() }}"{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}
+}
