@@ -11,6 +11,9 @@
 // user edited, a file the user deleted, a binary file changed on both sides)
 // are the engine's own spec ring's, and the replays below edit only files that
 // both renders hold, so that they do not reach those rules.
+// One more departure follows from them: the engine writes a born-once file the consumer
+// lacks, and copier's update-time `_exclude` does not, so the replays of the app template start
+// at a version that already renders its born-once source files.
 //
 // Three checks, over the template repos at their default branch's head, cloned
 // fresh for the run, against the engine on `templates/`:
