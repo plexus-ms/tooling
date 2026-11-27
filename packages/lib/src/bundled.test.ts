@@ -1,5 +1,7 @@
 // The templates a plx bundles, and the loader of one template's manifest.
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { bundledTemplatesRoot, loadTemplate } from './index.ts';
 import { scratchDir, templatesAt } from './testing/siteRepo.ts';
@@ -42,4 +44,10 @@ test('loadTemplate refuses a template that declares a question named like a mark
     odd: { manifest: 'name: odd\nquestions:\n  templates:\n    default: x\n' },
   });
   await assert.rejects(loadTemplate(root, 'odd'), /odd.*`templates`/s);
+});
+
+test('a file of the name of a template is no template', async () => {
+  const root = templatesAt(scratch.fresh('root'), { basket: { manifest: BASKET } });
+  writeFileSync(join(root, 'plain'), 'not a directory');
+  await assert.rejects(loadTemplate(root, 'plain'), /no template plain/);
 });

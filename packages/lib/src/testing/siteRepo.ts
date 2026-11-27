@@ -68,3 +68,18 @@ export function templatesAt(path: string, templates: Record<string, { manifest: 
 export function quietContext(options: Options = { yes: true }): Context {
   return new Context(options, { ...realIo(), stderr: new PassThrough() });
 }
+
+/** A Context like `quietContext` that keeps what it narrates and the questions it asks, answering each with `answer`. */
+export function loggingContext(options: Options = { yes: true }, answer = true) {
+  const stderr = new PassThrough();
+  let log = '';
+  stderr.on('data', (chunk) => {
+    log += chunk.toString();
+  });
+  const asked: string[] = [];
+  const prompt = async (question: string) => {
+    asked.push(question);
+    return answer;
+  };
+  return { ctx: new Context(options, { ...realIo(), stderr, prompt }), asked, log: () => log };
+}

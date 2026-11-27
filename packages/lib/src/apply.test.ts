@@ -8,7 +8,17 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { after, test } from 'node:test';
 import { apply, Context, planSync, realIo } from './index.ts';
-import { type Files, git, quietContext, repoWith, scratchDir, templatesAt, text, write } from './testing/siteRepo.ts';
+import {
+  type Files,
+  git,
+  loggingContext,
+  quietContext,
+  repoWith,
+  scratchDir,
+  templatesAt,
+  text,
+  write,
+} from './testing/siteRepo.ts';
 
 const scratch = scratchDir('apply');
 after(scratch.remove);
@@ -484,4 +494,81 @@ test('apply lists a render error once, and says which markers it comes from', as
   });
   write(repo, { 'apps/need/PLEXUS.md': marker('templates: [need]\ntoken: x\n') });
   await assert.rejects(apply(quietContext(), options(repo, templates)), /apps\/need.*markers at HEAD/s);
+});
+
+test('apply writes the default of a nested site into the nested marker, not the root one', async () => {
+  const { repo, templates } = fixture({ 'apps/x/PLEXUS.md': EMPTY });
+  write(repo, { 'apps/x/PLEXUS.md': marker('templates: [lid]\n') });
+  const applied = await apply(quietContext(), options(repo, templates));
+  assert.equal(text(repo, 'apps/x/PLEXUS.md'), marker('templates: [lid]\nlid_color: blue\n'));
+  assert.equal(text(repo, 'PLEXUS.md'), marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: apple\n`));
+  assert.deepEqual(applied.sites[0]?.defaults, { lid_color: 'blue' });
+});
+
+test('apply does not look at the version of a repo that lists no templates', async () => {
+  const repo = repoWith(scratch.fresh('repo'), { 'PLEXUS.md': marker('version: 0.1.0\nfruit: apple\n') });
+  write(repo, { 'PLEXUS.md': marker('version: 0.1.0\nfruit: pear\n') });
+  assert.deepEqual(await apply(quietContext(), { repo, plxVersion: VERSION }), {
+    sites: [],
+    conflicted: 0,
+    applied: false,
+    declined: false,
+  });
+});
+
+test('apply renders nothing for a site that lists no templates on either side, whatever its answers do', async () => {
+  const { repo, templates } = fixture({ 'apps/x/PLEXUS.md': EMPTY });
+  write(repo, { 'apps/x/PLEXUS.md': marker('templates: []\nnote: 1\n') });
+  assert.deepEqual((await apply(quietContext(), options(repo, templates))).sites, []);
+});
+
+test('apply needs no templates root when no marker changed, and fails loudly without one when something did', async () => {
+  const { repo } = fixture();
+  write(repo, { 'PLEXUS.md': pears });
+  await assert.rejects(apply(quietContext(), { repo, plxVersion: VERSION }), /no bundled templates/);
+  git(repo, 'checkout', '--', 'PLEXUS.md');
+  assert.equal((await apply(quietContext(), { repo, plxVersion: VERSION })).sites.length, 0);
+});
+
+test('apply asks nothing when the re-render changes no file, and counts the defaults it writes in what it asks', async () => {
+  const { repo, templates } = fixture();
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: apple\nnote: 1\n`) });
+  const quiet = loggingContext({});
+  const same = await apply(quiet.ctx, options(repo, templates));
+  assert.equal(quiet.asked.length, 0);
+  assert.deepEqual(
+    same.sites.map((s) => s.report),
+    [[]],
+  );
+  write(repo, { 'PLEXUS.md': both() });
+  const adding = loggingContext({});
+  await apply(adding.ctx, options(repo, templates));
+  assert.match(adding.asked[0] ?? '', /^apply 4 changes in one site to /);
+});
+
+test('apply narrates each path it writes, marking a dry run', async () => {
+  const { repo, templates } = fixture();
+  write(repo, { 'PLEXUS.md': both() });
+  const dry = loggingContext({ dryRun: true });
+  await apply(dry.ctx, options(repo, templates));
+  assert.match(dry.log(), /^\[dry-run\] added shelf\.txt$/m);
+  const real = loggingContext();
+  await apply(real.ctx, options(repo, templates));
+  assert.match(real.log(), /^added shelf\.txt$/m);
+});
+
+test('apply names the template, path and question of a render error', async () => {
+  const { repo, templates } = fixture({ 'apps/x/PLEXUS.md': EMPTY });
+  write(repo, { 'apps/x/PLEXUS.md': marker('templates: [need]\n') });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), /\(template need, question token\)/);
+});
+
+test('apply reports a missing template alone, without the errors of the templates that were found', async () => {
+  const { repo, templates } = fixture({ 'apps/x/PLEXUS.md': EMPTY });
+  write(repo, { 'apps/x/PLEXUS.md': marker('templates: [crate, ghost]\n') });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), (error: Error) => {
+    assert.match(error.message, /no template ghost/);
+    assert.doesNotMatch(error.message, /fruit/);
+    return true;
+  });
 });
