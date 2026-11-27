@@ -223,3 +223,33 @@ test('a given answer that no template owns or reads is listed as unused and is n
   assert.deepEqual(result.unused, ['colour']);
   assert.deepEqual(result.answers, { fruit: 'pear' });
 });
+
+test('the names of the templates rendered together are a variable, _templates, in files, paths and questions, in the order of the names', () => {
+  const together = `name: crate
+questions:
+  label:
+    type: str
+    default: "{{ _templates | join(' ') }}"
+  lid:
+    type: bool
+    default: true
+    when: "{{ 'basket' in _templates }}"
+`;
+  const crated = template(together, {
+    'names.txt.jinja': "{{ _templates | join(',') }} {{ label }}",
+    "{% if 'basket' in _templates %}for-basket.txt{% endif %}": 'x',
+    "{% if 'shelf' in _templates %}for-shelf.txt{% endif %}": 'x',
+  });
+  for (const templates of [
+    [crated, template(basket)],
+    [template(basket), crated],
+  ]) {
+    const result = render(templates, { fruit: 'pear' });
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.answers, { fruit: 'pear', label: 'basket crate', lid: true });
+    assert.deepEqual(listing(result.tree), { 'names.txt': 'basket,crate basket crate', 'for-basket.txt': 'x' });
+  }
+  const alone = render([crated], {});
+  assert.deepEqual(alone.answers, { label: 'crate' });
+  assert.deepEqual(listing(alone.tree), { 'names.txt': 'crate crate' });
+});
