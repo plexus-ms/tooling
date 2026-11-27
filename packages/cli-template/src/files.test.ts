@@ -169,3 +169,18 @@ for (const [mode, written] of [
     assert.deepEqual(listing(result.tree), { the_file: file, the_template: file });
   });
 }
+
+// tests/test_empty_suffix.py::test_binary_file_fallback_to_copy. Copier's test
+// runs with an empty suffix, where every file is a candidate and the name stays
+// as it is; with a suffix it raises instead of copying. The issue's rule is to
+// copy, so a `.jinja` file that is not text is copied as bytes under the name
+// the suffix rule gives it, without the suffix.
+test('a .jinja file that is not valid text is copied as bytes, without the suffix', () => {
+  const bytes = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0xec, 0x0a, 0x7b, 0x7b,
+    0x6e, 0x61, 0x6d, 0x65, 0x7d, 0x7d, 0x0a, 0x00, 0xec,
+  ];
+  const result = render([template(ripe, { 'logo.png.jinja': { bytes, mode: REGULAR | 0o644 } })], { ripe: true });
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(listing(result.tree), { 'logo.png': { bytes, mode: REGULAR | 0o644 } });
+});
