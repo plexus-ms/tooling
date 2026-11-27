@@ -12,6 +12,7 @@
 // Conventions: compendium/miscellaneous/cli-design.md.
 export { BASELINE_FILE, type Compared, compareBaseline, parseBaseline, renderBaseline } from './baseline.ts';
 export { bumpWorkflowRefs, WORKFLOW_REF } from './bookkeeping.ts';
+export { bundledTemplatesRoot, loadTemplate, templateDirectory } from './bundled.ts';
 export {
   CHANGESET_DIR,
   type Changeset,
