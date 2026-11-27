@@ -268,3 +268,36 @@ test('merge leaves absent a path the user deleted, even where the template chang
     calls: [],
   });
 });
+
+// Ported from tests/test_updatediff.py, test_skip_update_deleted: a born-once
+// file the user deleted is written again, names as copier's parameters have them.
+test('merge writes a born-once path the current tree lacks, changed or not, and reports it as added', async () => {
+  const names = ['skip_normal_file', 'skip file with whitespace', ' skip_leading_whitespace', '!skip_special'];
+  const result = await run({
+    old: { ...Object.fromEntries(names.map((name) => [name, '1'])), 'apple.txt': 'red\n' },
+    new: { ...Object.fromEntries(names.map((name) => [name, '1'])), 'apple.txt': 'green\n' },
+    current: { another_file: 'foobar' },
+    bornOnce: [...names, 'apple.txt'],
+  });
+  assert.deepEqual(result, {
+    tree: { ...Object.fromEntries(names.map((name) => [name, '1'])), 'apple.txt': 'green\n', another_file: 'foobar' },
+    report: [...names, 'apple.txt'].sort().map((name) => `${name}: added`),
+    calls: [],
+  });
+});
+
+// Ported from tests/test_updatediff.py, test_skip_update: a born-once file the
+// template changes is never touched, edited or not.
+test('merge never touches a born-once path the current tree has, and reports it as kept where the template changed it', async () => {
+  const result = await run({
+    old: { skip_me: '1', 'apple.txt': 'red\n', 'pear.txt': 'green\n' },
+    new: { skip_me: '3', 'apple.txt': 'green\n', 'pear.txt': 'green\n' },
+    current: { skip_me: '2', 'apple.txt': 'red\n', 'pear.txt': 'yellow\n' },
+    bornOnce: ['skip_me', 'apple.txt', 'pear.txt'],
+  });
+  assert.deepEqual(result, {
+    tree: { skip_me: '2', 'apple.txt': 'red\n', 'pear.txt': 'yellow\n' },
+    report: ['apple.txt: kept', 'skip_me: kept'],
+    calls: [],
+  });
+});
