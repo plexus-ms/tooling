@@ -184,3 +184,12 @@ test('setMarkerKeys keeps the comment on the key line of a block value it replac
   assert.deepEqual(parseMarkerConfig(setMarkerKeys(answer, { extra: [] })).answers.extra, []);
   assert.equal(setMarkerKeys('---\na: | # c\n  text\nb: 1\n---\n', { a: 'y' }), '---\na: y # c\nb: 1\n---\n');
 });
+
+test('setMarkerKeys leaves the line breaks of lines it does not set as they are', () => {
+  assert.equal(setMarkerKeys('---\na: 1\r\nb: 2\n---\n', { b: 3 }), '---\na: 1\r\nb: 3\n---\n');
+  assert.equal(
+    setMarkerKeys('---\r\na: 1\nb: 2\r\n---\r\n', { c: [1] }),
+    '---\r\na: 1\nb: 2\r\nc: [1]\r\n---\r\n',
+    "a new line takes the page's line break",
+  );
+});
