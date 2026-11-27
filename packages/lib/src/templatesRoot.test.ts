@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -41,6 +41,32 @@ test('the root is the repo layout where no templates sit beside the module', () 
   try {
     const lib = join(dir, 'packages/lib/dist');
     assert.equal(templatesRoot(pathToFileURL(join(lib, 'index.js')).href), join(dir, 'templates'));
+  } finally {
+    remove();
+  }
+});
+
+test('where neither layout holds the templates, it fails and says where it looked', () => {
+  const { dir, remove } = layout('node_modules/@plexus-ms/lib/dist');
+  try {
+    const lib = join(dir, 'node_modules/@plexus-ms/lib/dist');
+    assert.throws(
+      () => templatesRoot(pathToFileURL(join(lib, 'index.js')).href),
+      (error: Error) =>
+        error.message.includes(join(lib, 'templates')) &&
+        error.message.includes(join(dir, 'node_modules', 'templates')),
+    );
+  } finally {
+    remove();
+  }
+});
+
+test('a file named templates is no templates directory', () => {
+  const { dir, remove } = layout('packages/cli/dist', 'templates');
+  try {
+    const dist = join(dir, 'packages/cli/dist');
+    writeFileSync(join(dist, 'templates'), '');
+    assert.equal(templatesRoot(pathToFileURL(join(dist, 'plx.js')).href), join(dir, 'templates'));
   } finally {
     remove();
   }

@@ -93,6 +93,11 @@ test('a private packages scope is empty or like @acme', async () => {
   }
 });
 
+test('a scope with a trailing newline is refused, which copier’s regex accepts', async () => {
+  const { errors } = await render({ private_packages_scope: '@acme\n' });
+  assert.equal(errors[0]?.question, 'private_packages_scope');
+});
+
 test('the days before a minor version is taken are zero or more', async () => {
   assert.deepEqual((await render({ update_max_age: 0 })).errors, []);
   const { errors } = await render({ update_max_age: -1 });
