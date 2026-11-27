@@ -64,9 +64,9 @@
 // `copier/_user_data.py` `Question` and `copier/_tools.py` `cast_to_bool`, without
 // prompts, answers files, `ask`, `secret`, `multiselect` or user defaults.
 import { isDeepStrictEqual } from 'node:util';
-import { parse as parseYaml } from 'yaml';
+import { isMap, isNode, isSeq, parseDocument, parse as parseYaml } from 'yaml';
 import { messageOf } from './errors.ts';
-import { type Context, evaluate, renderString } from './jinja.ts';
+import { type Context, renderString } from './jinja.ts';
 import type { Answers, Manifest, Question, QuestionType, RenderError } from './types.ts';
 
 /** One template's questions, resolved. */
@@ -120,7 +120,7 @@ function cast(type: QuestionType, answer: unknown): unknown {
     case 'json':
       return typeof answer === 'string' ? JSON.parse(answer) : answer;
     case 'yaml':
-      return typeof answer === 'string' ? parseYaml(answer) : answer;
+      return typeof answer === 'string' ? parseYaml11(answer) : answer;
   }
 }
 
@@ -140,14 +140,41 @@ function toBool(source: unknown): boolean {
   return Boolean(source);
 }
 
+/** YAML as copier reads it, version 1.1: `yes` and `on` are booleans, `010` is octal. */
+function parseYaml11(text: string): unknown {
+  return parseYaml(text, { version: '1.1' });
+}
+
+/** The values of a map of choices, in its order; a null value stands for its label. */
+function labelled(entries: Iterable<[unknown, unknown]>): unknown[] {
+  return [...entries].map(([label, choice]) => (choice === null ? String(label) : choice));
+}
+
+/** The choices that YAML text holds, a list or a map in the order it is written. */
+function parseChoices(text: string): unknown[] {
+  const doc = parseDocument(text, { version: '1.1' });
+  const [error] = doc.errors;
+  if (error !== undefined) throw error;
+  const js = (node: unknown) => (isNode(node) ? node.toJS(doc) : node);
+  if (isMap(doc.contents)) return labelled(doc.contents.items.map((pair) => [js(pair.key), js(pair.value)]));
+  if (isSeq(doc.contents)) return js(doc.contents) as unknown[];
+  throw new Error('they render to neither a list nor a map');
+}
+
 /** The values a question's choices allow, rendered and cast to its type, in the manifest's order. */
 function allowed(question: Question, type: QuestionType, context: Context): unknown[] {
-  const rendered = typeof question.choices === 'string';
-  const choices: unknown = rendered
-    ? parseYaml(renderString(question.choices as string, context), { mapAsMap: true })
-    : question.choices;
-  const values = choices instanceof Map ? [...choices.values()] : Array.isArray(choices) ? choices : [];
-  return values.map((choice) => cast(type, rendered ? choice : value(choice, context)));
+  const { choices } = question;
+  let values: unknown[];
+  if (typeof choices === 'string') {
+    try {
+      values = parseChoices(renderString(choices, context));
+    } catch (error) {
+      throw new Error(`choices \`${choices}\`: ${messageOf(error)}`);
+    }
+  } else if (choices instanceof Map) {
+    values = labelled([...choices].map(([label, choice]) => [value(label, context), value(choice, context)]));
+  } else values = Array.isArray(choices) ? choices.map((choice) => value(choice, context)) : [];
+  return values.map((choice) => cast(type, choice));
 }
 
 /** `answer` cast to the question's type, and checked against its choices. */
