@@ -702,3 +702,12 @@ test('apply says a doubled key is at HEAD when only HEAD has it', async () => {
   write(repo, { 'apps/x/PLEXUS.md': marker('templates: [lid]\n') });
   await assert.rejects(apply(quietContext(), options(repo, templates)), /lid_color.*the markers at HEAD/s);
 });
+
+test('apply refuses a root default for a key that a nested marker answers although its templates only read it', async () => {
+  const { repo, templates } = fixture({
+    'apps/x/PLEXUS.md': marker('templates: [lidreader]\nlid_color: green\n'),
+    'apps/x/lr.txt': 'lid is green\n',
+  });
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket, lidroot]\nfruit: apple\n`) });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), /apps\/x\/PLEXUS\.md answers it already/);
+});
