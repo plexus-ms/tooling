@@ -28,13 +28,16 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   const engine = engineVariables(read);
   const resolved = new Map<Template, Resolved>();
   for (const template of resolutionOrder(read, owners, errors)) {
-    const scope = scopeOf(engine, readsOf(template, owners, resolved, given, errors));
-    resolved.set(template, { scope, resolution: resolveAnswers(template.manifest, given, scope, errors) });
+    const own: RenderError[] = [];
+    const scope = scopeOf(engine, readsOf(template, owners, resolved, given, own));
+    const resolution = resolveAnswers(template.manifest, given, scope, own);
+    errors.push(...own);
+    resolved.set(template, { scope, resolution, failed: own.length > 0 });
   }
 
   const renderings = read.flatMap((template) => {
     const done = resolved.get(template);
-    return done === undefined ? [] : [{ template, context: contextOf(done.scope, done.resolution) }];
+    return done === undefined || done.failed ? [] : [{ template, context: contextOf(done.scope, done.resolution) }];
   });
   const tree = new Map<string, Entry>();
   const files = new Map<string, Origin>();
@@ -73,10 +76,11 @@ function readAll(templates: readonly Tree[], errors: RenderError[]): Template[] 
   });
 }
 
-/** A template's questions resolved, and the scope they were resolved in. */
+/** A template's questions resolved, the scope they were resolved in, and whether a read or a question failed. */
 interface Resolved {
   readonly scope: Context;
   readonly resolution: Resolution;
+  readonly failed: boolean;
 }
 
 /**
