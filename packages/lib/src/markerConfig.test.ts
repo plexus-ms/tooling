@@ -112,7 +112,7 @@ test('setMarkerKeys puts a new reserved key in the reserved order ahead of the a
   );
   assert.equal(
     setMarkerKeys('---\n# An app.\nprofile: stateful\n---\n\n- An app.\n', { templates: ['app-nextjs'], port: 3000 }),
-    '---\n# An app.\ntemplates: [app-nextjs]\nprofile: stateful\nport: 3000\n---\n\n- An app.\n',
+    '---\ntemplates: [app-nextjs]\n# An app.\nprofile: stateful\nport: 3000\n---\n\n- An app.\n',
   );
   assert.equal(
     setMarkerKeys('---\ntemplates: [repo-turbo]\ndeviations: []\nmajor: 1\n---\n', { version: '0.131.0' }),
@@ -157,4 +157,16 @@ test('setMarkerKeys writes a value for a key written without one before the comm
   assert.equal(parseMarkerConfig(written).answers.a, 'x');
   assert.equal(setMarkerKeys('---\na: \nb: 1\n---\n', { a: 'x' }), '---\na: x\nb: 1\n---\n', 'a trailing space');
   assert.equal(setMarkerKeys('---\r\na:\r\nb: 1\r\n---\r\n', { a: 'x' }), '---\r\na: x\r\nb: 1\r\n---\r\n');
+});
+
+test('setMarkerKeys inserts a new reserved key above the comment lines that directly precede the next key', () => {
+  assert.equal(
+    setMarkerKeys('---\n# about tenant\ntenant: x\n---\n', { templates: ['a'] }),
+    '---\ntemplates: [a]\n# about tenant\ntenant: x\n---\n',
+  );
+  assert.equal(
+    setMarkerKeys('---\n# The repo.\n\n# about tenant\n  # and more\ntenant: x\n---\n', { templates: ['a'] }),
+    '---\n# The repo.\n\ntemplates: [a]\n# about tenant\n  # and more\ntenant: x\n---\n',
+    'a blank line ends the comment that belongs to the key',
+  );
 });
