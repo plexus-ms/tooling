@@ -75,5 +75,4 @@ test('a copier answers file that git does not track does not stop apply', async 
   write(repo, { '.copier-answers.yml': '_commit: v0.129.1\n' });
   const applied = await apply(quietContext(), options(repo, templates));
   assert.deepEqual(applied.sites, []);
-  git(repo, 'status', '--short');
 });

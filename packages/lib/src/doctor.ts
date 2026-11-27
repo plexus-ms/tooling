@@ -353,7 +353,7 @@ export const CHECKS: Readonly<Record<string, RepoCheck | AppCheck | UnitCheck>> 
 };
 
 /** Whether a repo has left copier behind: git tracks no answers file in it, at any depth. */
-const crossedOver = (tracked: readonly string[] = []): boolean =>
+export const crossedOver = (tracked: readonly string[] = []): boolean =>
   !tracked.some((path) => basename(path) === ANSWERS_FILE);
 
 /**
