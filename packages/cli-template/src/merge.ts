@@ -116,6 +116,10 @@ async function mergePath(
   if (kind(old) === DIRECTORY && next === undefined) return undefined;
   if (kind(current) === SYMLINK) return 'kept'; // 3
   if (bornOnce || current === undefined) return 'kept';
+  if (next !== undefined && kind(next) === REGULAR && same(current, next)) {
+    tree.set(path, next);
+    return 'clean';
+  }
   const kinds = [old, next, current].map(kind);
   if (kinds.includes(REGULAR) && kinds.includes(DIRECTORY)) return 'conflicted'; // 4
   if (kinds.includes(DIRECTORY)) return undefined; // 5
