@@ -5,7 +5,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { text as readAll } from 'node:stream/consumers';
 import { parseArgs } from 'node:util';
-import { applyChanges, readCurrent, readTree, requireEmpty } from './directory.ts';
+import { applyChanges, readCurrent, readTree, requireDirectory, requireEmpty } from './directory.ts';
 import { InputError, messageOf } from './errors.ts';
 import { gitMergeFile, merge, render } from './index.ts';
 import {
@@ -14,6 +14,7 @@ import {
   type Entry,
   MODE_TYPE,
   type Policies,
+  type Policy,
   type RenderError,
   type RenderResult,
   type Tree,
@@ -83,6 +84,27 @@ and on standard error, with nothing written.
 
 class UsageError extends Error {}
 
+const POLICIES: readonly string[] = ['merge', 'born-once'] satisfies Policy[];
+
+/** Runs steps that may fail with an input error, keeping each failure, so that a command reports them all. */
+function collector() {
+  const problems: RenderError[] = [];
+  const attempt = async <T>(step: () => Promise<T>): Promise<T | undefined> => {
+    try {
+      return await step();
+    } catch (error) {
+      if (!(error instanceof InputError)) throw error;
+      problems.push(
+        error.path === undefined ? { message: error.message } : { message: error.message, path: error.path },
+      );
+    }
+  };
+  /** Whether `step` passed, for a step that gives nothing. */
+  const holds = async (step: () => Promise<void>): Promise<boolean> =>
+    (await attempt(() => step().then(() => true))) === true;
+  return { problems, attempt, holds };
+}
+
 /** Where `render` writes the policies of the render in `dir`: beside it, so that no file of the render is one it did not render. */
 export const policiesOf = (dir: string): string => `${resolve(dir)}.plx-template.json`;
 
@@ -126,10 +148,26 @@ async function readAnswers(source: string | undefined): Promise<Answers> {
 
 /** The policies `render` wrote beside the render in `dir`. */
 async function readPolicies(dir: string): Promise<Policies> {
-  const { files } = JSON.parse(await readFile(policiesOf(dir), 'utf8')) as {
-    files: Record<string, { policy: 'merge' | 'born-once' }>;
-  };
-  return new Map(Object.entries(files));
+  const file = policiesOf(dir);
+  let text: string;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch {
+    throw new InputError(`no policies file for ${dir}: \`render\` writes one beside the render it writes`, file);
+  }
+  let files: unknown;
+  try {
+    files = (JSON.parse(text) as { files?: unknown }).files;
+  } catch (error) {
+    throw new InputError(`the policies file is no JSON: ${messageOf(error)}`, file);
+  }
+  const entries = typeof files === 'object' && files !== null ? Object.entries(files) : undefined;
+  if (
+    entries === undefined ||
+    entries.some(([, v]) => !POLICIES.includes((v as { policy?: string } | null)?.policy as string))
+  )
+    throw new InputError('the policies file is not what `render` writes: files by path, each with a policy', file);
+  return new Map(entries as [string, { policy: Policy }][]);
 }
 
 /** The JSON a render prints: the core's result, but for its tree. */
@@ -143,12 +181,27 @@ function renderJson(result: RenderResult | undefined, errors: readonly RenderErr
   };
 }
 
+/** The JSON a command prints when its inputs are wrong. */
+function refuse(errors: readonly RenderError[]): number {
+  print({ errors });
+  complain(errors);
+  return EXIT.input;
+}
+
 async function mergeCommand(oldDir: string, newDir: string, target: string): Promise<number> {
-  const old = await readTree(oldDir);
-  const next = await readTree(newDir);
-  const files = { old: await readPolicies(oldDir), new: await readPolicies(newDir) };
-  const current = await readCurrent(target, new Set([...old.keys(), ...next.keys()]));
-  const { tree, report } = await merge({ old, new: next, current, files }, gitMergeFile);
+  const { problems, attempt, holds } = collector();
+  const old = await attempt(() => readTree(oldDir));
+  const oldPolicies = old && (await attempt(() => readPolicies(oldDir)));
+  const next = await attempt(() => readTree(newDir));
+  const newPolicies = next && (await attempt(() => readPolicies(newDir)));
+  const present = await holds(() => requireDirectory(target));
+  const current =
+    present && old && next && (await attempt(() => readCurrent(target, new Set([...old.keys(), ...next.keys()]))));
+  if (!old || !next || !oldPolicies || !newPolicies || !current || problems.length > 0) return refuse(problems);
+  const { tree, report } = await merge(
+    { old, new: next, current, files: { old: oldPolicies, new: newPolicies } },
+    gitMergeFile,
+  );
   const changes = new Map<string, Entry | undefined>();
   for (const { path, outcome } of report) {
     if (outcome === 'deleted') changes.set(path, undefined);
@@ -165,17 +218,7 @@ async function renderCommand(
   out: string,
   templates: readonly string[],
 ): Promise<number> {
-  const problems: RenderError[] = [];
-  const attempt = async <T>(step: () => Promise<T>): Promise<T | undefined> => {
-    try {
-      return await step();
-    } catch (error) {
-      if (!(error instanceof InputError)) throw error;
-      problems.push(
-        error.path === undefined ? { message: error.message } : { message: error.message, path: error.path },
-      );
-    }
-  };
+  const { problems, attempt } = collector();
   const answers = await attempt(() => readAnswers(answersFile));
   const trees: Tree[] = [];
   for (const dir of templates) {

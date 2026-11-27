@@ -112,6 +112,7 @@ test('a render without its policies file, a malformed one, or a directory that i
     for (const e of errors) assert.ok(run.stderr.includes(e.message), e.message);
     assert.deepEqual(read(s.path('target')), before);
 
+    writeFileSync(s.path('new.plx-template.json'), policies(Object.keys(NEW)));
     const missing = plx(['merge', s.path('no-old'), s.path('new'), s.path('no-target')]);
     assert.equal(missing.code, 3);
     assert.deepEqual(

@@ -68,7 +68,7 @@ async function leaf(path: string, mode: number): Promise<Entry | undefined> {
 }
 
 /** Whether `path` is a directory, an input error where it is not. */
-async function requireDirectory(path: string): Promise<void> {
+export async function requireDirectory(path: string): Promise<void> {
   const st = await stat(path);
   if (st === undefined) throw new InputError('there is no such directory', path);
   if (!st.isDirectory()) throw new InputError('not a directory', path);
