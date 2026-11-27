@@ -25,18 +25,17 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   const errors: RenderError[] = [];
   const read = readAll(templates, errors);
   ownersOf(read, errors);
-  const resolved = read.map((template) => ({
-    template,
-    reads: readsOf(template, given, errors),
-    resolution: resolveAnswers(template.manifest, given, scopeOf(template), errors),
-  }));
+  const resolved = read.map((template) => {
+    const scope = scopeOf(readsOf(template, given, errors));
+    return { template, scope, resolution: resolveAnswers(template.manifest, given, scope, errors) };
+  });
 
   const tree = new Map<string, Entry>();
   const files = new Map<string, Origin>();
   const birth: BirthCommand[] = [];
-  for (const { template, resolution } of resolved) {
+  for (const { template, scope, resolution } of resolved) {
     const { name, policies } = template.manifest;
-    for (const [path, { entry, source }] of renderFiles(template, contextOf(template, resolution), errors)) {
+    for (const [path, { entry, source }] of renderFiles(template, contextOf(scope, resolution), errors)) {
       tree.set(path, entry);
       files.set(path, { template: name, policy: policies.get(source) ?? 'merge' });
     }
@@ -104,12 +103,12 @@ function readsOf(template: Template, given: Answers, errors: RenderError[]): Con
   return reads;
 }
 
-/** What a template's questions see besides its own earlier answers. */
-function scopeOf(_template: Template): Context {
-  return {};
+/** What a template's questions see besides its own earlier answers: the answers it reads. */
+function scopeOf(reads: Context): Context {
+  return { ...reads };
 }
 
-/** What a template's files render with. */
-function contextOf(_template: Template, resolution: Resolution): Context {
-  return { ...resolution.context };
+/** What a template's files render with: its scope and its own answers. */
+function contextOf(scope: Context, resolution: Resolution): Context {
+  return { ...scope, ...resolution.context };
 }
