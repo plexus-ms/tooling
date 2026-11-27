@@ -38,18 +38,21 @@ export interface MarkerSite {
  * repo or the ref.
  */
 export async function findSites(ctx: Context, repo: string, ref?: string): Promise<MarkerSite[]> {
-  const listing = ref === undefined ? ['ls-files', '-z'] : ['ls-tree', '-r', '-z', '--name-only', ref];
+  // --end-of-options: a ref that starts with `-` is a name git rejects, never an option it runs (git 2.24).
+  const listing =
+    ref === undefined ? ['ls-files', '-z'] : ['ls-tree', '-r', '-z', '--name-only', '--end-of-options', ref];
   const markers = (await ctx.read('git', listing, { cwd: repo }))
     .split('\0')
     .filter((path) => path === MARKER_FILE || path.endsWith(`/${MARKER_FILE}`));
   const sites: MarkerSite[] = [];
   for (const path of markers) {
-    const text = ref
-      ? await ctx.read('git', ['cat-file', 'blob', `${ref}:${path}`], { cwd: repo })
-      : await ctx.readFile(join(repo, path)).catch((error) => {
-          if (isMissing(error)) return undefined;
-          throw error;
-        });
+    const text =
+      ref === undefined
+        ? await ctx.readFile(join(repo, path)).catch((error) => {
+            if (isMissing(error)) return undefined;
+            throw error;
+          })
+        : await ctx.read('git', ['cat-file', 'blob', '--end-of-options', `${ref}:${path}`], { cwd: repo });
     if (text === undefined) continue;
     const dir = dirname(path);
     sites.push({ dir, ...configOf(text, dir) });
