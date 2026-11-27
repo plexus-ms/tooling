@@ -150,3 +150,11 @@ test('setMarkerKeys refuses what it cannot write without reformatting', () => {
   assert.throws(() => setMarkerKeys('---\na: [\n---\n', { major: 1 }), /frontmatter/);
   assert.throws(() => setMarkerKeys('---\n---\n', { major: undefined }), /`major`/);
 });
+
+test('setMarkerKeys writes a value for a key written without one before the comment on its line', () => {
+  const written = setMarkerKeys('---\na: # c\nb: 1\n---\n', { a: 'x' });
+  assert.equal(written, '---\na: x # c\nb: 1\n---\n');
+  assert.equal(parseMarkerConfig(written).answers.a, 'x');
+  assert.equal(setMarkerKeys('---\na: \nb: 1\n---\n', { a: 'x' }), '---\na: x\nb: 1\n---\n', 'a trailing space');
+  assert.equal(setMarkerKeys('---\r\na:\r\nb: 1\r\n---\r\n', { a: 'x' }), '---\r\na: x\r\nb: 1\r\n---\r\n');
+});
