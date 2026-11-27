@@ -24,7 +24,18 @@
 // sets, so that comments, order, quoting and blank lines, and the body, stay
 // as they were.
 import { isDeepStrictEqual } from 'node:util';
-import { Document, isCollection, isMap, isNode, isScalar, type Node, parse, parseDocument, type YAMLMap } from 'yaml';
+import {
+  Document,
+  isCollection,
+  isMap,
+  isNode,
+  isScalar,
+  type Node,
+  parse,
+  parseDocument,
+  visit,
+  type YAMLMap,
+} from 'yaml';
 import { isPlexusVersion } from './version.ts';
 
 export interface Declaration {
@@ -137,8 +148,10 @@ function frontmatterOf(text: string): { yaml: string; start: number; eol: string
  * The marker with the given frontmatter keys set, and every other byte as it
  * was: the body, the other keys, comments, quoting, spacing and blank lines.
  * A value already so leaves the text as it is. A replaced value keeps the
- * style it was written in (a block or a flow list, a quoted string), and on
- * one line also the spacing and comment around it. A new reserved key goes
+ * style it was written in (a block or a flow list, a quoted string), and
+ * the comment on its key line; on one line also the spacing around it.
+ * Comments inside a replaced block value, between or after its items, go
+ * with it. A new reserved key goes
  * ahead of the answers in the order of RESERVED_KEYS, a new answer last; a
  * new list is written as a flow list (`[a, b]`). A key is set, never removed.
  * Throws when the page has no frontmatter or its frontmatter is not a block
@@ -193,31 +206,69 @@ function insertKey(yaml: string, pairs: readonly Pair[], key: string, node: Node
   return yaml.slice(0, at) + pairText(key, node) + yaml.slice(at);
 }
 
-/** The value of a key the frontmatter has, in the style of the old one; the text as it is when already so. */
+/**
+ * The value of a key the frontmatter has, in the style of the old one; the
+ * text as it is when already so. A block list or mapping replaced by one
+ * that has items keeps its key line; every other value goes on one line.
+ */
 function replaceValue(yaml: string, doc: Document, pair: Pair, key: string, value: unknown): string {
   const old = pair.value;
   if (!isNode(old) || !old.range || !isNode(pair.key) || !pair.key.range)
     throw new Error(`marker: \`${key}\` has no value plx can replace`);
   if (isDeepStrictEqual(old.toJSON(), value)) return yaml;
-  const node = doc.createNode(value);
-  const block = isCollection(old) && !old.flow;
-  if (isCollection(node)) node.flow = !block;
-  if (isScalar(node) && isScalar(old) && typeof node.value === 'string' && typeof old.value === 'string')
-    node.type = old.type;
-
-  const inline = new Document(node).toString(STYLE).replace(/\n$/, '');
   const [from, to] = old.range;
   const colonEnd = yaml.indexOf(':', pair.key.range[1]) + 1;
+  const node = doc.createNode(value);
+
+  if (isCollection(old) && !old.flow) {
+    // The items start on the lines below the key line, which stays as it is, comment and all. New items
+    // take the old ones' lines, indented as they were: the column of the first item (`- a`) or key, and
+    // a sequence at column 0 not indented at all. A value without items goes on the key line instead.
+    const below = lastLineEnd(yaml, colonEnd);
+    const rest = yaml.slice(lastLineEnd(yaml, to));
+    if (isCollection(node) && node.items.length > 0) {
+      const column = from - lineStart(yaml, from);
+      const written = pairText(key, node, column > 0 ? { indent: column, indentSeq: true } : { indentSeq: false });
+      return yaml.slice(0, below) + written.slice(written.indexOf('\n') + 1) + rest;
+    }
+    return onKeyLine(yaml.slice(0, below) + rest, key, colonEnd, colonEnd, oneLine(node, old, key));
+  }
+  if (isScalar(old) && (old.type === 'BLOCK_LITERAL' || old.type === 'BLOCK_FOLDED')) {
+    // A block scalar's header (`|`, `>-`) is on the key line, its text on the lines below: both go, and the
+    // value takes the header's place, before the comment the header line may have.
+    if (yaml.slice(colonEnd, from).trim() !== '')
+      throw new Error(`marker: \`${key}\` holds more than a value; set it by hand`);
+    const header = /^[|>][-+0-9]*/.exec(yaml.slice(from))?.[0].length ?? 0;
+    const rest = yaml.slice(lastLineEnd(yaml, to));
+    const written = yaml.slice(0, from) + yaml.slice(from + header, lastLineEnd(yaml, from)) + rest;
+    return onKeyLine(written, key, colonEnd, colonEnd, oneLine(node, old, key));
+  }
   // A key written without a value (`key:`) has an empty range where the value would start: before a
   // comment, or at the line's end. The value goes right after the colon instead.
-  if (from === to && !inline.includes('\n')) return afterColon(yaml, key, colonEnd, from, inline);
-  if (!block && !inline.includes('\n')) return yaml.slice(0, from) + inline + yaml.slice(to);
+  if (from === to) return onKeyLine(yaml, key, colonEnd, from, oneLine(node, old, key));
+  return yaml.slice(0, from) + oneLine(node, old, key) + yaml.slice(to);
+}
 
-  // A block value is written with its key, through the end of the old value's last line, indented as the
-  // old one was: the column of its first item (`- a`) or key, and a sequence at column 0 not indented at all.
-  const column = from - lineStart(yaml, from);
-  const indent = block && column > 0 ? { indent: column, indentSeq: true } : { indentSeq: column > 0 };
-  return yaml.slice(0, pair.key.range[0]) + pairText(key, node, indent) + yaml.slice(lastLineEnd(yaml, to));
+/** Quotings a new string can take over from the one it replaces; a block scalar spans lines. */
+const ONE_LINE_STRINGS = ['PLAIN', 'QUOTE_SINGLE', 'QUOTE_DOUBLE'];
+
+/**
+ * A value as text on one line: lists and mappings in flow style, a string
+ * with a line break double-quoted, a string replacing a string quoted as
+ * that one was.
+ */
+function oneLine(node: Node, old: Node, key: string): string {
+  if (isCollection(node)) node.flow = true;
+  visit(node, {
+    Scalar: (_, scalar) => {
+      if (typeof scalar.value === 'string' && scalar.value.includes('\n')) scalar.type = 'QUOTE_DOUBLE';
+    },
+  });
+  if (isScalar(node) && isScalar(old) && typeof node.value === 'string' && typeof old.value === 'string')
+    if (!node.value.includes('\n') && ONE_LINE_STRINGS.includes(old.type ?? '')) node.type = old.type;
+  const text = new Document(node).toString(STYLE).replace(/\n$/, '');
+  if (text.includes('\n')) throw new Error(`marker: the value for \`${key}\` does not fit on one line`);
+  return text;
 }
 
 /**
@@ -225,12 +276,13 @@ function replaceValue(yaml: string, doc: Document, pair: Pair, key: string, valu
  * ends at `colonEnd`; what the line holds from `rest` on may only be a
  * comment, which stays after the value.
  */
-function afterColon(yaml: string, key: string, colonEnd: number, rest: number, inline: string): string {
+function onKeyLine(yaml: string, key: string, colonEnd: number, rest: number, inline: string): string {
   const end = lineBreakAt(yaml, rest);
   const comment = yaml.slice(rest, end).trim();
   if (comment !== '' && !comment.startsWith('#'))
     throw new Error(`marker: \`${key}\` holds \`${comment}\` on its line besides a value; set it by hand`);
-  return yaml.slice(0, colonEnd) + ` ${inline}${comment === '' ? '' : ` ${comment}`}` + yaml.slice(end);
+  const value = comment === '' ? inline : `${inline} ${comment}`;
+  return `${yaml.slice(0, colonEnd)} ${value}${yaml.slice(end)}`;
 }
 
 /** `key: value` and a line break. */
