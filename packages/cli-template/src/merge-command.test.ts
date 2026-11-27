@@ -1,0 +1,96 @@
+// `plx-template merge` as a process: two renders and a directory with local
+// edits, in a scratch directory. The renders are written by hand, with the
+// policies file beside each that `render` writes (render-command.test.ts).
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { plx, put, read, type Scratch, scratch } from './testing/run.ts';
+import type { Listing } from './testing/trees.ts';
+
+/** The policies file beside a render, for the paths it holds: all `merge` but those named born-once. */
+function policies(paths: readonly string[], bornOnce: readonly string[] = []): string {
+  const files = Object.fromEntries(
+    paths.map((p) => [p, { template: 'basket', policy: bornOnce.includes(p) ? 'born-once' : 'merge' }]),
+  );
+  return JSON.stringify({ files });
+}
+
+/** A scratch directory with the renders `old` and `new` and the directory `target`. */
+function withDirectories(
+  old: Listing,
+  next: Listing,
+  target: Listing,
+  body: (s: Scratch) => void,
+  bornOnce: readonly string[] = [],
+): void {
+  const s = scratch();
+  try {
+    put(s.path('old'), old);
+    put(s.path('new'), next);
+    put(s.path('target'), target);
+    put(s.dir, {
+      'old.plx-template.json': policies(Object.keys(old), bornOnce),
+      'new.plx-template.json': policies(Object.keys(next), bornOnce),
+    });
+    body(s);
+  } finally {
+    s.remove();
+  }
+}
+
+const OLD = {
+  'clean.txt': 'a\nb\nc\n',
+  'conflict.txt': 'x\n',
+  'removed.txt': 'gone\n',
+  'edited-removed.txt': 'gone too\n',
+  'born.md': 'first\n',
+  'bin/tool.sh': '#!/bin/sh\necho 1\n',
+};
+const NEW = {
+  'clean.txt': 'a\nb\nc\nd\n',
+  'conflict.txt': 'y\n',
+  'added.txt': 'new\n',
+  'born.md': 'second\n',
+  'bin/tool.sh': { text: '#!/bin/sh\necho 1\n', mode: 0o755 },
+};
+const TARGET = {
+  'clean.txt': 'A\nb\nc\n',
+  'conflict.txt': 'z\n',
+  'removed.txt': 'gone\n',
+  'edited-removed.txt': 'gone too, edited\n',
+  'born.md': 'mine\n',
+  'bin/tool.sh': '#!/bin/sh\necho 1\n',
+  'mine.txt': "not the template's\n",
+};
+
+test('merge applies what the template changed to the directory, and reports each path', () => {
+  withDirectories(
+    OLD,
+    NEW,
+    TARGET,
+    (s) => {
+      const run = plx(['merge', s.path('old'), s.path('new'), s.path('target')]);
+      assert.equal(run.code, 0, run.stderr);
+      assert.deepEqual(JSON.parse(run.stdout), {
+        report: [
+          { path: 'added.txt', outcome: 'added' },
+          { path: 'bin/tool.sh', outcome: 'clean' },
+          { path: 'born.md', outcome: 'kept' },
+          { path: 'clean.txt', outcome: 'clean' },
+          { path: 'conflict.txt', outcome: 'conflicted' },
+          { path: 'edited-removed.txt', outcome: 'conflicted' },
+          { path: 'removed.txt', outcome: 'deleted' },
+        ],
+      });
+      assert.deepEqual(read(s.path('target')), {
+        'added.txt': 'new\n',
+        'bin/tool.sh': { text: '#!/bin/sh\necho 1\n', mode: 0o755 },
+        'born.md': 'mine\n',
+        'clean.txt': 'A\nb\nc\nd\n',
+        'conflict.txt': '<<<<<<< current\nz\n=======\ny\n>>>>>>> new render\n',
+        'edited-removed.txt': 'gone too, edited\n',
+        'mine.txt': "not the template's\n",
+      });
+    },
+    ['born.md'],
+  );
+});
