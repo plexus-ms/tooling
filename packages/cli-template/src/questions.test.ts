@@ -48,3 +48,76 @@ test('a default that uses a variable nothing supplies is an error naming its que
   assert.equal(result.errors[0]?.template, 'basket');
   assert.match(result.errors[0]?.message ?? '', /fruit/);
 });
+
+// Ported from tests/test_copy.py::test_validate_init_data_with_skipped_question.
+test('a question whose when is false is skipped, and the question its when selects applies', () => {
+  const questions = `kind:
+  help: What kind do you need?
+  choices: [foo, bar]
+testbar:
+  when: "{{ kind == 'bar' }}"
+  type: str
+  help: any string bar?
+testfoo:
+  when: "{{ kind == 'foo' }}"
+  type: str
+  help: any string foo?`;
+  const result = basket(
+    questions,
+    { kind: 'foo', testfoo: 'helloworld' },
+    "{{ kind }}|{{ testbar | default('') }}|{{ testfoo }}",
+  );
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, { kind: 'foo', testfoo: 'helloworld' });
+  assert.equal(result.out, 'foo||helloworld');
+});
+
+// Ported from tests/test_complex_questions.py::test_omit_answer_for_skipped_question, with the
+// answers file replaced by the answers `render` reports.
+test('a skipped question is left out of the answers, and its default, else its given answer, is what the files see', () => {
+  const result = basket(
+    'disabled:\n  type: str\n  when: false\ndisabled_with_default:\n  type: str\n  default: hello\n  when: false',
+    { disabled: 'bye' },
+    '{{ disabled }} {{ disabled_with_default }}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, {});
+  assert.equal(result.out, 'bye hello');
+});
+
+// Adapted from tests/test_copy.py::test_skipped_question_with_unset_default_value: copier marks a
+// skipped question without a default by `default: "{{ UNSET }}"`; a manifest has no default instead.
+test('a skipped question without a default is absent, and its validator is not rendered', () => {
+  const result = basket(
+    'q:\n  type: str\n  when: false\n  validator: "{% if not q %}Invalid{% endif %}"',
+    {},
+    "{{ q | default('<undefined>') }}",
+  );
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, {});
+  assert.equal(result.out, '<undefined>');
+});
+
+// Ported from tests/test_updatediff.py::test_conditional_computed_value, the copy and update steps
+// as two renders, and `False False` as an absent `second`, since undefined is strict here.
+test('a question whose when and default read an earlier answer applies with it and vanishes without it', () => {
+  const questions = 'first:\n  type: bool\nsecond:\n  type: bool\n  default: "{{ first }}"\n  when: "{{ first }}"';
+  const body = "{{ first }} {{ second | default('-') }}";
+  const on = basket(questions, { first: true }, body);
+  assert.deepEqual(on.answers, { first: true, second: true });
+  assert.equal(on.out, 'True True');
+  const off = basket(questions, { first: false }, body);
+  assert.deepEqual(off.errors, []);
+  assert.deepEqual(off.answers, { first: false });
+  assert.equal(off.out, 'False -');
+});
+
+// Ported from tests/test_updatediff.py::test_update_dont_validate_computed_value.
+test('a validator is not rendered for a skipped question', () => {
+  const result = basket(
+    'computed:\n  type: str\n  default: foo\n  when: false\n  validator: "{{ undefined_thing }}"',
+    {},
+  );
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, {});
+});
