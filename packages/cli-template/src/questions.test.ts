@@ -41,6 +41,10 @@ test('a default may be Jinja over the answers before it, given or defaulted', ()
   assert.equal(result.out, 'PEAR basket!');
 });
 
+// Adapted from tests/test_jinja2_undefined.py::test_default, test_undefined and
+// test_strictundefined_undefined_variable: copier's default Jinja writes an empty string for an
+// undefined variable, and its StrictUndefined fails; the engine always fails. test_invalid_value
+// tests copier's `_envops`, which the engine has no counterpart of.
 test('a default that uses a variable nothing supplies is an error naming its question', () => {
   const result = basket('label:\n  default: "{{ fruit }} basket"', {});
   assert.equal(result.errors.length, 1);
@@ -74,7 +78,7 @@ testfoo:
 
 // Ported from tests/test_complex_questions.py::test_omit_answer_for_skipped_question, with the
 // answers file replaced by the answers `render` reports.
-test('a skipped question is left out of the answers, and its default, else its given answer, is what the files see', () => {
+test('a skipped question is left out of the answers, and its given answer, else its default, is what the files see', () => {
   const result = basket(
     'disabled:\n  type: str\n  when: false\ndisabled_with_default:\n  type: str\n  default: hello\n  when: false',
     { disabled: 'bye' },
@@ -105,6 +109,7 @@ test('a question whose when and default read an earlier answer applies with it a
   const questions = 'first:\n  type: bool\nsecond:\n  type: bool\n  default: "{{ first }}"\n  when: "{{ first }}"';
   const body = "{{ first }} {{ second | default('-') }}";
   const on = basket(questions, { first: true }, body);
+  assert.deepEqual(on.errors, []);
   assert.deepEqual(on.answers, { first: true, second: true });
   assert.equal(on.out, 'True True');
   const off = basket(questions, { first: false }, body);
@@ -822,4 +827,81 @@ test('a question named like an inherited property has no answer until one is giv
 test('a default that is a list renders each item, and the other items stay as they are', () => {
   const questions = 'a:\n  default: x\nq:\n  type: yaml\n  default: ["{{ a }}-1", 2, true, "plain"]';
   assert.deepEqual(basket(questions, {}).answers, { a: 'x', q: ['x-1', 2, true, 'plain'] });
+});
+
+// Adapted from tests/test_jinja2_undefined.py (see the default's test above): an undefined variable in
+// a `when`, a validator or choices fails where copier's default Jinja renders an empty string.
+test('a when, a validator or choices that use an undefined variable are an error naming the question', () => {
+  for (const [field, source] of [
+    ['when', '"{{ nothing }}"'],
+    ['validator', '"{{ nothing }}"'],
+    ['choices', '"[{{ nothing }}]"'],
+  ] as const) {
+    const result = basket(`q:\n  default: x\n  ${field}: ${source}`, {});
+    assert.equal(result.errors.length, 1, field);
+    assert.equal(result.errors[0]?.question, 'q', field);
+    assert.match(result.errors[0]?.message ?? '', new RegExp(field), field);
+  }
+});
+
+// Ported from copier/_main.py `_ask`: the init branch validates a given answer whatever `when` says,
+// once the question has a default; without one copier skips the question before it looks at the answer.
+test('a given answer for a skipped question with a default is cast, checked against choices and validated', () => {
+  const base = 'q:\n  type: int\n  default: 1\n  when: false\n';
+  assert.deepEqual(basket(base, { q: '5' }).answers, {});
+  assert.equal(basket(`${base}  validator: "{% if q > 3 %}too big{% endif %}"`, { q: '5' }).errors.length, 1);
+  assert.deepEqual(basket(`${base}  validator: "{% if q > 3 %}too big{% endif %}"`, { q: '2' }).errors, []);
+  assert.equal(basket(`${base}  choices: [1, 2]`, { q: '5' }).errors.length, 1);
+  assert.equal(basket(base, { q: 'five' }).errors.length, 1);
+});
+
+test('a skipped question without a default takes its given answer as it is, uncast and unchecked', () => {
+  const base = 'q:\n  type: int\n  when: false\n  choices: [1, 2]\n  validator: "no"';
+  const result = basket(base, { q: 'five' }, '{{ q }}');
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, {});
+  assert.equal(result.out, 'five');
+});
+
+// Ported from copier's `_ask`, where `answers.combined` holds every given answer from the start: a
+// question sees the raw given answers of the template's other questions, later ones included, and
+// each question's resolved answer replaces its raw one for the questions after it.
+test('a default, a when, choices and a validator see the raw given answers of the later questions', () => {
+  const questions = `a:
+  default: "[{{ b }}]"
+c:
+  default: x
+  when: "{{ b == ' 5 ' }}"
+d:
+  default: x
+  choices: "[x, '{{ b }}']"
+e:
+  default: x
+  validator: "{% if b != ' 5 ' %}raw {{ b }}{% endif %}"
+b:
+  type: int
+  default: 1`;
+  const result = basket(questions, { b: ' 5 ' }, '{{ b }}');
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, { a: '[ 5 ]', c: 'x', d: 'x', e: 'x', b: 5 });
+});
+
+test('a question sees the cast answer of an earlier question, not its raw given answer', () => {
+  const questions = 'b:\n  type: int\nc:\n  type: int\n  default: "{{ b + 1 }}"';
+  assert.deepEqual(basket(questions, { b: '5' }).answers, { b: 5, c: 6 });
+});
+
+test('a question does not see the default of a later question, nor a given answer that no question of its template owns', () => {
+  const later = basket('a:\n  default: "{{ b }}"\nb:\n  default: y', {});
+  assert.equal(later.errors.length, 1);
+  assert.equal(later.errors[0]?.question, 'a');
+  const stranger = basket('a:\n  default: "{{ other }}"', { other: 'z' });
+  assert.equal(stranger.errors.length, 1);
+  assert.deepEqual(stranger.unused, ['other']);
+});
+
+test('a validator that fails to render names its field, as a default and a when do', () => {
+  const result = basket('q:\n  default: x\n  validator: "{% if %}"', {});
+  assert.match(result.errors[0]?.message ?? '', /^validator `\{% if %\}`: /);
+  assert.match(basket('q:\n  when: "{% if %}"', {}).errors[0]?.message ?? '', /^when `/);
 });
