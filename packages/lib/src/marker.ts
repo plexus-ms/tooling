@@ -24,7 +24,7 @@
 // sets, so that comments, order, quoting and blank lines, and the body, stay
 // as they were.
 import { isDeepStrictEqual } from 'node:util';
-import { Document, isCollection, isMap, isNode, isScalar, parse, parseDocument } from 'yaml';
+import { Document, isCollection, isMap, isNode, isScalar, type Node, parse, parseDocument, type YAMLMap } from 'yaml';
 import { isPlexusVersion } from './version.ts';
 
 export interface Declaration {
@@ -165,28 +165,39 @@ function setKey(yaml: string, key: string, value: unknown): string {
   if (map !== null && !isMap(map)) throw new Error('frontmatter is not a mapping');
   if (map?.flow) throw new Error('frontmatter is a flow mapping (`{…}`); write it as a block mapping');
   const pairs = map?.items ?? [];
-  const nameOf = (pair: (typeof pairs)[number]) => (isScalar(pair.key) ? String(pair.key.value) : undefined);
-  const node = doc.createNode(value);
   const pair = pairs.find((p) => nameOf(p) === key);
+  return pair ? replaceValue(yaml, doc, pair, key, value) : insertKey(yaml, pairs, key, doc.createNode(value));
+}
 
-  if (!pair) {
-    if (isCollection(node)) node.flow = true;
-    const rank = RESERVED_KEYS.indexOf(key as (typeof RESERVED_KEYS)[number]);
-    const next =
-      rank === -1
-        ? undefined
-        : pairs.find((p) => {
-            const other = RESERVED_KEYS.indexOf(nameOf(p) as (typeof RESERVED_KEYS)[number]);
-            return other === -1 || other > rank;
-          });
-    const at = isNode(next?.key) && next.key.range ? lineStart(yaml, next.key.range[0]) : yaml.length;
-    return yaml.slice(0, at) + pairText(key, node) + yaml.slice(at);
-  }
+type Pair = NonNullable<YAMLMap['items'][number]>;
 
+const nameOf = (pair: Pair): string | undefined => (isScalar(pair.key) ? String(pair.key.value) : undefined);
+
+/**
+ * A key the frontmatter lacks, on a line of its own: a reserved key before
+ * the first key that is an answer or a later reserved key, an answer last.
+ */
+function insertKey(yaml: string, pairs: readonly Pair[], key: string, node: Node): string {
+  if (isCollection(node)) node.flow = true;
+  const rank = RESERVED_KEYS.indexOf(key as (typeof RESERVED_KEYS)[number]);
+  const next =
+    rank === -1
+      ? undefined
+      : pairs.find((p) => {
+          const other = RESERVED_KEYS.indexOf(nameOf(p) as (typeof RESERVED_KEYS)[number]);
+          return other === -1 || other > rank;
+        });
+  const at = isNode(next?.key) && next.key.range ? lineStart(yaml, next.key.range[0]) : yaml.length;
+  return yaml.slice(0, at) + pairText(key, node) + yaml.slice(at);
+}
+
+/** The value of a key the frontmatter has, in the style of the old one; the text as it is when already so. */
+function replaceValue(yaml: string, doc: Document, pair: Pair, key: string, value: unknown): string {
   const old = pair.value;
   if (!isNode(old) || !old.range || !isNode(pair.key) || !pair.key.range)
     throw new Error(`marker: \`${key}\` has no value plx can replace`);
   if (isDeepStrictEqual(old.toJSON(), value)) return yaml;
+  const node = doc.createNode(value);
   const block = isCollection(old) && !old.flow;
   if (isCollection(node)) node.flow = !block;
   if (isScalar(node) && isScalar(old) && typeof node.value === 'string' && typeof old.value === 'string')
@@ -194,12 +205,14 @@ function setKey(yaml: string, key: string, value: unknown): string {
 
   const inline = new Document(node).toString(STYLE).replace(/\n$/, '');
   const [from, to] = old.range;
+  // A key written without a value (`key:`) has an empty range right after the colon: a space goes between.
   if (!block && !inline.includes('\n')) return yaml.slice(0, from) + (from === to ? ' ' : '') + inline + yaml.slice(to);
-  // A block value is written with its key, indented as the old one was, through the end of its last line.
+
+  // A block value is written with its key, through the end of the old value's last line, indented as the
+  // old one was: the column of its first item (`- a`) or key, and a sequence at column 0 not indented at all.
   const column = from - lineStart(yaml, from);
   const indent = block && column > 0 ? { indent: column, indentSeq: true } : { indentSeq: column > 0 };
-  const end = yaml[to - 1] === '\n' ? to : yaml.indexOf('\n', to) + 1;
-  return yaml.slice(0, pair.key.range[0]) + pairText(key, node, indent) + yaml.slice(end);
+  return yaml.slice(0, pair.key.range[0]) + pairText(key, node, indent) + yaml.slice(lastLineEnd(yaml, to));
 }
 
 /** `key: value` and a line break. */
@@ -209,7 +222,19 @@ function pairText(key: string, node: unknown, options: { indent?: number; indent
   return doc.toString({ ...STYLE, ...options });
 }
 
+/** Where the line holding `at` starts. */
 const lineStart = (text: string, at: number): number => text.lastIndexOf('\n', at - 1) + 1;
+
+/**
+ * Where the line that a range ending at `to` ends on is over, past its line
+ * break: `to` itself when the range took the line break (a block value
+ * does), else past the next one, or the end of a text that has none.
+ */
+function lastLineEnd(text: string, to: number): number {
+  if (text[to - 1] === '\n') return to;
+  const lineBreak = text.indexOf('\n', to);
+  return lineBreak === -1 ? text.length : lineBreak + 1;
+}
 
 /**
  * Whether the body gives a reason for a deviation (§ 1.4 PLX): a list item
