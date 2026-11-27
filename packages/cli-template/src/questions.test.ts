@@ -122,3 +122,50 @@ test('a validator is not rendered for a skipped question', () => {
   assert.deepEqual(result.errors, []);
   assert.deepEqual(result.answers, {});
 });
+
+// Ported from tests/test_copy.py::test_required_question_without_data and
+// test_required_choice_question_without_data (a required question is an error, with or without choices).
+for (const [type, choices] of [
+  ['str', '[one, two, three]'],
+  ['int', '[1, 2, 3]'],
+  ['float', '[1.0, 2.0, 3.0]'],
+  ['bool', undefined],
+  ['json', '["[1]", "[2]", "[3]"]'],
+  ['yaml', '["- 1", "- 2", "- 3"]'],
+] as const) {
+  test(`a ${type} question with ${choices === undefined ? 'no choices' : 'choices'}, no answer and no default is an error`, () => {
+    const result = basket(`question:\n  type: ${type}${choices === undefined ? '' : `\n  choices: ${choices}`}`, {});
+    assert.equal(result.errors.length, 1);
+    assert.equal(result.errors[0]?.question, 'question');
+    assert.equal(result.errors[0]?.template, 'basket');
+    assert.match(result.errors[0]?.message ?? '', /no answer and no default/);
+    assert.deepEqual(listing(result.tree), {});
+  });
+}
+
+test('every question without an answer and without a default is an error with its help, not only the first', () => {
+  const questions = `fruit:
+  help: Which fruit is in the basket?
+size:
+  type: int
+  default: 3
+colour:
+  help: What colour is the basket?
+shape:
+ripe:
+  when: false
+  help: Is it ripe?
+weave:
+  default: null
+  help: What is it woven of?`;
+  const result = basket(questions, {});
+  assert.deepEqual(
+    result.errors.map(({ question, message }) => ({ question, message })),
+    [
+      { question: 'fruit', message: 'no answer and no default: Which fruit is in the basket?' },
+      { question: 'colour', message: 'no answer and no default: What colour is the basket?' },
+      { question: 'shape', message: 'no answer and no default' },
+    ],
+  );
+  assert.deepEqual(result.answers, { size: 3, weave: null });
+});
