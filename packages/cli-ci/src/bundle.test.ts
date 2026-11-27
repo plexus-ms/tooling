@@ -5,7 +5,7 @@
 // another build may be writing at the same time.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -13,7 +13,9 @@ import { after, before, test } from 'node:test';
 let scratch = '';
 before(() => {
   scratch = mkdtempSync(join(tmpdir(), 'plx-ci-bundle-'));
-  execFileSync(process.execPath, ['build.js', join(scratch, 'dist')], { cwd: join(import.meta.dirname, '..') });
+  const pkg = join(import.meta.dirname, '..');
+  copyFileSync(join(pkg, 'package.json'), join(scratch, 'package.json'));
+  execFileSync(process.execPath, ['build.js', join(scratch, 'dist')], { cwd: pkg });
 });
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
