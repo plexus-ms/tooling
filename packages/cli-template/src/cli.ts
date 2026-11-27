@@ -164,6 +164,7 @@ markers; a file the template removed and the user edited is kept.
 Standard output is one JSON object:
   report    one entry per path touched: { path, outcome }, in path order, the
             outcome one of clean, added, deleted, conflicted or kept
+  errors    instead of report, where the inputs are wrong: { message, path? }
 
 Exit codes: 0 merged, also when conflicts are left; 1 failed; 2 usage error;
 3 errors in the inputs, such as a missing policies file, listed under errors
