@@ -437,3 +437,45 @@ nulls:
   assert.deepEqual(picked.answers, { postgres: null, nulls: ['one', 2, -3] });
   assert.equal(basket(questions, { postgres: 11, nulls: 'null' }).errors.length, 1);
 });
+
+// Ported from tests/test_copy.py::test_validate_default_value (the str validator case) and
+// tests/test_complex_questions.py's `your_age` validator.
+test('a validator is rendered with the answer, and its non-empty output is the error', () => {
+  const questions = 'age:\n  type: int\n  validator: |-\n    {% if age <= 0 %}\n      Must be +\n    {% endif %}';
+  assert.deepEqual(basket(questions, { age: 22 }).errors, []);
+  const result = basket(questions, { age: 0 });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.question, 'age');
+  assert.match(result.errors[0]?.message ?? '', /Must be \+/);
+});
+
+test('a validator checks a default as it checks a given answer', () => {
+  const questions = 'q:\n  type: str\n  default: ""\n  validator: "{% if q | length < 3 %}too short{% endif %}"';
+  assert.match(basket(questions, {}).errors[0]?.message ?? '', /too short/);
+  assert.deepEqual(basket(questions, { q: 'long' }).errors, []);
+});
+
+test('a validator sees the cast answer and the answers before its question, and not the questions after it', () => {
+  const questions = `low:
+  type: int
+  default: 1
+high:
+  type: int
+  validator: "{% if high <= low %}{{ high }} is not above {{ low }}{% endif %}"
+after:
+  default: x`;
+  assert.deepEqual(basket(questions, { high: '5' }).errors, []);
+  assert.match(basket(questions, { high: '1' }).errors[0]?.message ?? '', /1 is not above 1/);
+  const unknown = basket('q:\n  default: x\n  validator: "{{ later }}"\nlater:\n  default: y', {});
+  assert.equal(unknown.errors.length, 1);
+});
+
+test('a validator that renders only whitespace accepts the answer', () => {
+  assert.deepEqual(basket('q:\n  default: x\n  validator: "  \\n{% if false %}no{% endif %}\\n"', {}).errors, []);
+});
+
+test('a validator that fails to render is an error with the failure as its message', () => {
+  const result = basket('q:\n  default: x\n  validator: "{% if %}"', {});
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.question, 'q');
+});
