@@ -216,3 +216,11 @@ test('setMarkerKeys refuses a value with a tag of its own, and a frontmatter tha
   assert.equal(setMarkerKeys('---\na: [!!str 1]\n---\n', { a: [2] }), '---\na: [2]\n---\n', 'a tag inside the value');
   assert.throws(() => setMarkerKeys('---\na: 1\n...\n---\n', { b: 2 }), /`\.\.\.`/);
 });
+
+test('setMarkerKeys writes a string that would end a YAML document at the top level as a value', () => {
+  for (const value of ['---', '...']) {
+    const written = setMarkerKeys('---\na: 1\n---\n', { a: value });
+    assert.equal(written, `---\na: ${value}\n---\n`);
+    assert.equal(parseMarkerConfig(written).answers.a, value);
+  }
+});
