@@ -1,11 +1,13 @@
 // @plexus-ms/cli-template: the engine of plx-template as a library, a generic
 // alternative to copier for several templates in one directory. It knows
 // templates, answers, rendering and three-way merging, and nothing of who
-// calls it: it imports no Plexus package (boundary.test.ts), reads and writes
-// no directory, runs no command and keeps no state.
+// calls it: it imports no Plexus package (boundary.test.ts) and keeps no state.
 //
-// Two functions over in-memory trees, whose types and their meaning are in
-// types.ts: `render` and `merge`.
+// The core is two functions over in-memory trees, whose types and their
+// meaning are in types.ts: `render` and `merge`. It reads and writes no
+// directory and runs no command (boundary.test.ts). `gitMergeFile`, the real
+// merge of one file that the caller hands to `merge`, is the one function
+// that does: it writes temporary files and runs git.
 export { gitMergeFile } from './git-merge-file.ts';
 export { merge } from './merge.ts';
 export { render } from './render.ts';
