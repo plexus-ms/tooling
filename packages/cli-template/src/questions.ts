@@ -88,8 +88,6 @@
 //   (fullwidth digits, U+0085, a byte order mark) read differently in the `bool`
 //   cast.
 // - An undefined variable is an error, as said above.
-//
-// Answers that no question owns and no template reads are unused.
 import { isDeepStrictEqual } from 'node:util';
 import { isMap, isNode, isSeq, parseDocument, parse as parseYaml } from 'yaml';
 import { messageOf } from './errors.ts';
