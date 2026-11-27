@@ -45,7 +45,7 @@ import { REQUIREMENT_NAME } from './lints.ts';
 import { type Declaration, MARKER_FILE, reasonGiven } from './marker.ts';
 import { type Directory, hasMarker, isOperations, type Kind } from './model.ts';
 import { appsOf, directoryAt, overview } from './overview.ts';
-import type { MarkerSite } from './sites.ts';
+import { type MarkerSite, siteAnswers } from './sites.ts';
 import { bundledIndex } from './standardIndex.ts';
 
 export type Profile = 'stateless' | 'stateful';
@@ -336,17 +336,39 @@ export const CHECKS: Readonly<Record<string, RepoCheck | AppCheck | UnitCheck>> 
   'PLX-App/Stateful/Seed': { binds: 'app', profile: 'stateful', check: seed },
 };
 
-/** What the marker as configuration must meet; each line is a finding of no requirement. */
+/**
+ * What the markers as configuration must meet (sites.ts): the root's `version`
+ * is the `plx` pin's, no other marker has one, and no key is answered in two
+ * markers. A marker that cannot be read as configuration is named, except the
+ * root one when PLX-Repo/Marker reports it already. Each line is a finding of
+ * no requirement.
+ */
 function markerConfig(repo: RepoFacts): string[] {
+  const sites = repo.sites ?? [];
+  const problems = sites
+    .filter((s) => s.problem !== undefined && !(s.dir === '.' && repo.marker?.problem))
+    .map((s) => `${join(s.dir, MARKER_FILE)}: ${s.problem}`);
+  const rootRead = sites.some((s) => s.dir === '.' && s.config);
+  for (const { dir, config } of sites)
+    if (rootRead && dir !== '.' && config)
+      try {
+        siteAnswers(sites, dir);
+      } catch (error) {
+        problems.push((error as Error).message);
+      }
+  return [...versionOfRoot(repo), ...problems];
+}
+
+function versionOfRoot(repo: RepoFacts): string[] {
   const root = repo.sites?.find((s) => s.dir === '.')?.config;
   if (!root) return [];
-  const rendered = repo.sites?.some((s) => s.config?.templates !== undefined);
   if (root.version === undefined)
-    return rendered ? [`${MARKER_FILE} lists \`templates\` but sets no \`version\`; \`plx update\` writes it`] : [];
+    return repo.sites?.some((s) => s.config?.templates !== undefined)
+      ? [`${MARKER_FILE} lists \`templates\` but sets no \`version\`; \`plx update\` writes it`]
+      : [];
   const at = `\`version\` in ${MARKER_FILE} is ${root.version}, but mise.toml pins`;
   if (repo.pin === undefined) return [`${at} no plx`];
-  if (repo.pin !== root.version) return [`${at} plx ${repo.pin}; only \`plx update\` moves it`];
-  return [];
+  return repo.pin === root.version ? [] : [`${at} plx ${repo.pin}; only \`plx update\` moves it`];
 }
 
 // --- the diagnosis --------------------------------------------------------------
