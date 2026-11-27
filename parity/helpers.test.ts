@@ -109,10 +109,25 @@ test('a difference names the path and what differs, and says which side holds it
     'engine-only.txt': 'x',
   });
   assert.deepEqual(diffTrees(copier, engine), [
-    'bytes.txt: bytes differ, first at line 2: copier "two", engine "TWO"',
+    'bytes.txt: bytes differ, first at line 2: copier "two", the engine "TWO"',
     'copier-only.txt: only copier writes it',
     'engine-only.txt: only the engine writes it',
-    'exec.sh: executable bit differs: copier true, engine false',
+    'exec.sh: executable bit differs: copier true, the engine false',
+  ]);
+});
+
+test('the two sides can be named otherwise, in every kind of difference', () => {
+  const left = tree({ 'a.txt': 'x', 'both.txt': 'one', 'run.sh': { text: 'x', mode: REGULAR | 0o755 }, d: 'x' });
+  const right = new Map([
+    ...tree({ 'b.txt': 'x', 'both.txt': 'two', 'run.sh': 'x' }),
+    ['d', { bytes: new Uint8Array(), mode: 0o040000 }],
+  ]);
+  assert.deepEqual(diffTrees(left, right, { copier: 'the template repo', engine: 'tooling' }), [
+    'a.txt: only the template repo writes it',
+    'b.txt: only tooling writes it',
+    'both.txt: bytes differ, first at line 1: the template repo "one", tooling "two"',
+    'd: the template repo has a file, tooling a directory',
+    'run.sh: executable bit differs: the template repo true, tooling false',
   ]);
 });
 
