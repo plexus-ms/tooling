@@ -17,9 +17,11 @@
 //
 // The merge is reported conflicted when the result holds the opening or the
 // closing label line exactly, `\r\n` line endings included: never by a bare
-// `<<<<<<<`, which a file may hold for reasons of its own. A file that already
-// holds one of the two exact label lines is reported conflicted however it
-// merges; the labels are chosen to make that unlikely. git's exit code is the
+// `<<<<<<<`, which a file may hold for reasons of its own. A current side that
+// already holds one of the two exact label lines, a conflict left by an earlier
+// merge, is not merged again: git would nest a second pair of markers in the
+// first. It is returned as it is, conflicted, and git is not run; the labels
+// are chosen to make a file that holds such a line for other reasons unlikely. git's exit code is the
 // number of conflicts, which serves only to tell a failed run (above 127) from
 // a merge.
 //
@@ -49,6 +51,7 @@ const MARKERS = new Set([`<<<<<<< ${LABELS.current}`, `>>>>>>> ${LABELS.new}`]);
 
 /** The three-way merge of one file by `git merge-file`. */
 export async function gitMergeFile(sides: FileSides): Promise<MergedFile> {
+  if (conflicted(sides.current)) return { bytes: sides.current, conflicted: true };
   const dir = await mkdtemp(join(tmpdir(), 'merge-file-'));
   try {
     await Promise.all([
