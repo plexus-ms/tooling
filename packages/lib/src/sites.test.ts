@@ -103,6 +103,8 @@ test('findSites reads the markers of a git ref, as committed there', async () =>
     'what is committed, not the working tree',
   );
   await assert.rejects(findSites(ctx, repo, 'no-such-ref'));
+  await assert.rejects(findSites(ctx, repo, '--help'), /--help/, 'a ref is never taken for an option');
+  await assert.rejects(findSites(ctx, repo, '-x'), /-x/);
 });
 
 test('findSites gives a nested marker with a version, or one that does not parse, a problem', async () => {
