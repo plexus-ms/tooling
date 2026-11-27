@@ -1,8 +1,9 @@
-// Line-based edits of a page's YAML frontmatter: the marker's `plexus`, the
-// map's `version` and `timestamp`. Pages are authored by
-// hand, so an edit replaces or inserts one line and leaves everything else,
-// comments and order included, exactly as written; re-serialising the YAML
-// would not. Reading frontmatter is marker.ts's `splitFrontmatter`.
+// Line-based edits of a page's YAML frontmatter: the map's `version` and
+// `timestamp`, raw one-line values. Pages are authored by hand, so an edit
+// replaces or inserts one line and leaves everything else, comments and
+// order included, exactly as written; re-serialising the YAML would not.
+// Reading frontmatter is marker.ts's `splitFrontmatter`, and a marker's keys
+// are written by its `setMarkerKeys`.
 
 /** The index range of the frontmatter's inner lines, or undefined when the page has none. */
 function frontmatterLines(lines: string[]): { start: number; end: number } | undefined {
