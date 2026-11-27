@@ -122,9 +122,8 @@ export function renderFiles(template: Template, context: Context, errors: Render
     const known = directories.get(source);
     if (known !== undefined) return known;
     const located = locate(directoryOf(parentOf(source)), nameOf(source), source);
-    const here = typeof located !== 'string' && located.path === '' ? 'skipped' : located;
-    directories.set(source, here);
-    return here;
+    directories.set(source, located);
+    return located;
   };
 
   for (const [source, entry] of template.files) {
