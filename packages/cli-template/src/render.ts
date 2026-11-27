@@ -4,6 +4,10 @@
 // rendered with those answers (files.ts). Every step adds what it finds wrong
 // to one list of errors and carries on, so that one render reports them all;
 // a render with errors returns no files.
+//
+// Several templates are rendered one after the other into the same tree, each
+// with the answers to its own questions only. No given answer is reported as
+// unused yet.
 import { renderFiles } from './files.ts';
 import { readTemplate } from './manifest.ts';
 import { resolveAnswers } from './questions.ts';
@@ -16,8 +20,8 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   const files = new Map<string, Origin>();
   const birth: BirthCommand[] = [];
   const answers: Record<string, unknown> = {};
-  templates.forEach((source, i) => {
-    const template = readTemplate(source, i + 1, errors);
+  templates.forEach((templateTree, i) => {
+    const template = readTemplate(templateTree, i + 1, errors);
     if (!template) return;
     const { name } = template.manifest;
     const own = resolveAnswers(template.manifest, given, errors);
