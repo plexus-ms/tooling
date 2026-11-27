@@ -6,8 +6,10 @@ import { type Compose, type Mapping, parseCompose } from './compose.ts';
 import { Context } from './context.ts';
 import { type AppFacts, CHECKS, diagnose, examine, type Facts, type RepoFacts } from './doctor.ts';
 import { REQUIREMENT_NAME } from './lints.ts';
+import type { MarkerConfig } from './marker.ts';
 import { unitsOf } from './model.ts';
 import { overview } from './overview.ts';
+import type { MarkerSite } from './sites.ts';
 import { type FakeExec, fakeIo, link, type Tree, UNREADABLE } from './testing/fakeIo.ts';
 import { UsageError } from './version.ts';
 
@@ -991,6 +993,55 @@ test('PLX-App/NoCommittedValues: a tracked .env is one finding, on the app that 
     ],
   );
   assert.deepEqual(findings(repo({ tracked: ['.env'], apps: [] })), [], 'a repo with no app is no source repo');
+});
+
+// --- the marker as configuration -----------------------------------------------------------
+
+const config = (over: Partial<MarkerConfig> = {}): MarkerConfig => ({ deviations: [], answers: {}, ...over });
+const site = (dir: string, over: Partial<MarkerConfig> = {}): MarkerSite => ({ dir, config: config(over) });
+
+/** A repo that has crossed over: its root marker lists `templates` and states the version, the pin names it. */
+const crossed = (sites: MarkerSite[], over: Partial<RepoFacts> = {}): RepoFacts =>
+  repo({ pin: '0.131.0', sites, ...over });
+
+const ROOT = site('.', { version: '0.131.0', templates: ['repo-turbo'] });
+
+test('a repo whose root marker states the version its plx pin names passes', () => {
+  assert.deepEqual(findings(crossed([ROOT])), []);
+});
+
+test('the root marker names a version other than the plx pin: a finding of no requirement, no deviation silences', () => {
+  const stale = crossed([site('.', { version: '0.130.0', templates: ['repo-turbo'] })]);
+  const expected = [
+    {
+      problem: '`version` in PLEXUS.md is 0.130.0, but mise.toml pins plx 0.131.0; only `plx update` moves it',
+    },
+  ];
+  assert.deepEqual(findings(stale), expected);
+  const deviating = {
+    ...stale,
+    marker: { declaration: { deviations: ['PLX-Repo/Verbs'], body: reasoned(['PLX-Repo/Verbs']) } },
+  };
+  assert.deepEqual(findings(deviating), expected);
+  assert.equal(diagnose([stale]).failed, 1);
+  assert.deepEqual(findings(app('stateless', { repo: stale })), [], 'reported once, on the repo');
+});
+
+test('a repo with a version but no plx pin, or with templates but no version, fails', () => {
+  assert.deepEqual(findings(crossed([ROOT], { pin: undefined })), [
+    { problem: '`version` in PLEXUS.md is 0.131.0, but mise.toml pins no plx' },
+  ]);
+  assert.deepEqual(findings(crossed([site('.', { templates: ['repo-turbo'] })])), [
+    { problem: 'PLEXUS.md lists `templates` but sets no `version`; `plx update` writes it' },
+  ]);
+  assert.deepEqual(findings(crossed([site('.', { templates: [] })])), [
+    { problem: 'PLEXUS.md lists `templates` but sets no `version`; `plx update` writes it' },
+  ]);
+});
+
+test('a repo whose markers list no templates needs no version', () => {
+  assert.deepEqual(findings(crossed([site('.')], { pin: undefined })), []);
+  assert.deepEqual(findings(crossed([site('.'), site('apps/a')], { pin: '0.131.0' })), []);
 });
 
 test('a tracked file holding a conflict marker is a finding of the repo, of no requirement, that no deviation silences', () => {
