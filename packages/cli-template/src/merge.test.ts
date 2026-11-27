@@ -13,8 +13,8 @@ interface Case {
   readonly old?: Listing;
   readonly new?: Listing;
   readonly current?: Listing;
-  /** The paths whose policy is born-once, in both renders. */
-  readonly bornOnce?: readonly string[];
+  /** The paths whose policy is born-once: in both renders, or in each. */
+  readonly bornOnce?: readonly string[] | { readonly old: readonly string[]; readonly new: readonly string[] };
   /** What the fake merge of one file reports. */
   readonly conflicted?: boolean;
 }
@@ -36,8 +36,10 @@ async function run(c: Case) {
     });
     return { bytes: new TextEncoder().encode('merged\n'), conflicted: c.conflicted ?? false };
   };
-  const policies = (l: Listing): Policies =>
-    new Map(Object.keys(l).map((path) => [path, { policy: c.bornOnce?.includes(path) ? 'born-once' : 'merge' }]));
+  const bornOnce = c.bornOnce ?? [];
+  const { old: bornOld, new: bornNew } = 'old' in bornOnce ? bornOnce : { old: bornOnce, new: bornOnce };
+  const policies = (l: Listing, born: readonly string[]): Policies =>
+    new Map(Object.keys(l).map((path) => [path, { policy: born.includes(path) ? 'born-once' : 'merge' }]));
   const old = c.old ?? {};
   const next = c.new ?? {};
   const result = await merge(
@@ -45,7 +47,7 @@ async function run(c: Case) {
       old: tree(old),
       new: tree(next),
       current: tree(c.current ?? {}),
-      files: { old: policies(old), new: policies(next) },
+      files: { old: policies(old, bornOld), new: policies(next, bornNew) },
     },
     mergeFile,
   );
@@ -559,4 +561,127 @@ test('merge refuses a render that holds a symlink, which render never writes', a
   const link = { text: 'elsewhere', mode: SYMLINK | 0o777 };
   await assert.rejects(run({ old: { apple: link }, current: { apple: link } }), /apple.*symlink/);
   await assert.rejects(run({ new: { apple: link } }), /apple.*symlink/);
+});
+
+// The cases below pin what the rules above already give, where a change to the
+// code could break one without breaking a test above.
+
+test('merge takes a path that shares a prefix with one of the current tree as a path of its own', async () => {
+  const result = await run({ new: { app: 'green\n' }, current: { 'apple.txt': 'red\n' } });
+  assert.deepEqual(result, { tree: { app: 'green\n', 'apple.txt': 'red\n' }, report: ['app: added'], calls: [] });
+});
+
+test('merge looks at every directory an added path lies in, not only its parent', async () => {
+  const link = { text: 'elsewhere', mode: SYMLINK | 0o777 };
+  const result = await run({
+    new: { 'basket/shelf/apple.txt': 'red\n', 'crate/shelf/pear.txt': 'green\n' },
+    current: { basket: link, crate: 'wooden\n' },
+  });
+  assert.deepEqual(result, {
+    tree: { basket: link, crate: 'wooden\n' },
+    report: ['basket/shelf/apple.txt: kept', 'crate/shelf/pear.txt: conflicted'],
+    calls: [],
+  });
+});
+
+test('merge takes the policy of a path the new render holds from the new render, born-once in the old one or not', async () => {
+  const result = await run({
+    old: { 'apple.txt': 'red\n', 'pear.txt': 'green\n' },
+    new: { 'apple.txt': 'green\n', 'pear.txt': 'yellow\n' },
+    current: { 'apple.txt': 'red\n', 'pear.txt': 'light green\n' },
+    bornOnce: { old: ['apple.txt', 'pear.txt'], new: [] },
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.txt': 'green\n', 'pear.txt': 'merged\n' },
+    report: ['apple.txt: clean', 'pear.txt: clean'],
+    calls: [{ path: 'pear.txt', old: 'green\n', new: 'yellow\n', current: 'light green\n' }],
+  });
+});
+
+test('merge tells an empty file from an empty directory', async () => {
+  const result = await run({ old: { apple: '' }, new: { apple: directory() }, current: { apple: '' } });
+  assert.deepEqual(result, { tree: { apple: '' }, report: ['apple: conflicted'], calls: [] });
+});
+
+test('merge keeps a file the template drops whose mode alone the user changed, as conflicted', async () => {
+  const result = await run({
+    old: { 'apple.sh': 'red\n' },
+    current: { 'apple.sh': { text: 'red\n', mode: REGULAR | 0o755 } },
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.sh': { text: 'red\n', mode: REGULAR | 0o755 } },
+    report: ['apple.sh: conflicted'],
+    calls: [],
+  });
+});
+
+test('merge keeps the executable bit of a file both sides add where only the user made it executable', async () => {
+  const result = await run({
+    new: { 'apple.sh': 'green\n' },
+    current: { 'apple.sh': { text: 'red\n', mode: REGULAR | 0o755 } },
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.sh': { text: 'merged\n', mode: REGULAR | 0o755 } },
+    report: ['apple.sh: clean'],
+    calls: [{ path: 'apple.sh', old: '', new: 'green\n', current: 'red\n' }],
+  });
+});
+
+test("merge reads a current mode by its owner's executable bit alone: 0o611 is not executable, 0o700 is", async () => {
+  const result = await run({
+    old: { 'apple.txt': 'red\n', 'pear.sh': { text: 'green\n', mode: REGULAR | 0o755 } },
+    new: { 'apple.txt': 'green\n', 'pear.sh': { text: 'yellow\n', mode: REGULAR | 0o755 } },
+    current: {
+      'apple.txt': { text: 'red\n', mode: REGULAR | 0o611 },
+      'pear.sh': { text: 'green\n', mode: REGULAR | 0o700 },
+    },
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.txt': 'green\n', 'pear.sh': { text: 'yellow\n', mode: REGULAR | 0o755 } },
+    report: ['apple.txt: clean', 'pear.sh: clean'],
+    calls: [],
+  });
+});
+
+test('merge keeps the current file where all three sides differ and only the current or only the old side is binary', async () => {
+  const binary = (...bytes: number[]) => ({ bytes, mode: REGULAR | 0o644 });
+  const result = await run({
+    old: { 'apple.txt': 'red\n', 'pear.txt': binary(0xff, 0, 1) },
+    new: { 'apple.txt': 'green\n', 'pear.txt': 'yellow\n' },
+    current: { 'apple.txt': binary(0xff, 0, 3), 'pear.txt': 'light green\n' },
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.txt': binary(0xff, 0, 3), 'pear.txt': 'light green\n' },
+    report: ['apple.txt: conflicted', 'pear.txt: conflicted'],
+    calls: [],
+  });
+});
+
+test('merge takes a NUL byte at index 7999 as binary and one at index 8000 as not', async () => {
+  const at = (index: number, text: string) => `${text}${'a'.repeat(index - text.length)}\0`;
+  const result = await run({
+    old: { 'apple.txt': at(7999, 'red\n'), 'pear.txt': at(8000, 'green\n') },
+    new: { 'apple.txt': at(7999, 'pink\n'), 'pear.txt': at(8000, 'lime\n') },
+    current: { 'apple.txt': at(7999, 'rose\n'), 'pear.txt': at(8000, 'teal\n') },
+  });
+  assert.deepEqual(result.report, ['apple.txt: conflicted', 'pear.txt: clean']);
+  assert.deepEqual(
+    result.calls.map(({ path }) => path),
+    ['pear.txt'],
+  );
+});
+
+test('merge leaves the current tree it was given as it was', async () => {
+  const current = tree({ 'apple.txt': 'red\n', 'pear.txt': 'green\n' });
+  const before = listing(current);
+  await merge(
+    {
+      old: tree({ 'apple.txt': 'red\n', 'pear.txt': 'green\n' }),
+      new: tree({ 'apple.txt': 'green\n', 'plum.txt': 'blue\n' }),
+      current,
+      files: { old: new Map(), new: new Map() },
+    },
+    async () => assert.fail('no file is merged'),
+  );
+  assert.deepEqual(listing(current), before);
 });
