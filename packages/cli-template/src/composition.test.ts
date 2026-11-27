@@ -337,3 +337,24 @@ test("a read of a question that fails in its owner adds no error, and the reader
     { template: 'box', other: undefined, path: undefined, question: 'lid' },
   ]);
 });
+
+const pantry = `name: pantry
+questions:
+  stocked:
+    type: bool
+  jam:
+    type: str
+    default: plum
+    when: "{{ stocked }}"
+  honey:
+    type: str
+    when: "{{ stocked }}"
+`;
+
+test("a read of a question its owner skips sees what the owner's files see: the default", () => {
+  const reader = 'name: box\nreads:\n  jam:\n';
+  const result = render([template(reader, { 'box.txt.jinja': '{{ jam }}' }), template(pantry)], { stocked: false });
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, { stocked: false });
+  assert.deepEqual(listing(result.tree), { 'box.txt': 'plum' });
+});
