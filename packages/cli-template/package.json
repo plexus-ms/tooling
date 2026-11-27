@@ -1,0 +1,22 @@
+{
+  "name": "@plexus-ms/cli-template",
+  "version": "0.0.0",
+  "private": true,
+  "description": "plx-template, a generic alternative to copier for several templates in one directory",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "engines": {
+    "node": ">=24.22.1"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "minijinja-js": "3.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "catalog:"
+  }
+}
