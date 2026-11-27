@@ -15,29 +15,40 @@
 // lacks, and copier's update-time `_exclude` does not, so the replays of the app template start
 // at a version that already renders its born-once source files.
 //
-// Three checks, over the template repos at their default branch's head, cloned
-// fresh for the run, against the engine on `templates/`:
+// Three checks, over the template repos as cloned for the run (below), against the
+// engine on `templates/`:
 //
 //   rendering          every shape of SHAPES below: the engine's tree is byte-identical
-//                      to what `copier copy` writes, in paths, bytes and executable bits,
-//                      and the answers the engine resolves are the ones copier recorded.
+//                      to what `copier copy` writes, in paths, bytes, executable bits and
+//                      empty directories, and the answers the engine resolves are the ones
+//                      copier recorded.
 //   updates            every pair of REPLAYS: a consumer rendered at a past tag by copier,
 //                      with local edits, taken to the head by `copier update`, and the same
 //                      consumer taken there by `plx-template merge`; the two directories are
 //                      byte-identical.
 //   same version       the template sources of both places are the same files, but for the
 //                      few that differ by design (DEPARTURES), whose rendering the first
-//                      check covers. It reaches what no shape renders, a branch of a template
-//                      that no answer here takes, and it is what fails when a change is made
+//                      check covers; and the manifests agree where they decide bytes or
+//                      commands: copier's `_skip_if_exists` and `_exclude` on update are the
+//                      files tooling renders born-once, and copier's `_tasks` as a copy runs
+//                      them are tooling's birth commands (copierManifest states the mapping
+//                      of the two spellings). This reaches what no shape renders, a branch
+//                      of a template that no answer here takes. It is what fails when a
+//                      change to the files, the born-once set or the birth commands is made
 //                      in one place only during the double maintenance.
+//
+// What the same-version check does not compare is the rest of the two manifests:
+// choices, validators, help texts, defaults and a question's `when`. A change to one of
+// those in one place only is caught only where a shape's bytes or resolved answers show it.
 //
 // Where the template repos come from. The ring compares with the template repos as
 // they are now, so each run clones them: from GitHub (`GITHUB` in harness.ts), where
 // they are public, in the run on the forge and by default on a machine; or from
 // `PLX_PARITY_TEMPLATE_REPOS`, a directory (or a URL prefix) holding the three
 // `template-*` repos, as a developer's checkouts at `~/dev/plexus-ms`. A clone takes
-// the checked-out branch's committed head, so uncommitted work in a checkout is not
-// seen, and a branch that is not the default one is what is compared. A clone that
+// the head of the branch that is checked out (GitHub's is the default branch), so
+// uncommitted work in a checkout is not seen, and a branch that is not the default one
+// is what is compared. A clone that
 // fails, for lack of network or of the repo, is an error naming the repo and the place;
 // the run then fails, and no test passes without having read the template repos.
 // A tooling change that has no counterpart in the template repos yet fails here until
@@ -58,8 +69,9 @@
 // The consequence the policy carries is the one that matters: PLEXUS.md is born-once in
 // the new render, so the engine keeps its body, as copier's `_skip_if_exists` and its
 // update-time `_exclude` do, whatever the old tag did with it.
-// Update and the old side are both run through the real `plx-template` command (render
-// and merge), so that the directory rules of its source are not written a second time.
+// The new render and the merge of an update run through the real `plx-template` command
+// (render and merge), so that the directory rules of its source are not written a second
+// time; the old side is the copier directory, with the policies file written beside it.
 //
 // What the comparison filters, and nothing else:
 //   - `.copier-answers.yml`, which the engine has no counterpart of. Its answers are
@@ -69,11 +81,16 @@
 //     writes and `plx` writes for the engine (stripCopierMarker);
 //   - in a replay, the labels of conflict markers: copier's `before updating` and
 //     `after updating`, the engine's `current` and `new render` (unifyConflictLabels);
-//   - `.git`, which a replay needs for copier and which is removed before comparing.
+//   - `.git`, which a replay needs for copier and which is removed before comparing;
+//   - of a file's mode, only the executable bit is compared, the one bit the engine carries;
+//   - in the same-version check, a copier template file named `.gitignore` is the port's
+//     `.gitignore.jinja` (npm leaves the former out of a package), and copier's own
+//     template of its answers file is skipped (portedPath).
 // The answers the engine is given are the ones copier is given, with the profile
 // values mapped and, for the app template, `tenant` passed as a given answer where
 // copier reads it from the enclosing repo's answers file (copierJob).
-// Each helper that decides something is pinned by helpers.test.ts.
+// Each helper that decides something is pinned by helpers.test.ts. The glue that only
+// moves files (siteOf, copierCopy, copyNormalised) is exercised by every replay.
 //
 // Every replay checks that it was not vacuous: the template changed at least one file,
 // at least one file of the consumer's merged cleanly and at least one conflicted,
@@ -84,7 +101,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { type Answers, readTree, render, type Tree } from '../packages/cli-template/src/index.ts';
-import { parseAnswers } from '../packages/lib/src/copier.ts';
+import { ANSWERS_FILE, parseAnswers } from '../packages/lib/src/copier.ts';
 import {
   cloneTemplateRepos,
   copier,
@@ -100,11 +117,13 @@ import {
   consumerEdits,
   copierAnswersAsEngine,
   copierJob,
+  copierManifest,
   diffTrees,
   MARKER,
   normaliseCopierTree,
+  portedPath,
   stripCopierMarker,
-  unifyConflictLabels,
+  unifyTree,
 } from './helpers.ts';
 
 const ROOT = join(import.meta.dirname, '..');
@@ -194,7 +213,7 @@ const SHAPES: readonly Shape[] = [
     template: 'repo-turbo',
     name: 'display-versions',
     answers: { ...T, display_versions: true },
-    reason: 'display_versions true: the marker carries `major`, the release workflow its job',
+    reason: "display_versions true: the release workflow's display-version steps",
   },
   {
     template: 'repo-turbo',
@@ -218,6 +237,13 @@ const SHAPES: readonly Shape[] = [
       update_max_age: 0,
     },
     reason: "all of the above at once, and update_max_age 0, the validator's lowest value",
+  },
+  {
+    template: 'repo-turbo',
+    name: 'publishes-npm-scope',
+    answers: { ...T, publishes_packages: true, private_packages_scope: '@acme-corp' },
+    reason:
+      'packages published to npm with a private scope: the release workflow then reads packages (`packages: read`)',
   },
   // repo-operations: github_org, infrastructure, ci_strategy, ci_registry, ci_overlay,
   // alerts_email, pr_reviewers, update_max_age.
@@ -290,6 +316,13 @@ const SHAPES: readonly Shape[] = [
     },
     reason: 'all of the above at once',
   },
+  {
+    template: 'repo-operations',
+    name: 'hybrid-ghcr',
+    answers: { ...T, ci_strategy: 'hybrid', ci_registry: 'ghcr' },
+    reason:
+      'hybrid with the forge registry: the housekeeping workflow without a registry of its own (`registry: none`)',
+  },
   // app-nextjs: name, profile; tenant is the enclosing repo's answer.
   {
     template: 'app-nextjs',
@@ -350,6 +383,13 @@ const REPLAYS: readonly Replay[] = [
   },
   {
     template: 'repo-operations',
+    from: '0.119.0',
+    answers: { ...T, infrastructure: true, ci_strategy: 'on-prem' },
+    reason:
+      'the same far pair with the conditional files the defaults do not render: ci.yml (strategy not github) and infrastructure.yml, both changed since',
+  },
+  {
+    template: 'repo-operations',
     from: '0.129.1',
     answers: { ...T, infrastructure: true, ci_strategy: 'hybrid' },
     reason: 'the last version before the head, with infrastructure and hybrid CI',
@@ -382,13 +422,10 @@ const DEPARTURES: Readonly<Record<TemplateName, Readonly<Record<string, string>>
   },
 };
 
-/** Where a copier template's file is in the port: npm leaves a file named `.gitignore` out of a package. */
-const portedPath = (path: string): string => (path.endsWith('.gitignore') ? `${path}.jinja` : path);
 /** Copier's own file for its answers, which the engine has no counterpart of. */
 const COPIER_ONLY = '{{ _copier_conf.answers_file }}.jinja';
 
 const decoder = new TextDecoder();
-const encoder = new TextEncoder();
 
 let work: string;
 let env: NodeJS.ProcessEnv;
@@ -402,10 +439,15 @@ before(async (context) => {
   writeFileSync(configFile, GIT_CONFIG);
   env = isolatedEnv(configFile);
   const base = process.env[OVERRIDE] || GITHUB;
-  clones = await cloneTemplateRepos(base, join(work, 'repos'), env);
-  for (const [name, dir] of Object.entries(clones)) {
-    const head = (await run('git', ['-C', dir, 'log', '-1', '--format=%h %s', 'HEAD'], env)).trim();
-    context.diagnostic(`${TEMPLATE_REPOS[name as TemplateName]} from ${base} at ${head}`);
+  try {
+    clones = await cloneTemplateRepos(base, join(work, 'repos'), env);
+    for (const [name, dir] of Object.entries(clones)) {
+      const head = (await run('git', ['-C', dir, 'log', '-1', '--format=%h %s', 'HEAD'], env)).trim();
+      context.diagnostic(`${TEMPLATE_REPOS[name as TemplateName]} from ${base} at ${head}`);
+    }
+  } catch (error) {
+    rmSync(work, { recursive: true, force: true });
+    throw error;
   }
 });
 
@@ -417,7 +459,7 @@ after(() => {
 function siteOf(template: TemplateName, parent: Answers | undefined): { site: string; dst: string } {
   const site = fresh('site');
   mkdirSync(site, { recursive: true });
-  if (parent) writeFileSync(join(site, '.copier-answers.yml'), `tenant: ${String(parent.tenant)}\n`);
+  if (parent) writeFileSync(join(site, ANSWERS_FILE), `tenant: ${String(parent.tenant)}\n`);
   return { site, dst: template === 'app-nextjs' ? join(site, 'apps', 'web') : site };
 }
 
@@ -462,7 +504,7 @@ describe('rendering: the engine renders what copier copies', { concurrency: 6 },
       await copierCopy(template, 'HEAD', answers, dst, site);
       const copied = await readTree(dst);
       const { tenant, ...own } = copierAnswersAsEngine(
-        parseAnswers(decoder.decode(copied.get('.copier-answers.yml')?.bytes)).answers,
+        parseAnswers(decoder.decode(copied.get(ANSWERS_FILE)?.bytes)).answers,
       );
       // An app's tenant is the enclosing repo's answer: copier records it, the engine is given it.
       const recorded = template === 'app-nextjs' ? own : { ...own, tenant };
@@ -512,23 +554,41 @@ describe('same version: the template sources are the same files in both places',
 /** A copy of `from`, as the engine would hold it: no `.git`, no answers file, the marker's frontmatter stripped. */
 function copyNormalised(from: string, to: string): void {
   cpSync(from, to, { recursive: true, filter: (path) => !/(^|\/)\.git$/.test(path) });
-  rmSync(join(to, '.copier-answers.yml'), { force: true });
+  rmSync(join(to, ANSWERS_FILE), { force: true });
   const marker = join(to, MARKER);
   writeFileSync(marker, stripCopierMarker(readFileSync(marker)));
 }
 
-const textOf = (tree: Tree, side: 'copier' | 'engine'): Tree =>
-  new Map(
-    [...tree].map(([path, entry]) => {
-      let text: string;
-      try {
-        text = new TextDecoder('utf-8', { fatal: true }).decode(entry.bytes);
-      } catch {
-        return [path, entry];
-      }
-      return [path, { ...entry, bytes: encoder.encode(unifyConflictLabels(text, side)) }];
-    }),
-  );
+describe('same version: the manifests agree where they decide bytes or commands', () => {
+  for (const template of Object.keys(TEMPLATE_REPOS) as TemplateName[]) {
+    it(template, async () => {
+      const copierManifestOf = copierManifest(readFileSync(join(clones[template], 'copier.yml'), 'utf8'));
+      const shape = SHAPES.find((s) => s.template === template);
+      assert.ok(shape, `${template}: no shape to render`);
+      const result = render([await readTree(join(TEMPLATES, template))], shape.answers);
+      assert.deepEqual(result.errors, [], `${template}: the engine fails to render`);
+      const bornOnce = [...result.files]
+        .filter(([, origin]) => origin.policy === 'born-once')
+        .map(([path]) => path)
+        .sort();
+      assert.deepEqual(
+        copierManifestOf.excludedOnUpdate,
+        copierManifestOf.skipIfExists,
+        `${template}: the template repo's _exclude on update and _skip_if_exists name different files`,
+      );
+      assert.deepEqual(
+        bornOnce,
+        copierManifestOf.skipIfExists,
+        `${template}: the files tooling renders once (born-once) are not the ones the template repo skips if they exist`,
+      );
+      assert.deepEqual(
+        result.birth.map((b) => [...b.command]),
+        copierManifestOf.birth,
+        `${template}: the birth commands of tooling are not the tasks a copy of the template repo runs`,
+      );
+    });
+  }
+});
 
 describe('updates: the engine takes a consumer to the head as copier does', { concurrency: 6 }, () => {
   for (const replay of REPLAYS) {
@@ -608,15 +668,15 @@ describe('updates: the engine takes a consumer to the head as copier does', { co
       ) as { report: { path: string; outcome: string }[] };
       const engineResult = await readTree(engineSide);
 
-      const found = diffTrees(textOf(copierResult, 'copier'), textOf(engineResult, 'engine')).map(
+      const found = diffTrees(unifyTree(copierResult, 'copier'), unifyTree(engineResult, 'engine')).map(
         (d) => `${label}: ${d}`,
       );
       assert.deepEqual(found, []);
 
       // The replay was not vacuous.
       const outcome = (path: string) => merged.report.find((r) => r.path === path)?.outcome;
-      const changed = merged.report.filter(
-        (r) => r.outcome !== 'kept' && oldTree.get(r.path)?.bytes !== newTree.get(r.path)?.bytes,
+      const changed = [...newTree].filter(
+        ([path, entry]) => oldTree.has(path) && !Buffer.from(oldTree.get(path)?.bytes ?? []).equals(entry.bytes),
       );
       assert.ok(changed.length > 0, `${label}: the template changed nothing between the two versions`);
       assert.ok(
