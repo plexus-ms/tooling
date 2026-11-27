@@ -212,7 +212,11 @@ function insertKey(yaml: string, pairs: readonly Pair[], key: string, node: Node
         });
   const at =
     isNode(next?.key) && next.key.range ? aboveComments(yaml, lineStart(yaml, next.key.range[0])) : yaml.length;
-  return yaml.slice(0, at) + pairText(key, node, eol) + yaml.slice(at);
+  // At the column the mapping's keys are at, which is 0 unless the whole frontmatter is indented.
+  const first = pairs[0]?.key;
+  const indent = isNode(first) && first.range ? yaml.slice(lineStart(yaml, first.range[0]), first.range[0]) : '';
+  const column = /^ */.exec(indent)?.[0].length ?? 0;
+  return yaml.slice(0, at) + ' '.repeat(column) + pairText(key, node, eol) + yaml.slice(at);
 }
 
 /**
