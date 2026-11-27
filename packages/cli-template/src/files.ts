@@ -23,7 +23,8 @@
 // by one template. Two sources that render to one path are an error naming
 // both, a file beside its `.jinja` sibling included, as is a file with another
 // path rendered below it; where the two belong to two templates, the error
-// names both templates as well, the first source's in `template`. Copier
+// names both templates as well, in `template` the one whose name sorts first
+// for one path, and the file's for a path below a file. Copier
 // differs here: the `.jinja` file wins and the other is silently not written.
 // Directories at one path are one directory, of one template or of several.
 // A directory that renders to a path and holds nothing in the result, because
@@ -114,10 +115,14 @@ export function renderFiles(renderings: readonly Rendering[], errors: RenderErro
     const text = message(`${template}'s ${first.source}`, `${other}'s ${second.source}`);
     errors.push({ template, other, path: `${FILES}${first.source}`, message: text });
   };
+  // Two templates at one path are named first by name; two sources of one template in the order found.
   const put = (path: string, value: Rendered): void => {
     const first = rendered.get(path);
     if (first === undefined) rendered.set(path, value);
-    else clash(first, value, (a, b) => `${a} and ${b} both render to ${path}`);
+    else {
+      const [a, b] = value.owner.manifest.name < first.owner.manifest.name ? [value, first] : [first, value];
+      clash(a, b, (one, two) => `${one} and ${two} both render to ${path}`);
+    }
   };
 
   // The directories that may land empty, by rendered path: directories at one

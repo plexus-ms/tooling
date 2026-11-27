@@ -45,9 +45,12 @@
 // commands: `tree` and `files` come in path order, `answers` and `unused` in
 // name order, and `errors` by template name, each template's in the order its
 // passes found them (its reads and questions in its manifest's order, its
-// files in its tree's). An error between two templates names in `template` the
-// one whose name sorts first; two templates of one name are named by their
-// position in the list, which is all that tells them apart.
+// files in its tree's). An error between two templates in one role, a
+// question both declare, a path both write or a cycle of reads, names in
+// `template` the one whose name sorts first; where the roles differ, it names
+// the reader of a read, and the template of a file with another's path below
+// it. Two templates of one name are named by their position in the list,
+// which is all that tells them apart.
 //
 // Scope. A template sees only its own slice of the namespace: the engine's
 // variables, its declared reads, and its own questions. Its questions'
