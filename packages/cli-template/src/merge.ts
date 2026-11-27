@@ -52,9 +52,15 @@ async function mergePath(
     tree.set(path, n);
     return 'clean';
   }
+  if ([base, n, c].some(({ bytes }) => binary(bytes))) return 'conflicted';
   const merged = await mergeFile({ path, old: base.bytes, new: n.bytes, current: c.bytes });
   tree.set(path, { bytes: merged.bytes, mode: n.mode });
   return merged.conflicted ? 'conflicted' : 'clean';
+}
+
+/** Whether git takes `bytes` as binary: a NUL byte among the first 8000, as its `buffer_is_binary` decides. */
+function binary(bytes: Uint8Array): boolean {
+  return bytes.subarray(0, 8000).includes(0);
 }
 
 /** Whether two entries, either absent, are alike. */
