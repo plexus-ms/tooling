@@ -100,6 +100,11 @@ export function renderFiles(template: Template, context: Context, errors: Render
     else fail(value.source, `${first.source} and ${value.source} both render to ${path}`);
   };
 
+  const isTemplateFile = (source: string): boolean => {
+    const entry = template.files.get(source);
+    return entry !== undefined && (entry.mode & MODE_TYPE) === REGULAR;
+  };
+
   // Where the source name `name`, which is the last part of `source`, lands below the rendered directory `parent`.
   const locate = (parent: Location, name: string, source: string): Location => {
     if (typeof parent === 'string') return 'skipped';
@@ -148,7 +153,7 @@ export function renderFiles(template: Template, context: Context, errors: Render
     }
     // As copier does, a `.jinja` file beside a file wins. A rendered path is
     // looked up among the source paths, as copier does.
-    if (!isTemplate && (template.files.has(source + SUFFIX) || template.files.has(path + SUFFIX))) continue;
+    if (!isTemplate && (isTemplateFile(source + SUFFIX) || isTemplateFile(path + SUFFIX))) continue;
     const text = isTemplate ? textOf(entry.bytes) : undefined;
     if (text === undefined) {
       put(path, { entry: written(entry.bytes, entry.mode), source });
