@@ -282,7 +282,7 @@ export async function planMerge(target: string, old: RenderedSide, next: Rendere
   const changes = new Map<string, Entry | undefined>();
   for (const { path, outcome } of report) {
     if (outcome === 'deleted') changes.set(path, undefined);
-    else if (outcome !== 'kept' && tree.has(path)) changes.set(path, tree.get(path));
+    else if (tree.has(path)) changes.set(path, tree.get(path));
   }
   const directories = new Set(
     [...next.tree].filter(([, e]) => (e.mode & MODE_TYPE) === DIRECTORY).map(([path]) => path),
