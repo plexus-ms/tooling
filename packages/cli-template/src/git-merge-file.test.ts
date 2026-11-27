@@ -123,6 +123,13 @@ async function withScratch(body: (dir: string) => Promise<void>): Promise<void> 
   }
 }
 
+/** Makes `dir` a git repository whose own configuration asks for another conflict style. */
+function initRepository(dir: string): void {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+  execFileSync('git', ['init', '-q', dir], { env });
+  execFileSync('git', ['config', 'merge.conflictStyle', 'diff3'], { cwd: dir, env });
+}
+
 test('gitMergeFile merges the same whatever global git configuration the caller has', async () => {
   await withScratch(async (dir) => {
     const config = join(dir, 'gitconfig');
@@ -135,13 +142,20 @@ test('gitMergeFile merges the same whatever global git configuration the caller 
 
 test('gitMergeFile merges the same where the temporary directory lies in a git repository with a configuration of its own', async () => {
   await withScratch(async (dir) => {
-    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
-    execFileSync('git', ['init', '-q', dir], { env });
-    execFileSync('git', ['config', 'merge.conflictStyle', 'diff3'], { cwd: dir, env });
+    initRepository(dir);
     const temporary = join(dir, 'tmp');
     await mkdir(temporary);
     await withEnv({ TMPDIR: temporary }, async () => {
       assert.equal(tmpdir(), temporary, 'the temporary directory lies in the repository');
+      assert.deepEqual(await mergeTexts('apple\n', 'pear\n', 'plum\n'), conflict);
+    });
+  });
+});
+
+test("gitMergeFile merges the same where the environment names a repository with a configuration of its own, as a hook's does", async () => {
+  await withScratch(async (dir) => {
+    initRepository(dir);
+    await withEnv({ GIT_DIR: join(dir, '.git') }, async () => {
       assert.deepEqual(await mergeTexts('apple\n', 'pear\n', 'plum\n'), conflict);
     });
   });
