@@ -359,3 +359,57 @@ test('merge takes a file as binary by a NUL byte among its first 8000 bytes only
     ['apple.txt'],
   );
 });
+
+// Ported from tests/test_updatediff.py, test_update_propagates_executable_bit_addition
+// and test_update_propagates_executable_bit_removal: the template flips the bit
+// and nothing else.
+test('merge takes a change of the executable bit alone as a change, both ways', async () => {
+  const result = await run({
+    old: { 'launcher.sh': '#!/bin/sh\necho hi\n', 'stopper.sh': { text: '#!/bin/sh\n', mode: REGULAR | 0o755 } },
+    new: { 'launcher.sh': { text: '#!/bin/sh\necho hi\n', mode: REGULAR | 0o755 }, 'stopper.sh': '#!/bin/sh\n' },
+    current: { 'launcher.sh': '#!/bin/sh\necho hi\n', 'stopper.sh': { text: '#!/bin/sh\n', mode: REGULAR | 0o755 } },
+  });
+  assert.deepEqual(result, {
+    tree: { 'launcher.sh': { text: '#!/bin/sh\necho hi\n', mode: REGULAR | 0o755 }, 'stopper.sh': '#!/bin/sh\n' },
+    report: ['launcher.sh: clean', 'stopper.sh: clean'],
+    calls: [],
+  });
+});
+
+test('merge compares a current file’s mode by the executable bit alone, and writes the new render’s mode', async () => {
+  const result = await run({
+    old: { 'apple.sh': { text: 'red\n', mode: REGULAR | 0o755 }, 'pear.txt': 'green\n' },
+    new: { 'apple.sh': { text: 'green\n', mode: REGULAR | 0o755 }, 'pear.txt': 'yellow\n' },
+    current: {
+      'apple.sh': { text: 'red\n', mode: REGULAR | 0o775 },
+      'pear.txt': { text: 'green\n', mode: REGULAR | 0o664 },
+    },
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.sh': { text: 'green\n', mode: REGULAR | 0o755 }, 'pear.txt': 'yellow\n' },
+    report: ['apple.sh: clean', 'pear.txt: clean'],
+    calls: [],
+  });
+});
+
+// Ported from tests/test_updatediff.py, test_update_with_exec_bit_change_and_merge_conflict.
+test('merge gives a file the template makes executable the bit, also where its content conflicts', async () => {
+  const result = await run({
+    old: { 'launcher.sh': 'upstream version 1' },
+    new: { 'launcher.sh': { text: 'upstream version 2', mode: REGULAR | 0o755 } },
+    current: { 'launcher.sh': 'upstream version 1 + downstream' },
+    conflicted: true,
+  });
+  assert.deepEqual(result, {
+    tree: { 'launcher.sh': { text: 'merged\n', mode: REGULAR | 0o755 } },
+    report: ['launcher.sh: conflicted'],
+    calls: [
+      {
+        path: 'launcher.sh',
+        old: 'upstream version 1',
+        new: 'upstream version 2',
+        current: 'upstream version 1 + downstream',
+      },
+    ],
+  });
+});
