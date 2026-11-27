@@ -314,6 +314,10 @@ async function readRender(
 async function mergeCommand(oldDir: string, newDir: string, target: string): Promise<number> {
   const found = collector();
   const { problems, attempt, holds } = found;
+  const [oldPath, newPath, targetPath] = [oldDir, newDir, target].map((dir) => resolve(dir));
+  if (oldPath === newPath) problems.push({ message: 'the old and the new render are one directory', path: oldDir });
+  if (targetPath === oldPath || targetPath === newPath)
+    problems.push({ message: 'the target is one of the renders, which merge must not change', path: target });
   const oldRender = await readRender(oldDir, found);
   const newRender = await readRender(newDir, found);
   const present = await holds(() => requireDirectory(target));
