@@ -165,3 +165,22 @@ test('siteAnswers refuses a key in both markers, a marker with a problem, and a 
   );
   assert.throws(() => siteAnswers([root], 'apps/api'), /no marker in apps\/api/);
 });
+
+test('findSites finds a marker under a path with spaces or beyond ASCII, as git spells it', async () => {
+  const repo = repoWith('names', {
+    'PLEXUS.md': ROOT,
+    'apps/my app/PLEXUS.md': WEB,
+    'apps/café/PLEXUS.md': WEB,
+    'apps/日本/PLEXUS.md': WEB,
+  });
+  const dirs = ['.', 'apps/café', 'apps/my app', 'apps/日本'];
+  for (const ref of [undefined, 'HEAD']) {
+    const sites = await findSites(ctx, repo, ref);
+    assert.deepEqual(
+      sites.map((s) => s.dir),
+      dirs,
+      ref ?? 'working tree',
+    );
+    assert.ok(sites.every((s) => s.config !== undefined));
+  }
+});
