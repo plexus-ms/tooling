@@ -209,6 +209,9 @@ importers:
         specifier: ^15.1.0
         version: 15.1.0
     devDependencies:
+      '@plexus-ms/cli-template':
+        specifier: workspace:*
+        version: link:../cli-template
       '@types/node':
         specifier: ^24.19.2
         version: 24.19.2

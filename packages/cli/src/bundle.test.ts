@@ -1,44 +1,50 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
 import { pathToFileURL } from 'node:url';
+import { readTree, type Tree } from '@plexus-ms/cli-template';
 import { templatesRoot } from '@plexus-ms/lib';
 
+// The build runs into a scratch copy of the package, its package.json and a
+// dist the build makes there, never into the package's own dist, which a
+// `turbo run build` may be writing at the same time. What the scratch copy
+// publishes is what the package publishes: `files` names `dist` alone.
 const PACKAGE = join(import.meta.dirname, '..');
 const TEMPLATES = join(PACKAGE, '..', '..', 'templates');
 
-/** Every file below `dir` with its bytes and executable bit, by relative path. */
-function listing(dir: string, base = dir): Record<string, string> {
-  return Object.fromEntries(
-    readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) return Object.entries(listing(path, base));
-      const mode = statSync(path).mode & 0o111 ? 'x' : '-';
-      return [[path.slice(base.length + 1), `${mode} ${readFileSync(path).toString('base64')}`]];
-    }),
+/** A tree as comparable data: each path's bytes, as base64, and its executable bit. */
+const flat = (tree: Tree) =>
+  Object.fromEntries(
+    [...tree].map(([path, { bytes, mode }]) => [
+      path,
+      `${mode & 0o100 ? 'x' : '-'} ${Buffer.from(bytes).toString('base64')}`,
+    ]),
   );
-}
 
-const build = () => execFileSync(process.execPath, ['build.js'], { cwd: PACKAGE });
+let scratch = '';
+before(() => {
+  scratch = mkdtempSync(join(tmpdir(), 'cli-bundle-'));
+  copyFileSync(join(PACKAGE, 'package.json'), join(scratch, 'package.json'));
+  execFileSync(process.execPath, ['build.js', join(scratch, 'dist')], { cwd: PACKAGE });
+});
+after(() => rmSync(scratch, { recursive: true, force: true }));
 
-test('the build puts the templates beside the bundle, where templatesRoot finds them', () => {
-  build();
-  const bundle = join(PACKAGE, 'dist', 'plx.js');
-  const root = templatesRoot(pathToFileURL(bundle).href);
-  assert.equal(root, join(PACKAGE, 'dist', 'templates'));
-  const bundled = listing(root);
+test('the build puts the templates beside the bundle, where templatesRoot finds them', async () => {
+  const root = templatesRoot(pathToFileURL(join(scratch, 'dist', 'plx.js')).href);
+  assert.equal(root, join(scratch, 'dist', 'templates'));
+  const bundled = flat(await readTree(root));
   assert.ok(Object.keys(bundled).includes('repo-turbo/template.yml'));
-  assert.deepEqual(bundled, listing(TEMPLATES));
+  assert.deepEqual(bundled, flat(await readTree(TEMPLATES)));
 });
 
-test('the package holds every file of the templates, which npm leaves out for some names', () => {
-  build();
-  const packed = JSON.parse(
-    execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: PACKAGE, encoding: 'utf8' }),
+test('the package holds every file of the templates, which npm leaves out for some names', async () => {
+  const packed: string[] = JSON.parse(
+    execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: scratch, encoding: 'utf8' }),
   )[0].files.map((file: { path: string }) => file.path);
-  const missing = Object.keys(listing(TEMPLATES))
+  const missing = Object.keys(flat(await readTree(TEMPLATES)))
     .map((path) => `dist/templates/${path}`)
     .filter((path) => !packed.includes(path));
   assert.deepEqual(missing, []);
