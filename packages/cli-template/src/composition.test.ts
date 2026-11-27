@@ -170,22 +170,75 @@ test('a read with a default sees the default when nothing supplies it, and a sup
   assert.deepEqual(listing(owned.tree), { 'box.txt': '9' });
 });
 
-test('the order of the templates does not change the tree: an owner is resolved before the templates that read from it', () => {
-  const box = 'name: box\nquestions:\n  lid:\n    type: str\n    default: "{{ rows }} rows"\nreads:\n  rows:\n';
-  const reader = template(crate, { 'crate.txt.jinja': '{{ trees + rows }}' });
-  const lidded = template(box, { 'box.txt.jinja': '{{ lid }}' });
-  const owner = template(orchard, { 'orchard.txt.jinja': '{{ trees }}' });
-  const results = [
+/** A render's result as JSON, every map and record in its iteration order, without the birth commands. */
+const serialised = ({ tree, files, answers, unused, errors }: ReturnType<typeof render>) =>
+  JSON.stringify({
+    tree: [...tree].map(([path, { bytes, mode }]) => [path, [...bytes], mode]),
+    files: [...files],
+    answers,
+    unused,
+    errors,
+  });
+
+test('the order of the templates does not change the result but for the birth commands: an owner is resolved before the templates that read from it', () => {
+  const box =
+    'name: box\nquestions:\n  lid:\n    type: str\n    default: "{{ rows }} rows"\nreads:\n  rows:\nbirth:\n  - [close]\n';
+  const reader = template(crate, { 'crate.txt.jinja': '{{ trees + rows }}', 'b/c.txt': 'c' });
+  const lidded = template(box, { 'box.txt.jinja': '{{ lid }}', 'b.txt': 'b' });
+  const owner = template(`${orchard}birth:\n  - [plant]\n`, { 'orchard.txt.jinja': '{{ trees }}' });
+  const orders = [
     [reader, lidded, owner],
     [owner, lidded, reader],
     [lidded, reader, owner],
-  ].map((templates) => render(templates, { trees: '4' }));
-  for (const result of results) {
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(listing(result.tree), { 'crate.txt': '6', 'box.txt': '2 rows', 'orchard.txt': '4' });
-    assert.deepEqual(result.answers, { trees: 4, rows: 2, lid: '2 rows' });
-    assert.deepEqual(new Map(result.files), new Map(results[0]?.files));
-  }
+  ];
+  const [first, ...rest] = orders.map((templates) => render(templates, { zinc: 1, trees: '4', amber: 2 }));
+  assert.ok(first);
+  assert.deepEqual(first.errors, []);
+  assert.deepEqual(listing(first.tree), {
+    'b.txt': 'b',
+    'b/c.txt': 'c',
+    'box.txt': '2 rows',
+    'crate.txt': '6',
+    'orchard.txt': '4',
+  });
+  assert.deepEqual([...first.tree.keys()], ['b.txt', 'b/c.txt', 'box.txt', 'crate.txt', 'orchard.txt']);
+  assert.deepEqual(Object.entries(first.answers), [
+    ['lid', '2 rows'],
+    ['rows', 2],
+    ['trees', 4],
+  ]);
+  assert.deepEqual(first.unused, ['amber', 'zinc']);
+  for (const result of rest) assert.equal(serialised(result), serialised(first));
+  assert.deepEqual(
+    [first, ...rest].map(({ birth }) => birth.map(({ command }) => command[0])),
+    [
+      ['close', 'plant'],
+      ['plant', 'close'],
+      ['close', 'plant'],
+    ],
+  );
+});
+
+test('the order of the templates does not change the errors: an error between two names the first by name in template', () => {
+  const books = template(shelf, { 'label.txt': 's' });
+  const wrong = template('name: crate\ncolour: red\n');
+  const trees = template(orchard);
+  const fruit = template(basket, { 'label.txt': 'b' });
+  const [first, ...rest] = [
+    [books, wrong, trees, fruit],
+    [fruit, trees, wrong, books],
+    [trees, books, fruit, wrong],
+  ].map((templates) => render(templates, { fruit: 'pear', book: 'atlas' }).errors);
+  assert.deepEqual(
+    first?.map(({ template, other }) => [template, other]),
+    [
+      ['basket', 'shelf'],
+      ['crate', undefined],
+      ['orchard', undefined],
+      ['orchard', undefined],
+    ],
+  );
+  for (const errors of rest) assert.equal(JSON.stringify(errors), JSON.stringify(first));
 });
 
 test('templates that read from each other in a cycle, and those that read from them, are one error naming them all by name', () => {
