@@ -1,0 +1,11 @@
+{
+  "name": "{{ tenant }}",
+  "private": true,
+  "devDependencies": {
+{%- if publishes_packages %}
+    "@changesets/cli": "^3",
+{%- endif %}
+    "@plexus-ms/config": "catalog:plexus",
+    "turbo": "^2"
+  }
+}

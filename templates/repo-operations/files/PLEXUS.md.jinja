@@ -1,0 +1,3 @@
+- The operations repo of `{{ tenant }}`: the playbooks that mount the `plexus.*` collections, one per layer, the inventory they run on, and the third-party apps under `apps/`, each with a marker of its own.
+- `mise :platform` applies the platform layer{% if infrastructure %}, `mise :infrastructure` the infrastructure layer{% endif %}{% if ci_strategy != 'github' %}, `mise :ci` the runner host{% endif %}; `mise :verify` checks the repo.
+- The Plexus version the repo is on is its `plx` pin in `mise.toml`, the collections in `requirements.yml` pinned to the same.

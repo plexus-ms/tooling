@@ -1,0 +1,137 @@
+{% macro name_arg(verb) -%}
+{%- if publishes_packages -%}
+usage = 'arg "[name]" help="Package to {{ verb }}, by its directory name under packages/ (e.g. my-package, defaults to all)"'
+{%- else -%}
+usage = 'arg "[name]" help="App or package to {{ verb }}, by its directory name under apps/ or packages/ (e.g. my-app, defaults to all)"'
+{%- endif %}
+{%- endmacro -%}
+{% macro scoped(verb) -%}
+dir=
+if [ -n "${usage_name:-}" ]; then
+{%- if publishes_packages %}
+  case $usage_name in
+    */* | . | ..) echo "{{ verb }}: $usage_name is not a directory name under packages/" >&2; exit 1 ;;
+  esac
+  [ ! -f "packages/$usage_name/package.json" ] || dir=packages/$usage_name
+  [ -n "$dir" ] || { echo "{{ verb }}: no package $usage_name under packages/" >&2; exit 1; }
+{%- else %}
+  case $usage_name in
+    */* | . | ..) echo "{{ verb }}: $usage_name is not a directory name under apps/ or packages/" >&2; exit 1 ;;
+  esac
+  for root in apps packages; do
+    [ -f "$root/$usage_name/package.json" ] || continue
+    [ -z "$dir" ] || { echo "{{ verb }}: $usage_name is both apps/$usage_name and packages/$usage_name; rename one to scope by name" >&2; exit 1; }
+    dir=$root/$usage_name
+  done
+  [ -n "$dir" ] || { echo "{{ verb }}: no app or package $usage_name under apps/ or packages/" >&2; exit 1; }
+{%- endif %}
+fi
+{%- endmacro -%}
+monorepo_root = true
+
+[monorepo]
+config_roots = [{% if not publishes_packages %}"apps/*", {% endif %}"packages/*"]
+
+[tools]
+node = "24"
+hk = "latest"
+python = "3.14"
+uv = "latest"
+copier = { version = "latest", uvx = true }
+# The plx pins are written with each Plexus version, never by the update bot (§ 1 PLX-Updates);
+# allow_low_downloads only waives npm's young-package heuristics.
+"npm:@plexus-ms/cli" = { version = "0.130.0", allow_low_downloads = true }
+{%- if not publishes_packages %}
+"npm:@plexus-ms/cli-ci" = { version = "0.130.0", allow_low_downloads = true }
+{%- endif %}
+
+[settings]
+# Not a version source: it lets config_roots match a project without a mise config of its own,
+# without which `mise install --monorepo` fails in a repo whose roots are only packages.
+idiomatic_version_file_enable_tools = ["node"]
+
+[hooks]
+# hk is absent on a CI runner whose mise installs only the tools a job names.
+postinstall = "if command -v hk >/dev/null; then hk install --mise; fi && npx corepack enable"
+
+[env]
+_.path = ["{% raw %}{{config_root}}{% endraw %}/node_modules/.bin"]
+
+{% if not publishes_packages -%}
+[tasks.promote]
+description = "Promote staging to prod: fast-forward main to what is on develop (§ 3 PLX-Delivery); refused unless it is a fast-forward"
+run = 'git fetch -q origin && git push origin origin/develop:refs/heads/main'
+
+{% endif -%}
+[tasks.dev]
+{%- if publishes_packages %}
+description = "No-op: a package repo has no development environment to start; build builds its packages and test exercises them"
+usage = 'arg "[name]" hide=#true'
+run = 'echo "dev: nothing to start in a package repo"'
+{%- else %}
+depends = ["install"]
+description = "Prepare a development environment and start it"
+{{ name_arg("start") }}
+run = '''
+{{ scoped("dev") }}
+turbo run dev ${dir:+--filter="./$dir"}
+'''
+{%- endif %}
+
+[tasks.build]
+depends = ["install"]
+{%- if publishes_packages %}
+description = "Build the packages, each after the workspace packages it depends on"
+{%- else %}
+description = "Build the production artifacts, an app after the workspace packages it depends on"
+{%- endif %}
+{{ name_arg("build") }}
+run = '''
+{{ scoped("build") }}
+turbo run build ${dir:+--filter="{./$dir}..."}
+'''
+
+[tasks.verify]
+description = "Perform all steps that verify code quality"
+{{ name_arg("verify") }}
+run = [
+    'mise run check ${usage_name:+"$usage_name"}',
+    'mise run test ${usage_name:+"$usage_name"}',
+]
+
+[tasks.install]
+description = "Install and wire up project dependencies"
+hide = true
+run = "pnpm install"
+sources = ["package.json", {% if not publishes_packages %}"apps/*/package.json", {% endif %}"packages/*/package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]
+outputs = ["node_modules/.pnpm/lock.yaml"]
+
+[tasks.lint]
+depends = ["install"]
+description = "Lint and format the codebase"
+usage = '''
+flag "--write" help="Apply safe fixes and formatting in place"
+arg "<paths>" var=#true default="." help="Files or directories to lint (defaults to the whole repo)"
+'''
+# usage shell-quotes var-arg values, so re-parse them via eval instead of bare expansion.
+run = 'eval "set -- $usage_paths"; biome check ${usage_write:+--write} --no-errors-on-unmatched "$@"'
+
+[tasks.check]
+depends = ["install"]
+description = "Run static checks on the codebase: lint and the contracts' checks (plx doctor), repo-wide, then each project's check script"
+{{ name_arg("check") }}
+run = '''
+{{ scoped("check") }}
+mise run lint
+plx doctor
+turbo run check ${dir:+--filter="{./$dir}..."}
+'''
+
+[tasks.test]
+depends = ["install"]
+description = "Run tests on the codebase"
+{{ name_arg("test") }}
+run = '''
+{{ scoped("test") }}
+turbo run test ${dir:+--filter="{./$dir}..."}
+'''

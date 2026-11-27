@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { after, test } from 'node:test';
-import { apply, Context, planSync, realIo } from './index.ts';
+import { apply, Context, planSync, realIo, templatesRoot } from './index.ts';
 import {
   type Files,
   git,
@@ -522,10 +522,12 @@ test('apply renders nothing for a site that lists no templates on either side, w
   assert.deepEqual((await apply(quietContext(), options(repo, templates))).sites, []);
 });
 
-test('apply needs no templates root when no marker changed, and fails loudly without one when something did', async () => {
+test('apply needs no templates root when no marker changed, and takes the bundled templates when something did', async () => {
   const { repo } = fixture();
-  write(repo, { 'PLEXUS.md': pears });
-  await assert.rejects(apply(quietContext(), { repo, plxVersion: VERSION }), /no bundled templates/);
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket, ghost]\nfruit: apple\n`) });
+  await assert.rejects(apply(quietContext(), { repo, plxVersion: VERSION }), (error: Error) =>
+    error.message.includes(`no template basket in ${templatesRoot()}`),
+  );
   git(repo, 'checkout', '--', 'PLEXUS.md');
   assert.equal((await apply(quietContext(), { repo, plxVersion: VERSION })).sites.length, 0);
 });

@@ -1,18 +1,13 @@
-// The templates a plx bundles: the root directory that holds one directory per
+// Templates by name below a root directory that holds one directory per
 // template, and the loader of one template's manifest. A verb that renders
-// takes the root as an input and defaults it to `bundledTemplatesRoot()`, the
-// one place that knows where the bundled templates are; the engine reads them
-// as it reads any template directory (`@plexus-ms/cli-template`).
+// takes the root as an input and defaults it to `templatesRoot()`, the one
+// place that knows where the bundled templates are; the engine reads them as
+// it reads any template directory (`@plexus-ms/cli-template`).
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Manifest } from '@plexus-ms/cli-template';
 import { engine } from './engine.ts';
 import { RESERVED_KEYS } from './marker.ts';
-
-/** The directory that holds the templates this plx bundles, one directory per template. */
-export function bundledTemplatesRoot(): string {
-  throw new Error('no bundled templates: this plx does not carry its templates yet; name a root with --templates');
-}
 
 /** The directory of the template `name` below `root`; rejects when `name` is no template name or no such template is there. */
 export async function templateDirectory(root: string, name: string): Promise<string> {

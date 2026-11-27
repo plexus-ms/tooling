@@ -14,7 +14,7 @@
 export { type Applied, type ApplyOptions, apply, CROSSOVER_RUNBOOK } from './apply.ts';
 export { BASELINE_FILE, type Compared, compareBaseline, parseBaseline, renderBaseline } from './baseline.ts';
 export { bumpWorkflowRefs, WORKFLOW_REF } from './bookkeeping.ts';
-export { bundledTemplatesRoot, loadTemplate, templateDirectory } from './bundled.ts';
+export { loadTemplate, templateDirectory } from './bundled.ts';
 export {
   CHANGESET_DIR,
   type Changeset,
@@ -212,6 +212,7 @@ export {
   takeVersion,
 } from './take.ts';
 export { RENAMED_TEMPLATES, TEMPLATES, templateOf, templateSource } from './templates.ts';
+export { templatesRoot } from './templatesRoot.ts';
 export {
   type Link,
   linksOf,

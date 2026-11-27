@@ -1,0 +1,91 @@
+{% if publishes_packages %}{% raw %}name: on_pr
+
+# Generated from plexus-ms/template-repo-turbo: edit the template, never this file.
+# A package repo's pull-request mount, check and the changeset guard (§ 5 PLX-Delivery).
+
+on:
+  pull_request:
+
+permissions:
+  contents: read{% endraw %}{% if private_packages_scope %}
+  packages: read{% endif %}{% raw %}
+
+concurrency:
+  group: on_pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    uses: plexus-ms/tooling/.github/workflows/_check.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      tasks: verify{% endraw %}{% if private_packages_scope %}
+      private-packages: true{% endif %}{% raw %}
+
+  changeset-status:
+    # `changeset version` consumed the release branch's changesets, and the bot's branches get theirs from the
+    # changeset job: the guard counts any file under a package, so a devDependency bump would trip it.
+    if: ${{ !startsWith(github.head_ref, 'changeset-release/') && !startsWith(github.head_ref, 'renovate/') }}
+    runs-on: ${{ (vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}') == 'github' && 'ubuntu-latest' || 'ci-small' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v5{% endraw %}{% if private_packages_scope %}{% raw %}
+      - name: Log in to the forge's package registry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          printf '//npm.pkg.github.com/:_authToken=%s\n' "$GITHUB_TOKEN" > "$RUNNER_TEMP/npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"{% endraw %}{% endif %}{% raw %}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec changeset status --since=origin/main
+
+  changeset:
+    if: ${{ startsWith(github.head_ref, 'renovate/') }}
+    uses: plexus-ms/tooling/.github/workflows/_changeset.yml@0.130.0
+    with:
+      gh-client-id: ${{ vars.GH_CLIENT_ID }}
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+    secrets:
+      gh-private-key: ${{ secrets.GH_PRIVATE_KEY }}
+      op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+{% endraw %}{% else %}{% raw %}name: on_pr
+
+# Generated from plexus-ms/template-repo-turbo: edit the template, never this file.
+# An app repo's pull-request mount, check then verify (§ 2 PLX-Delivery).
+
+on:
+  pull_request:
+    paths-ignore: ['**/*.md']
+
+permissions:
+  contents: read
+  packages: write
+  actions: read
+
+concurrency:
+  group: on_pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    uses: plexus-ms/tooling/.github/workflows/_check.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      turbo-cache: {% endraw %}{{ 'true' if ci_registry == 'own' else 'false' }}{% if private_packages_scope %}
+      private-packages: true{% endif %}{% raw %}
+    secrets:
+      op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+
+  verify:
+    needs: check
+    uses: plexus-ms/tooling/.github/workflows/_verify.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      registry: {% endraw %}{{ ci_registry }}{% raw %}
+      alerts-email: '{% endraw %}{{ alerts_email }}{% raw %}'{% endraw %}{% if private_packages_scope %}
+      private-packages: true{% endif %}{% raw %}
+    secrets:
+      op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+{% endraw %}{% endif %}

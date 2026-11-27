@@ -55,20 +55,21 @@
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { Answers } from '@plexus-ms/cli-template';
-import { bundledTemplatesRoot, loadTemplate } from './bundled.ts';
+import { loadTemplate } from './bundled.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE } from './copier.ts';
 import { crossedOver } from './doctor.ts';
 import { MARKER_FILE } from './marker.ts';
 import { findSites, type MarkerSite, siteAnswers } from './sites.ts';
 import { planSync, type SiteMerge, type SiteSides, type Source } from './sync.ts';
+import { templatesRoot } from './templatesRoot.ts';
 
 export interface ApplyOptions {
   /** The repo, a directory inside git's working tree at its top. */
   repo: string;
   /** The Plexus version of the running plx. */
   plxVersion: string;
-  /** The root of the templates; default the ones this plx bundles. */
+  /** The root of the templates; default `templatesRoot()`, the ones this plx bundles. */
   templates?: string;
 }
 
@@ -178,7 +179,7 @@ async function sitesToTake(
     const read =
       dir !== '.' &&
       rootChanged.length > 0 &&
-      (await relatesTo(templates ?? bundledTemplatesRoot(), [...old.templates, ...next.templates], rootChanged));
+      (await relatesTo(templates ?? templatesRoot(), [...old.templates, ...next.templates], rootChanged));
     if (own || read) sides.push({ dir, old, new: next });
   }
   const rootSource = sourceAt(now, '.');
@@ -216,7 +217,7 @@ export async function apply(ctx: Context, options: ApplyOptions): Promise<Applie
   const sides = await sitesToTake(now, before, options.templates);
   if (sides.length === 0) return { sites: [], conflicted: 0, applied: false, declined: false };
   const siblings = now.filter((s) => s.dir !== '.').map((s) => ({ dir: s.dir, answers: s.config?.answers ?? {} }));
-  const plan = await planSync(ctx, repo, options.templates ?? bundledTemplatesRoot(), sides, {
+  const plan = await planSync(ctx, repo, options.templates ?? templatesRoot(), sides, {
     labels: { old: 'the markers at HEAD', new: 'the markers in the working tree' },
     siblings,
   });

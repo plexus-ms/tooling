@@ -1,0 +1,28 @@
+{
+  "name": "{{ name }}",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "check": "next typegen && tsc --noEmit"{% if profile == 'stateful' %},
+    "migrate": "echo 'migrate: not written yet. Name the migration command here; the migrate service of docker/compose.yaml runs it in the image, which holds node and the standalone build.' >&2; exit 1",
+    "seed": "echo 'seed: not written yet. Name the command here that loads development sample data into a fresh, migrated database.' >&2; exit 1"{% endif %}
+  },
+  "dependencies": {
+    "@plexus-ms/std": "^0.2.0",
+    "next": "^16",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@plexus-ms/config": "catalog:plexus",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^24",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4",
+    "typescript": "catalog:"
+  }
+}

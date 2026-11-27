@@ -1,0 +1,103 @@
+# Generated from plexus-ms/template-repo-operations.
+# The verbs of the operations repo (PLX-Tenancy/OperationsRepo): one per layer's playbook, and the contract verbs.
+
+# `mise :verb` needs the root marker, though the repo has no sub-projects (§ 2 PLX-Repo).
+monorepo_root = true
+# The root is the one project: mise does not walk the tree for others.
+[monorepo]
+config_roots = ["."]
+
+[tools]
+node = "24"
+hk = "latest"
+python = "3.14"
+uv = "latest"
+ansible = { version = "latest", uvx = true }
+copier = { version = "latest", uvx = true }
+# The plx pins are written with each Plexus version, never by the update bot (§ 1 PLX-Updates);
+# allow_low_downloads only waives npm's young-package heuristics.
+"npm:@plexus-ms/cli" = { version = "0.130.0", allow_low_downloads = true }
+{%- if ci_strategy == 'hybrid' or ci_registry == 'own' %}
+"npm:@plexus-ms/cli-ci" = { version = "0.130.0", allow_low_downloads = true }
+{%- endif %}
+
+[hooks]
+# hk is absent on a CI runner whose mise installs only the tools a job names.
+postinstall = "if command -v hk >/dev/null; then hk install --mise; fi"
+
+# A layer's verb passes what follows `--` to ansible-playbook: `mise platform -- --tags apps --limit vm101`.
+[tasks.platform]
+depends = ["collections"]
+description = "The platform layer on the app hosts (PLX-Platform): host baseline, deploy user, ingress, secrets, apps; --tags for a part"
+run = './ansible-playbookw platform.yml'
+
+{% if infrastructure -%}
+[tasks.infrastructure]
+depends = ["collections"]
+description = "The infrastructure layer under the hosts (PLX-Infrastructure): hypervisor, guests, backup server, ingress VM; --tags for a part"
+run = './ansible-playbookw infrastructure.yml'
+
+{% endif -%}
+{% if ci_strategy != 'github' -%}
+[tasks.ci]
+depends = ["collections"]
+description = "The tenant's CI capacity (§ 8 PLX-Delivery): the runner host and its slots; --tags for a part"
+run = './ansible-playbookw ci.yml'
+
+{% endif -%}
+[tasks.dev]
+description = "No-op: an operations repo has no development environment to start"
+run = 'echo "dev: nothing to start in an operations repo"'
+
+[tasks.build]
+description = "No-op: an operations repo produces no artifact; third-party apps pin published images"
+run = 'echo "build: nothing to build in an operations repo"'
+
+[tasks.lint]
+description = "Formatting of the text files: no trailing whitespace, one final newline, one kind of line ending"
+usage = '''
+flag "--write" help="Fix the files in place"
+arg "<paths>" var=#true default="." help="Files or directories to lint (defaults to the whole repo)"
+'''
+# hk's own fixers, so that lint needs no tool beyond the pinned ones.
+run = '''
+eval "set -- $usage_paths"
+files=$(git ls-files --cached --others --exclude-standard -- "$@" | grep -E '\.(ya?ml|toml|md|json|cfg|pkl|env|j2|sh)$|(^|/)ansible-playbookw$' || true)
+[ -n "$files" ] || exit 0
+status=0
+for fixer in trailing-whitespace end-of-file-fixer mixed-line-ending; do
+  printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 hk util "$fixer" ${usage_write:+--fix} || status=1
+done
+[ "$status" = 0 ] || echo "lint: \`mise :lint --write\` fixes these in place" >&2
+exit "$status"
+'''
+
+[tasks.check]
+depends = ["collections"]
+description = "Static checks: lint, the contracts' checks (plx doctor), then playbook syntax against the pinned collections"
+run = [
+    'mise run lint',
+    'plx doctor',
+    'ansible-playbook --syntax-check platform.yml',
+{%- if infrastructure %}
+    'ansible-playbook --syntax-check infrastructure.yml',
+{%- endif %}
+{%- if ci_strategy != 'github' %}
+    'ansible-playbook --syntax-check ci.yml',
+{%- endif %}
+]
+
+[tasks.test]
+description = "No-op: an operations repo has no tests that gate a deploy"
+run = 'echo "test: nothing to test in an operations repo"'
+
+[tasks.verify]
+description = "Perform all steps that verify code quality"
+run = ['mise run check', 'mise run test']
+
+[tasks.collections]
+description = "Install the pinned plexus.* collections"
+hide = true
+run = 'ansible-galaxy collection install -r requirements.yml'
+sources = ["requirements.yml"]
+outputs = { auto = true }

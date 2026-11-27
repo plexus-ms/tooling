@@ -1,0 +1,37 @@
+{% raw %}name: deploy
+
+# Generated from plexus-ms/template-repo-operations: edit the template, never this file.
+# Mounts the deploy verb for the third-party apps under apps/ (PLX-App/SourceRepo, § 6 PLX-Delivery).
+
+on:
+  push:
+    branches: [main]
+    paths: ['apps/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-targets:
+    uses: plexus-ms/tooling/.github/workflows/_deploy-targets.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+
+  deploy:
+    needs: deploy-targets
+    # An empty matrix is an error, not a no-op.
+    if: ${{ needs.deploy-targets.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.deploy-targets.outputs.matrix) }}
+    uses: plexus-ms/tooling/.github/workflows/_deploy.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      app: ${{ matrix.app }}
+      host: ${{ matrix.host }}
+      overlay: {% endraw %}{{ ci_overlay }}{% raw %}
+    secrets:
+      op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+{% endraw %}

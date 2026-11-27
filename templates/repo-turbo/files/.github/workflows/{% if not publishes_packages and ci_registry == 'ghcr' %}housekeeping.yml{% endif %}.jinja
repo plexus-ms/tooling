@@ -1,0 +1,28 @@
+{% raw %}name: housekeeping
+
+# Generated from plexus-ms/template-repo-turbo: edit the template, never this file.
+# The retention of the candidates this repo leaves in the forge's registry (§ 8 PLX-Delivery).
+
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only list what would be deleted
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # Mounted here, not in the operations repo: only this repo's own token may delete versions of its packages.
+  packages: write
+
+jobs:
+  housekeeping:
+    uses: plexus-ms/tooling/.github/workflows/_housekeeping.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      registry: ghcr
+      dry-run: ${{ inputs.dry_run || false }}
+{% endraw %}

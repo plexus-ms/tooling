@@ -1,0 +1,28 @@
+{% raw %}name: on_commit
+
+# Generated from plexus-ms/template-repo-turbo: edit the template, never this file.
+# An app repo's mount for a push to any other branch, check alone (§ 2 PLX-Delivery).
+
+on:
+  push:
+    branches-ignore: [main, develop]
+    paths-ignore: ['**/*.md']
+
+permissions:
+  contents: read{% endraw %}{% if private_packages_scope %}
+  packages: read{% endif %}{% raw %}
+
+concurrency:
+  group: on_commit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    uses: plexus-ms/tooling/.github/workflows/_check.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      turbo-cache: {% endraw %}{{ 'true' if ci_registry == 'own' else 'false' }}{% if private_packages_scope %}
+      private-packages: true{% endif %}{% raw %}
+    secrets:
+      op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+{% endraw %}
