@@ -67,7 +67,8 @@ const parentOf = (source: string): string => source.slice(0, Math.max(0, source.
 
 /** `part` below `parent`, both of the output and with `..` and `.` resolved; undefined where it leaves the output. */
 function join(parent: string, part: string): string | undefined {
-  if (part.startsWith('/')) return undefined;
+  // An absolute part, or one with a NUL character, is no path inside the output.
+  if (part.startsWith('/') || part.includes('\0')) return undefined;
   const parts = parent === '' ? [] : parent.split('/');
   for (const segment of part.split('/')) {
     if (segment === '' || segment === '.') continue;
@@ -110,8 +111,8 @@ export function renderFiles(template: Template, context: Context, errors: Render
     if (part === '') return 'skipped';
     const path = join(parent.path, part);
     if (path === undefined) {
-      const shown = parent.path === '' ? part : `${parent.path}/${part}`;
-      return fail(source, `"${shown}" is forbidden: it is not inside the output`);
+      const shown = parent.path === '' || part.startsWith('/') ? part : `${parent.path}/${part}`;
+      return fail(source, `${JSON.stringify(shown)} is forbidden: it is not inside the output`);
     }
     return { path };
   };
