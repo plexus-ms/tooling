@@ -236,28 +236,47 @@ async function readAnswers(source: string | undefined): Promise<Answers> {
   return answers as Answers;
 }
 
-/** The policies `render` wrote beside the render in `dir`. */
-async function readPolicies(dir: string): Promise<Policies> {
+/** The version of the policies file `render` writes and `merge` reads. */
+const POLICIES_VERSION = 1;
+
+/** The policies `render` wrote beside the render in `dir`, which holds `tree`; each way it can be wrong is an input error. */
+async function readPolicies(dir: string, tree: Tree): Promise<Policies> {
   const file = policiesOf(dir);
+  const fail = (what: string): never => {
+    throw new InputError(`the policies file ${what}`, file);
+  };
   let text: string;
   try {
     text = await readFile(file, 'utf8');
   } catch {
-    throw new InputError(`no policies file for ${dir}: \`render\` writes one beside the render it writes`, file);
+    return fail(`is missing: \`render\` writes one beside the render it writes`);
   }
-  let files: unknown;
+  let parsed: unknown;
   try {
-    files = (JSON.parse(text) as { files?: unknown }).files;
+    parsed = JSON.parse(text);
   } catch (error) {
-    throw new InputError(`the policies file is no JSON: ${messageOf(error)}`, file);
+    return fail(`is no JSON: ${messageOf(error)}`);
   }
-  const entries = typeof files === 'object' && files !== null ? Object.entries(files) : undefined;
-  if (
-    entries === undefined ||
-    entries.some(([, v]) => !POLICIES.includes((v as { policy?: string } | null)?.policy as string))
-  )
-    throw new InputError('the policies file is not what `render` writes: files by path, each with a policy', file);
-  return new Map(entries as [string, { policy: Policy }][]);
+  if (!isObject(parsed)) return fail('is not a JSON object with a version and files');
+  if (parsed.version === undefined) return fail('has no version');
+  if (parsed.version !== POLICIES_VERSION)
+    return fail(
+      `is version ${String(parsed.version)}, and this plx-template reads version ${POLICIES_VERSION} only; was it written by a later plx-template?`,
+    );
+  if (!isObject(parsed.files)) return fail('has no files: a map of path to { template, policy }');
+  const files = Object.entries(parsed.files);
+  const bad = files.filter(([, v]) => !isObject(v) || !POLICIES.includes(v.policy as string)).map(([path]) => path);
+  if (bad.length > 0) return fail(`gives no policy, merge or born-once, to ${bad.join(', ')}`);
+  const lacking = [...tree.keys()].filter((path) => !(path in (parsed.files as object)));
+  if (lacking.length > 0) return fail(`lacks ${lacking.join(', ')}, which its render holds`);
+  const extra = files.map(([path]) => path).filter((path) => !tree.has(path));
+  if (extra.length > 0) return fail(`names ${extra.join(', ')}, which its render does not hold`);
+  return new Map(files as [string, { policy: Policy }][]);
+}
+
+/** Whether `value` is a JSON object: not null, not a list. */
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** The JSON a render prints: the core's result, but for its tree. */
@@ -288,7 +307,7 @@ async function readRender(
   const links = [...tree].filter(([, e]) => (e.mode & MODE_TYPE) === SYMLINK).map(([path]) => join(dir, path));
   for (const path of links) problems.push({ message: 'is a symlink, and a render holds none', path });
   if (links.length > 0) return undefined;
-  const policies = await attempt(() => readPolicies(dir));
+  const policies = await attempt(() => readPolicies(dir, tree));
   return policies && { tree, policies };
 }
 
@@ -344,7 +363,10 @@ async function renderCommand(
     return EXIT.input;
   }
   await applyChanges(out, result.tree);
-  await writeFile(policiesOf(out), `${JSON.stringify({ files: Object.fromEntries(result.files) }, null, 2)}\n`);
+  await writeFile(
+    policiesOf(out),
+    `${JSON.stringify({ version: POLICIES_VERSION, files: Object.fromEntries(result.files) }, null, 2)}\n`,
+  );
   print(renderJson(result, errors));
   return EXIT.ok;
 }
