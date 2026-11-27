@@ -6,7 +6,7 @@
 // comment; copier is MIT-licensed, see LICENSE.copier.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { type MergeFile, merge, type Policies, REGULAR } from './index.ts';
+import { type MergeFile, merge, type Policies, REGULAR, SYMLINK } from './index.ts';
 import { type Listing, listing, tree } from './testing/trees.ts';
 
 interface Case {
@@ -432,5 +432,53 @@ test('merge merges the executable bit apart from the content: a change of the bi
     },
     report: ['apple.sh: clean', 'pear.sh: clean', 'plum.sh: clean'],
     calls: [{ path: 'plum.sh', old: 'blue\n', new: 'purple\n', current: 'dark blue\n' }],
+  });
+});
+
+test('merge never writes or deletes a path that is a symlink in the current tree, nor through one, and reports it as kept', async () => {
+  const link = (target: string) => ({ text: target, mode: SYMLINK | 0o777 });
+  const result = await run({
+    old: { 'apple.txt': 'red\n', 'pear.txt': 'green\n' },
+    new: { 'apple.txt': 'green\n', 'basket/plum.txt': 'blue\n', 'crate/cherry.txt': 'red\n' },
+    current: {
+      'apple.txt': link('elsewhere/apple.txt'),
+      'pear.txt': link('elsewhere/pear.txt'),
+      basket: link('elsewhere'),
+      crate: link('elsewhere'),
+    },
+    bornOnce: ['crate/cherry.txt'],
+  });
+  assert.deepEqual(result, {
+    tree: {
+      'apple.txt': link('elsewhere/apple.txt'),
+      'pear.txt': link('elsewhere/pear.txt'),
+      basket: link('elsewhere'),
+      crate: link('elsewhere'),
+    },
+    report: ['apple.txt: kept', 'basket/plum.txt: kept', 'crate/cherry.txt: kept', 'pear.txt: kept'],
+    calls: [],
+  });
+});
+
+// Ported from tests/test_symlinks.py, test_update_renamed_dir_does_not_delete_symlink_target:
+// a template cannot hold a symlink here, so the user made the directory one;
+// the template then renames the directory.
+test('merge does not delete the target of a symlink the user put in place of a directory the template renames', async () => {
+  const result = await run({
+    old: { 'foo/templates/file.txt': 'test' },
+    new: { 'bar/templates/file.txt': 'test' },
+    current: {
+      'foo/templates': { text: '../shared/templates', mode: SYMLINK | 0o777 },
+      'shared/templates/file.txt': 'test',
+    },
+  });
+  assert.deepEqual(result, {
+    tree: {
+      'foo/templates': { text: '../shared/templates', mode: SYMLINK | 0o777 },
+      'shared/templates/file.txt': 'test',
+      'bar/templates/file.txt': 'test',
+    },
+    report: ['bar/templates/file.txt: added', 'foo/templates/file.txt: kept'],
+    calls: [],
   });
 });
