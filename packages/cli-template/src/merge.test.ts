@@ -301,3 +301,33 @@ test('merge never touches a born-once path the current tree has, and reports it 
     calls: [],
   });
 });
+
+test('merge keeps a born-once path the template drops, edited or not, and reports it as kept', async () => {
+  const result = await run({
+    old: { 'apple.txt': 'red\n', 'pear.txt': 'green\n' },
+    new: {},
+    current: { 'apple.txt': 'red\n', 'pear.txt': 'yellow\n' },
+    bornOnce: ['apple.txt', 'pear.txt'],
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.txt': 'red\n', 'pear.txt': 'yellow\n' },
+    report: ['apple.txt: kept', 'pear.txt: kept'],
+    calls: [],
+  });
+});
+
+test('merge keeps a born-once path that no longer renders, its name rendering empty, edited or not, and reports it as kept', async () => {
+  // The old render had `{{ colour }}/notes.txt` as `red/notes.txt`; the new
+  // answer renders the directory's name empty, which drops the file.
+  const result = await run({
+    old: { 'red/notes.txt': 'red\n', 'red/label.txt': 'red\n', 'basket.txt': 'apples\n' },
+    new: { 'basket.txt': 'apples\n' },
+    current: { 'red/notes.txt': 'red\n', 'red/label.txt': 'crimson\n', 'basket.txt': 'apples\n' },
+    bornOnce: ['red/notes.txt', 'red/label.txt'],
+  });
+  assert.deepEqual(result, {
+    tree: { 'red/notes.txt': 'red\n', 'red/label.txt': 'crimson\n', 'basket.txt': 'apples\n' },
+    report: ['red/label.txt: kept', 'red/notes.txt: kept'],
+    calls: [],
+  });
+});
