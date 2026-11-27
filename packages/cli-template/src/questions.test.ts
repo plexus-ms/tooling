@@ -479,3 +479,22 @@ test('a validator that fails to render is an error with the failure as its messa
   assert.equal(result.errors.length, 1);
   assert.equal(result.errors[0]?.question, 'q');
 });
+
+test('a given answer that belongs to no question is not an error, and the result lists it as unused', () => {
+  const result = basket('fruit:\n  default: apple', { fruit: 'pear', colour: 'red', size: 3 }, '{{ fruit }}');
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.unused, ['colour', 'size']);
+  assert.deepEqual(result.answers, { fruit: 'pear' });
+  assert.equal(result.out, 'pear');
+});
+
+test('a given answer for a skipped question is used, not unused, and nothing is unused when every answer has a question', () => {
+  const result = basket('fruit:\n  when: false\n  default: apple', { fruit: 'pear' });
+  assert.deepEqual(result.unused, []);
+});
+
+test('the unused answers are listed even when the render has errors', () => {
+  const result = basket('fruit:', { colour: 'red' });
+  assert.equal(result.errors.length, 1);
+  assert.deepEqual(result.unused, ['colour']);
+});
