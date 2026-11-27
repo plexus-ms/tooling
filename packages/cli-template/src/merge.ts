@@ -53,8 +53,9 @@ async function mergePath(
     return 'added';
   }
   if (same(o, n)) return undefined;
-  if (bornOnce || c === undefined || isSymlink(c)) return 'kept';
+  if (isSymlink(c)) return 'kept';
   if (isDirectory(o) || isDirectory(n)) return undefined;
+  if (bornOnce || c === undefined) return 'kept';
   if (n === undefined) {
     if (!same(c, o)) return 'conflicted';
     tree.delete(path);
