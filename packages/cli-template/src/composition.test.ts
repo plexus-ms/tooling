@@ -327,3 +327,13 @@ test('a template whose read fails renders no files, so that the files using the 
     { template: 'box', other: undefined, path: 'template.yml', question: 'colour' },
   ]);
 });
+
+test("a read of a question that fails in its owner adds no error, and the reader's own questions are still resolved", () => {
+  const owner = 'name: orchard\nquestions:\n  trees:\n    type: int\n';
+  const box = 'name: box\nquestions:\n  lid:\n    type: str\nreads:\n  trees:\n';
+  const result = render([template(box, { 'box.txt.jinja': '{{ trees }}' }), template(owner)], {});
+  assert.deepEqual(where(result.errors), [
+    { template: 'orchard', other: undefined, path: undefined, question: 'trees' },
+    { template: 'box', other: undefined, path: undefined, question: 'lid' },
+  ]);
+});
