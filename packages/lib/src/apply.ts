@@ -15,15 +15,19 @@
 //      working tree has them. A site is a directory with a tracked marker, so
 //      a new marker needs `git add` before it is a site. Refuse when any
 //      marker on either side has a problem (it cannot be read, a nested one
-//      carries `version`), naming the marker and the side: a marker that is
-//      not read cannot stand for a site with no templates.
+//      carries `version`), naming the marker and the side: one tracked marker
+//      with a problem anywhere in the repo, whatever site it belongs to,
+//      blocks the run for every site, since a marker that is not read cannot
+//      stand for a site with no templates.
 //   3. When any marker lists templates, refuse unless the root marker's
 //      `version` is the running plx's both at HEAD and in the working tree:
 //      the templates this plx bundles are the ones that version was rendered
 //      with, and only `plx update` writes the version.
 //   4. Take each site whose own marker changed (its `templates` or its own
 //      answers, or it is new or gone), and each nested site that lists a
-//      template which owns or reads a root answer that changed. A site that
+//      template which owns or reads a root answer that changed, the root's
+//      resolved answers compared, defaults included, so that swapping a
+//      template for one with another default counts. A site that
 //      listed no templates on either side renders nothing, and one not taken
 //      is not rendered at all, so it cannot fail or write back a file its
 //      user deleted.
@@ -61,7 +65,7 @@ import { ANSWERS_FILE } from './copier.ts';
 import { crossedOver } from './doctor.ts';
 import { MARKER_FILE } from './marker.ts';
 import { findSites, type MarkerSite, siteAnswers } from './sites.ts';
-import { planSync, type SiteMerge, type SiteSides, type Source } from './sync.ts';
+import { planSync, resolvedAnswers, type SiteMerge, type SiteSides, type Source } from './sync.ts';
 import { templatesRoot } from './templatesRoot.ts';
 
 export interface ApplyOptions {
@@ -86,12 +90,18 @@ export interface Applied {
 export const CROSSOVER_RUNBOOK = 'the crossover runbook';
 
 /** The templates and answers the site at `dir` among `sites` is rendered from; none where it has no marker. */
-function sourceAt(sites: readonly MarkerSite[], dir: string): Source {
+function sourceAt(sites: readonly MarkerSite[], dir: string, where: string): Source {
   const config = sites.find((s) => s.dir === dir)?.config;
-  return config
-    ? { templates: config.templates ?? [], answers: siteAnswers(sites, dir) }
-    : { templates: [], answers: {} };
+  if (!config) return { templates: [], answers: {} };
+  try {
+    return { templates: config.templates ?? [], answers: siteAnswers(sites, dir) };
+  } catch (error) {
+    throw new Error(`${(error as Error).message} (the markers ${where})`);
+  }
 }
+
+const AT_HEAD = 'at HEAD';
+const IN_TREE = 'in the working tree';
 
 /** The top of the repo that `dir` is inside; rejects, saying so, when it is inside none. */
 async function topOf(ctx: Context, dir: string): Promise<string> {
@@ -104,10 +114,7 @@ async function topOf(ctx: Context, dir: string): Promise<string> {
 
 /** Every marker with a problem, as the lines of one refusal; none when all are readable. */
 function problemsOf(now: readonly MarkerSite[], before: readonly MarkerSite[]): string[] {
-  const lines = [
-    ...now.map((s) => ({ s, where: 'in the working tree' })),
-    ...before.map((s) => ({ s, where: 'at HEAD' })),
-  ]
+  const lines = [...now.map((s) => ({ s, where: IN_TREE })), ...before.map((s) => ({ s, where: AT_HEAD }))]
     .filter(({ s }) => s.problem !== undefined)
     .map(({ s, where }) => `${join(s.dir, MARKER_FILE)} ${where}: ${s.problem}`);
   return lines.length === 0
@@ -157,34 +164,32 @@ async function relatesTo(root: string, names: readonly string[], keys: readonly 
  * The sites to render, each with its two sides: those whose own marker changed
  * (its templates or its own answers, or the marker is new or gone), and the
  * nested sites that list a template which owns or reads a root answer that
- * changed. A site with no templates on either side renders nothing. When a
- * nested site is taken, the root is rendered with it for the answers it gives,
- * and merged only if it changed itself.
+ * changed, its resolved answers compared, defaults included. A site with no
+ * templates on either side renders nothing. When a site is taken the root is
+ * rendered with it for the answers it gives, and merged only if it changed
+ * itself.
  */
 async function sitesToTake(
   now: readonly MarkerSite[],
   before: readonly MarkerSite[],
-  templates: string | undefined,
+  root: string,
 ): Promise<SiteSides[]> {
   const configOf = (sites: readonly MarkerSite[], dir: string) => sites.find((s) => s.dir === dir)?.config;
-  const rootChanged = changedKeys(configOf(before, '.')?.answers ?? {}, configOf(now, '.')?.answers ?? {});
+  const [oldRoot, newRoot] = [sourceAt(before, '.', AT_HEAD), sourceAt(now, '.', IN_TREE)];
+  const rootChanged = changedKeys(await resolvedAnswers(root, oldRoot), await resolvedAnswers(root, newRoot));
   const sides: SiteSides[] = [];
   for (const dir of new Set([...now, ...before].map((s) => s.dir))) {
-    const [old, next] = [sourceAt(before, dir), sourceAt(now, dir)];
+    const [old, next] = [sourceAt(before, dir, AT_HEAD), sourceAt(now, dir, IN_TREE)];
     if (next.templates.length + old.templates.length === 0) continue;
     const [was, is] = [configOf(before, dir), configOf(now, dir)];
     const own =
       !isDeepStrictEqual(was?.templates ?? [], is?.templates ?? []) ||
       !isDeepStrictEqual(was?.answers ?? {}, is?.answers ?? {});
-    const read =
-      dir !== '.' &&
-      rootChanged.length > 0 &&
-      (await relatesTo(templates ?? templatesRoot(), [...old.templates, ...next.templates], rootChanged));
-    if (own || read) sides.push({ dir, old, new: next });
+    if (own || (rootChanged.length > 0 && (await relatesTo(root, next.templates, rootChanged))))
+      sides.push({ dir, old, new: next });
   }
-  const rootSource = sourceAt(now, '.');
-  if (sides.length > 0 && !sides.some((s) => s.dir === '.') && rootSource.templates.length > 0)
-    sides.unshift({ dir: '.', old: sourceAt(before, '.'), new: rootSource, contextOnly: true });
+  if (sides.length > 0 && !sides.some((s) => s.dir === '.'))
+    sides.unshift({ dir: '.', old: oldRoot, new: newRoot, contextOnly: true });
   return sides;
 }
 
@@ -214,10 +219,12 @@ export async function apply(ctx: Context, options: ApplyOptions): Promise<Applie
     const refusal = versionRefusal(now, before, plxVersion);
     if (refusal !== undefined) throw new Error(refusal);
   }
-  const sides = await sitesToTake(now, before, options.templates);
-  if (sides.length === 0) return { sites: [], conflicted: 0, applied: false, declined: false };
-  const siblings = now.filter((s) => s.dir !== '.').map((s) => ({ dir: s.dir, answers: s.config?.answers ?? {} }));
-  const plan = await planSync(ctx, repo, options.templates ?? templatesRoot(), sides, {
+  const root = options.templates ?? templatesRoot();
+  const sides = await sitesToTake(now, before, root);
+  const siblings = now
+    .filter((s) => s.dir !== '.')
+    .map((s) => ({ dir: s.dir, templates: s.config?.templates ?? [], answers: s.config?.answers ?? {} }));
+  const plan = await planSync(ctx, repo, root, sides, {
     labels: { old: 'the markers at HEAD', new: 'the markers in the working tree' },
     siblings,
   });

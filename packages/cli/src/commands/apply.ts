@@ -6,9 +6,9 @@
 // the merge touched and `+ <answer>: <value>` per default written into the
 // marker; `--json` prints the same as data. Exit code 1 when a file is
 // conflicted or the answer to the prompt was no; a dry run writes nothing and
-// exits 0, saying how many files would be conflicted. A conflict is: a conflict stays in the file between `<<<<<<< current` and
-// `>>>>>>> new render`, or the file is kept as the user edited it where the
-// template dropped it. Nothing is committed.
+// exits 0, saying how many files would be conflicted. A conflict stays in the
+// file between `<<<<<<< current` and `>>>>>>> new render`, or the file is kept
+// as the user edited it where the template dropped it. Nothing is committed.
 //
 //   plx apply                  # this repo, after editing a marker
 //   plx -n apply               # what it would write, and nothing written
@@ -51,7 +51,8 @@ export function register(program: Command): void {
  */
 export function outcomeOf(applied: Applied, dryRun: boolean): { line: string; ok: boolean; code: 0 | 1 } {
   if (applied.declined) return { line: 'nothing written: the answer was no', ok: false, code: 1 };
-  if (applied.sites.length === 0) return { line: 'nothing to apply: no marker differs from HEAD', ok: true, code: 0 };
+  if (applied.sites.length === 0)
+    return { line: 'nothing to apply: no site that lists templates changed since HEAD', ok: true, code: 0 };
   if (dryRun) {
     const would =
       applied.conflicted > 0
