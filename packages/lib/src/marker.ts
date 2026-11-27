@@ -18,6 +18,11 @@
 // repo's root marker only, which a reader of one marker cannot tell; that is
 // sites.ts's to enforce. A marker without `templates` is valid and renders
 // nothing.
+//
+// The one writer of a marker's keys is `setMarkerKeys`. It never re-serialises
+// the frontmatter, which a human wrote: it splices the text of each key it
+// sets, so that comments, order, quoting and blank lines, and the body, stay
+// as they were.
 import { isDeepStrictEqual } from 'node:util';
 import { Document, isCollection, isMap, isNode, isScalar, parse, parseDocument } from 'yaml';
 import { isPlexusVersion } from './version.ts';
