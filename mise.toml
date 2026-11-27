@@ -54,7 +54,7 @@ description = "Build the packages (the collection and the workflows ship as sour
 run = "turbo run build"
 
 [tasks.verify]
-depends = ["lint", "check", "test"]
+depends = ["lint", "check", "test", "parity"]
 description = "Perform all steps that verify code quality"
 
 # The upstream's verb (§ 1.5 PLX)
@@ -88,6 +88,14 @@ run = "biome check ${usage_write:+--write} --no-errors-on-unmatched $usage_paths
 [tasks.check]
 depends = ["check-js", "check-ops", "check-requirements"]
 description = "Run static checks on the codebase: the packages, the workflows, the collection, the citations"
+
+[tasks.parity]
+depends = ["install"]
+description = "The parity ring: the engine renders and updates the three templates as copier does; scaffolding the cutover deletes with copier (parity/parity.test.ts)"
+hide = true
+# Never a turbo task, so never cached: what it compares with is the template
+# repos, which are not files of this repo. It clones them on every run.
+run = "node --test parity/*.test.ts"
 
 [tasks.check-js]
 depends = ["install"]

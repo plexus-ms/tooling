@@ -172,6 +172,11 @@ test('the marker is edited in its body, and files that vanish, appear, or are no
   assert.equal(edits[0]?.text, 'prose\nlocal prose\n');
 });
 
+test('a marker with no body gets its prose as the first line', () => {
+  const edits = consumerEdits(tree({ 'PLEXUS.md': '' }), tree({ 'PLEXUS.md': '' }));
+  assert.equal(edits.find((e) => e.path === 'PLEXUS.md')?.text, 'local prose\n');
+});
+
 test('cloning the template repos fails loudly, naming the repo and where it was looked for', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'parity-clone-'));
   try {
