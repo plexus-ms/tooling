@@ -99,7 +99,8 @@ test('a skipped question without a default is absent, and its validator is not r
 });
 
 // Ported from tests/test_updatediff.py::test_conditional_computed_value, the copy and update steps
-// as two renders, and `False False` as an absent `second`, since undefined is strict here.
+// as two renders. The skipped `second` is out of the answers, as in copier's answers file, and the
+// files still see its default, `False`.
 test('a question whose when and default read an earlier answer applies with it and vanishes without it', () => {
   const questions = 'first:\n  type: bool\nsecond:\n  type: bool\n  default: "{{ first }}"\n  when: "{{ first }}"';
   const body = "{{ first }} {{ second | default('-') }}";
@@ -109,7 +110,7 @@ test('a question whose when and default read an earlier answer applies with it a
   const off = basket(questions, { first: false }, body);
   assert.deepEqual(off.errors, []);
   assert.deepEqual(off.answers, { first: false });
-  assert.equal(off.out, 'False -');
+  assert.equal(off.out, 'False False');
 });
 
 // Ported from tests/test_updatediff.py::test_update_dont_validate_computed_value.

@@ -36,6 +36,22 @@ function value(source: unknown, context: Context): unknown {
   return expression === undefined ? renderString(source, context) : evaluate(expression, context);
 }
 
+/** A value as a boolean the way copier reads one: a number by its truth, a string by its YAML boolean words, anything else by its truthiness. */
+function toBool(source: unknown): boolean {
+  if (typeof source === 'number') return source !== 0;
+  if (typeof source === 'string') {
+    const text = source.trim().toLowerCase();
+    if (text === '') return false;
+    if (Number.isFinite(Number(text))) return Number(text) !== 0;
+    if (['y', 'yes', 't', 'true', 'on'].includes(text)) return true;
+    if (['n', 'no', 'f', 'false', 'off', '~', 'null', 'none'].includes(text)) return false;
+    return true;
+  }
+  if (Array.isArray(source)) return source.length > 0;
+  if (typeof source === 'object' && source !== null) return Object.keys(source).length > 0;
+  return Boolean(source);
+}
+
 /** `value` of the field `what` of a question, an error naming the field's source where it fails. */
 function field(what: string, source: unknown, context: Context): unknown {
   try {
@@ -52,12 +68,13 @@ export function resolveAnswers(manifest: Manifest, given: Answers, scope: Contex
   for (const question of manifest.questions) {
     try {
       const seen = { ...scope, ...context };
+      const applies = question.when === undefined || toBool(field('when', question.when, seen));
       let answer: unknown;
       if (Object.hasOwn(given, question.name)) answer = given[question.name];
       else if (Object.hasOwn(question, 'default')) answer = field('default', question.default, seen);
       else continue;
-      answers[question.name] = answer;
       context[question.name] = answer;
+      if (applies) answers[question.name] = answer;
     } catch (error) {
       errors.push({ template: manifest.name, question: question.name, message: messageOf(error) });
     }
