@@ -16,53 +16,73 @@
 // and checked against its choices, and a failure is an error naming the question.
 // Only the questions of the render's manifests own answers; the rest are unused.
 //
-// Strings in a manifest are Jinja, rendered as copier renders them, to text, in
-// the scope and the answers before the question (so a later question's name is
-// undefined, which fails). A list is rendered item by item, anything else taken as
-// it is. There is no second path for "an expression": a default is rendered to
-// text and then cast by the type, so `"{{ n + 1 }}"` is 2 for `int` and "2" for
-// `str`, `"true"` is true for `bool`, and `"{{ a }}-{{ b }}"` is text. The adapter's
-// `evaluate` is not used here, since a native value and render-then-cast can
-// differ (a float with no fraction), and one rule is better than two.
+// What the engine resolves is what copier (v9.19.1, see LICENSE.copier) resolves
+// in `_ask` and `Question`, without prompts, answers files, `ask`, `secret`,
+// `multiselect` or user defaults. Where it deliberately differs, a sentence below
+// says so, and a test pins the engine's side.
+//
+// What a question sees. Its default, `when`, choices and validator are rendered
+// in the scope, in every given answer to a question of this template, as given,
+// and in the resolved answer of each question before it, which replaces the given
+// one. A later question's default is not seen, and neither is a given answer that
+// no question of this template owns.
+//
+// Strings in a manifest are Jinja, rendered to text. A list is rendered item by
+// item, anything else is taken as it is. A default is rendered and then cast by
+// the type, as copier does, so `"{{ n + 1 }}"` is 2 for `int` and "2" for `str`,
+// `"true"` is true for `bool`, and `"{{ a }}-{{ b }}"` is text. `evaluate` of the
+// adapter is not used: a native value and render-then-cast can differ, and one
+// rule is better than two. An undefined variable is an error in every field,
+// where copier's default Jinja renders an empty string.
 //
 // Type: the question's own, else that of its raw default (a string `str`, a bool
-// `bool`, a whole number `int`, any other number `float`), else `yaml`, as copier
-// does. Casts follow copier's, with Python's int and float told apart by the number
-// rather than by how it was written:
-//   str    a string; a number is its text, a bool is `True` or `False`
-//   int    a whole number, or a string of digits; 1.5 and "1.0" are errors
-//   float  a number, or a string that reads as one
-//   bool   a number by whether it is 0; a string, trimmed and lower-cased, by the
-//          words y yes t true on and n no f false off ~ null none, a blank one
-//          false, a numeric one by its value, any other true
+// `bool`, a whole number `int`, any other number `float`), else `yaml`. Casts:
+//   str    a string; a number is its text, a bool is `True` or `False`; a list,
+//          a map and null are errors
+//   int    a safe integer, or a string of digits with a sign and whitespace
+//   float  a number, or a string that reads as one: sign, fraction or leading
+//          dot, exponent, whitespace
+//   bool   as copier's `cast_to_bool`: a number, or a string Python's `float`
+//          reads (`0_0` and `nan` included, `0x0` not), by its value; any other
+//          string is true unless it is blank or one of n no f false off ~ null none,
+//          in any case; a list or map by whether it is empty
 //   json   a string is parsed as JSON; any other value is taken as it is
-//   yaml   a string is parsed as YAML; any other value is taken as it is
+//   yaml   a string is parsed as YAML 1.1 (`yes`, `010`, `1:30`); any other value
+//          is taken as it is
 // A null is an error for every type but `json` and `yaml`.
 //
 // `when` is rendered and read as a bool. A question it skips is left out of the
-// reported answers and is not validated; where it has a given answer or a default,
-// the context still holds it, the given answer first, as it does in copier, so
-// that later questions and the template's files see it; where it has neither, the
-// variable is absent and no error is made. A skipped question's choices are still
-// checked against the value it holds.
+// reported answers, and its default is not validated. Where it has a default,
+// a given answer is cast, checked against its choices and validated all the same,
+// as in copier; where it has none, copier drops the question before it looks at
+// the answer, so the given one stays as it was given in the context and the files
+// see it, uncast and unchecked.
 //
-// `choices` is a list, a map of label to value (only the values restrict, in the
-// manifest's order), or a string of Jinja that renders YAML of either. List items
-// are rendered; every value is cast to the question's type, and the answer must
-// equal one of them, deeply. No choices, or an empty list, restrict nothing. The
-// extended forms of copier (pairs, `{value, validator}`) and `multiselect` are not
-// part of the engine.
+// `choices` is a list, a map of label to value, or a string of Jinja that renders
+// YAML 1.1 of either, which must be a list or a map; an empty one restricts
+// nothing. List items are rendered, every value is cast to the question's type,
+// and the answer, once cast, must equal one of them deeply and strictly. In a map
+// a null value stands for its label, as it does in copier; the answer is then the
+// label. A manifest's choices keep their order, which the error message lists.
 //
 // `validator` is rendered with the cast answer added to the context; its output,
-// trimmed, is the error message when it is not empty, and a validator that fails to
-// render is an error as well.
+// trimmed, is the error message when it is not empty.
+//
+// Where the engine differs from copier on purpose:
+// - `int` of 1.5 or of a bool is an error, where copier truncates and takes 1.
+// - `int` beyond 2^53 - 1 is an error, where Python's integers have no limit.
+// - A string with an underscore, `nan` or `inf` is no `int` or `float`, where
+//   Python's `float` reads them; `bool` still follows Python for them.
+// - A number carries no `.0`: a `float` of 1.0 prints `1`, a `str` of it is "1", and
+//   an untyped default written `1.0` is inferred as `int`.
+// - A two-item list among choices is a list value, not copier's label and value,
+//   and a null item of a list is the value null; only a map has labels.
+// - The extended choices of copier (`{value, validator}`) and `multiselect` do
+//   not exist.
+// - An undefined variable is an error, as said above.
 //
 // Answers no question owns are unused. Declared reads and several templates are
 // the render's composition, which extends `unusedAnswers`.
-//
-// Ported from copier v9.19.1 (see LICENSE.copier): `copier/_main.py` `_ask`,
-// `copier/_user_data.py` `Question` and `copier/_tools.py` `cast_to_bool`, without
-// prompts, answers files, `ask`, `secret`, `multiselect` or user defaults.
 import { isDeepStrictEqual } from 'node:util';
 import { isMap, isNode, isSeq, parseDocument, parse as parseYaml } from 'yaml';
 import { messageOf } from './errors.ts';
@@ -208,35 +228,45 @@ function field(what: string, source: unknown, context: Context): unknown {
   }
 }
 
+const MISSING = Symbol('missing');
+
+/** The answer of one question, cast, checked against its choices and validated, or `MISSING` where there is none to resolve. */
+function resolve(question: Question, given: Answers, seen: Context, applies: boolean): unknown {
+  const isGiven = Object.hasOwn(given, question.name);
+  const hasDefault = Object.hasOwn(question, 'default');
+  if (!isGiven && !hasDefault) return MISSING;
+  // A skipped question without a default is dropped before copier looks at a given answer.
+  if (!applies && !hasDefault) return MISSING;
+  const answer = isGiven
+    ? accept(question, given[question.name], seen)
+    : accept(question, field('default', question.default, seen), seen);
+  // A default is not validated for a skipped question; a given answer always is.
+  if (question.validator !== undefined && (applies || isGiven)) {
+    const message = String(field('validator', question.validator, { ...seen, [question.name]: answer })).trim();
+    if (message !== '') throw new Error(message);
+  }
+  return answer;
+}
+
 /** The questions `manifest` owns, resolved against `given` with `scope` in view; problems go to `errors`. */
 export function resolveAnswers(manifest: Manifest, given: Answers, scope: Context, errors: RenderError[]): Resolution {
   const answers: Record<string, unknown> = {};
+  // Every given answer to one of the template's questions is in view from the start, as it is given,
+  // and gives way to the answer its question resolves to.
   const context: Context = {};
+  for (const { name } of manifest.questions) if (Object.hasOwn(given, name)) context[name] = given[name];
   for (const question of manifest.questions) {
     try {
       const seen = { ...scope, ...context };
       const applies = question.when === undefined || toBool(field('when', question.when, seen));
-      let answer: unknown;
-      if (Object.hasOwn(given, question.name)) answer = accept(question, given[question.name], seen);
-      else if (Object.hasOwn(question, 'default'))
-        answer = accept(question, field('default', question.default, seen), seen);
-      else {
-        if (applies) {
-          const help = question.help === undefined ? '' : `: ${question.help}`;
-          errors.push({
-            template: manifest.name,
-            question: question.name,
-            message: `no answer and no default${help}`,
-          });
-        }
-        continue;
+      const answer = resolve(question, given, seen, applies);
+      if (answer !== MISSING) {
+        context[question.name] = answer;
+        if (applies) answers[question.name] = answer;
+      } else if (applies) {
+        const help = question.help === undefined ? '' : `: ${question.help}`;
+        errors.push({ template: manifest.name, question: question.name, message: `no answer and no default${help}` });
       }
-      if (applies && question.validator !== undefined) {
-        const message = renderString(question.validator, { ...seen, [question.name]: answer }).trim();
-        if (message !== '') throw new Error(message);
-      }
-      context[question.name] = answer;
-      if (applies) answers[question.name] = answer;
     } catch (error) {
       errors.push({ template: manifest.name, question: question.name, message: messageOf(error) });
     }
@@ -244,7 +274,7 @@ export function resolveAnswers(manifest: Manifest, given: Answers, scope: Contex
   return { answers, context };
 }
 
-/** The names of the `given` answers that no template of the render owns or reads, `manifests` being the render's. */
+/** The names of the `given` answers that no question of the render's `manifests` owns. */
 export function unusedAnswers(manifests: readonly Manifest[], given: Answers): string[] {
   const owned = new Set(manifests.flatMap(({ questions }) => questions.map(({ name }) => name)));
   return Object.keys(given).filter((name) => !owned.has(name));
