@@ -231,3 +231,10 @@ test('setMarkerKeys writes a new key on one line, a string with a line break dou
     '---\na: 1\nb: "line1\\nline2"\nc: ["x\\ny"]\n---\n',
   );
 });
+
+test('setMarkerKeys indents a new key as the keys of an indented frontmatter are', () => {
+  assert.equal(
+    setMarkerKeys('---\n  profile: x\n  b: [2]\n---\n', { templates: ['t'], c: 3 }),
+    '---\n  templates: [t]\n  profile: x\n  b: [2]\n  c: 3\n---\n',
+  );
+});
