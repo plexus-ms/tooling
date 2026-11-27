@@ -1,10 +1,12 @@
 {
   "name": "@plexus-ms/cli-template",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.129.1",
   "description": "plx-template, a generic alternative to copier for several templates in one directory",
   "license": "GPL-3.0-or-later",
   "type": "module",
+  "bin": {
+    "plx-template": "./dist/bin.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -22,7 +24,8 @@
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit",
-    "test": "node --test"
+    "test": "node --test",
+    "prepack": "pnpm build"
   },
   "dependencies": {
     "minijinja-js": "3.1.0",
@@ -31,5 +34,14 @@
   "devDependencies": {
     "@types/node": "^24.19.2",
     "typescript": "catalog:"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/plexus-ms/tooling.git",
+    "directory": "packages/cli-template"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   }
 }

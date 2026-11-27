@@ -15,7 +15,7 @@ import ts from 'typescript';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** The source files that touch the filesystem or run a command, by path from the package's root. */
-const SHELL = ['src/git-merge-file.ts'];
+const SHELL = ['src/git-merge-file.ts', 'src/cli.ts', 'src/directory.ts'];
 
 /** The modules only the shell imports. */
 const SYSTEM = /^(node:)?(fs|fs\/promises|child_process|os|path)$/;

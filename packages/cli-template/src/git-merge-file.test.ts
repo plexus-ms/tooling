@@ -173,3 +173,11 @@ test('gitMergeFile fails where git cannot merge, with what git said', async () =
     /fruit\.bin.*binary/s,
   );
 });
+
+test('gitMergeFile does not merge a current side that already holds one of its label lines: it is returned as it is, conflicted', async () => {
+  const current = 'aaa\n<<<<<<< current\nplum\n=======\npear\n>>>>>>> new render\nzzz\n';
+  // Merged again against the same render, git would nest a second pair of markers in the first.
+  assert.deepEqual(await mergeTexts('plum\n', 'pear\n', current), { text: current, conflicted: true });
+  const crlf = '>>>>>>> new render\r\nplum\r\n';
+  assert.deepEqual(await mergeTexts('', 'pear\r\n', crlf), { text: crlf, conflicted: true });
+});
