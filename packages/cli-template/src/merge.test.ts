@@ -253,3 +253,18 @@ test('merge keeps the user’s edits to a file the template renames, as a deleti
     calls: [],
   });
 });
+
+// Ported from tests/test_updatediff.py, test_update_deleted_path: the user
+// deleted a file the template changes; names as copier's parameters have them.
+test('merge leaves absent a path the user deleted, even where the template changed or dropped it, and reports it as kept', async () => {
+  const names = ['normal_file', 'unicode_âñ', 'file with whitespace', ' leading_whitespace', '!special', 'back\\slash'];
+  const result = await run({
+    old: { ...Object.fromEntries(names.map((name) => [name, 'foo'])), 'pear.txt': 'green\n' },
+    new: Object.fromEntries(names.map((name) => [name, 'bar'])),
+  });
+  assert.deepEqual(result, {
+    tree: {},
+    report: [...names, 'pear.txt'].sort().map((name) => `${name}: kept`),
+    calls: [],
+  });
+});
