@@ -114,3 +114,14 @@ test('two templates of one name is an error naming both by their position', () =
   assert.equal(result.errors[0]?.message, 'templates 1 and 2 are both named basket');
   assert.deepEqual(listing(result.tree), {});
 });
+
+test('a declared read that no template of the render owns and no answer gives is an error naming the template and the read', () => {
+  const crate = 'name: crate\nreads:\n  fruit:\n  colour:\n';
+  const result = render([template(crate, { 'crate.txt': 'empty' })], {});
+  assert.deepEqual(where(result.errors), [
+    { template: 'crate', other: undefined, path: 'template.yml', question: 'fruit' },
+    { template: 'crate', other: undefined, path: 'template.yml', question: 'colour' },
+  ]);
+  assert.match(result.errors[0]?.message ?? '', /fruit/);
+  assert.deepEqual(listing(result.tree), {});
+});
