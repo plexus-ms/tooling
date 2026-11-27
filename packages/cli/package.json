@@ -32,8 +32,7 @@
     "@inquirer/prompts": "^8.8.0",
     "@plexus-ms/cli-template": "workspace:*",
     "@plexus-ms/lib": "workspace:*",
-    "commander": "^15.1.0",
-    "minijinja-js": "3.1.0"
+    "commander": "^15.1.0"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

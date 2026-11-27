@@ -29,20 +29,11 @@
 // as it is where the template removed a file the user edited; either way the
 // report says `conflicted` and the caller makes the verb fail on it.
 import { join } from 'node:path';
-import {
-  type Answers,
-  type MergeEntry,
-  type MergePlan,
-  planMerge,
-  type RenderError,
-  type RenderedSide,
-  readTree,
-  render,
-  type Tree,
-} from '@plexus-ms/cli-template';
+import type { Answers, MergeEntry, MergePlan, RenderError, RenderedSide, Tree } from '@plexus-ms/cli-template';
 import { templateDirectory } from './bundled.ts';
 import type { Context } from './context.ts';
 import { type Plan, write } from './effects.ts';
+import { engine } from './engine.ts';
 import { MARKER_FILE, setMarkerKeys } from './marker.ts';
 
 /** Templates, by name below a root, and the answers to render them with. */
@@ -97,6 +88,7 @@ async function renderSource(
   errors: string[],
 ): Promise<Rendered | undefined> {
   if (source.templates.length === 0) return { tree: new Map(), policies: new Map(), answers: {} };
+  const { readTree, render } = await engine();
   const trees: Tree[] = [];
   for (const name of source.templates) {
     try {
@@ -118,6 +110,7 @@ export async function planSync(
   root: string,
   sites: readonly SiteSides[],
 ): Promise<SyncPlan> {
+  const { planMerge } = await engine();
   const errors: string[] = [];
   const rendered: { dir: string; old: Rendered; new: Rendered; given: Answers }[] = [];
   for (const site of sites) {

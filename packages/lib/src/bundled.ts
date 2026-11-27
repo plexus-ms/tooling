@@ -5,7 +5,8 @@
 // as it reads any template directory (`@plexus-ms/cli-template`).
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type Manifest, readManifest } from '@plexus-ms/cli-template';
+import type { Manifest } from '@plexus-ms/cli-template';
+import { engine } from './engine.ts';
 
 /** The directory that holds the templates this plx bundles, one directory per template. */
 export function bundledTemplatesRoot(): string {
@@ -37,5 +38,6 @@ export async function templateDirectory(root: string, name: string): Promise<str
  * manifest cannot be read.
  */
 export async function loadTemplate(root: string, name: string): Promise<Manifest> {
+  const { readManifest } = await engine();
   return readManifest(await templateDirectory(root, name));
 }
