@@ -188,33 +188,43 @@ test('the order of the templates does not change the tree: an owner is resolved 
   }
 });
 
-test('templates that read from each other in a cycle are one error naming them, and a template that reads from them adds none', () => {
-  const reading = (name: string, owns: string, reads: string) =>
-    template(`name: ${name}\nquestions:\n  ${owns}:\n    type: str\nreads:\n  ${reads}:\n`, { [`${name}.txt`]: name });
+test('templates that read from each other in a cycle, and those that read from them, are one error naming them all by name', () => {
+  const reading = (name: string, owns: string, ...reads: string[]) =>
+    template(
+      `name: ${name}\nquestions:\n  ${owns}:\n    type: str\nreads:\n${reads.map((r) => `  ${r}:\n`).join('')}`,
+      {
+        [`${name}.txt`]: name,
+      },
+    );
   const result = render(
     [
-      reading('basket', 'fruit', 'book'),
+      reading('shelf', 'book', 'fruit'),
       template(crate, { 'crate.txt.jinja': '{{ trees }}' }),
       reading('orchard', 'trees', 'fruit'),
-      reading('shelf', 'book', 'fruit'),
+      reading('basket', 'fruit', 'book'),
     ],
     { fruit: 'pear', book: 'atlas', trees: 'oak', rows: 1 },
   );
   assert.deepEqual(where(result.errors), [
-    { template: 'basket', other: 'shelf', path: 'template.yml', question: undefined },
+    { template: 'basket', other: 'crate', path: 'template.yml', question: undefined },
   ]);
   assert.equal(
     result.errors[0]?.message,
-    'the reads of basket and shelf form a cycle: basket reads book from shelf, shelf reads fruit from basket',
+    'the reads of basket, crate, orchard and shelf wait on each other: basket reads book from shelf, crate reads trees from orchard, orchard reads fruit from basket, shelf reads fruit from basket',
   );
-  const three = render(
-    [reading('basket', 'fruit', 'book'), reading('shelf', 'book', 'trees'), reading('orchard', 'trees', 'fruit')],
+  const apart = render(
+    [
+      reading('mill', 'flour', 'grain', 'water'),
+      reading('well', 'water', 'flour'),
+      reading('corn', 'grain', 'seed'),
+      reading('drill', 'seed', 'grain'),
+    ],
     {},
   );
   assert.deepEqual(
-    three.errors.map(({ message }) => message),
+    apart.errors.map(({ message }) => message),
     [
-      'the reads of basket, shelf and orchard form a cycle: basket reads book from shelf, shelf reads trees from orchard, orchard reads fruit from basket',
+      'the reads of corn, drill, mill and well wait on each other: corn reads seed from drill, drill reads grain from corn, mill reads grain from corn, mill reads water from well, well reads flour from mill',
     ],
   );
 });
