@@ -166,8 +166,8 @@ function ownersOf(read: readonly Template[], errors: RenderError[]): Map<string,
 
 /**
  * The value of each answer `template` reads: what its owner resolved, else the
- * given answer, else the read's default; a read that nothing supplies is an error.
- * A read whose owner failed to resolve it has no value and adds no error, the
+ * given answer, else the read's default; a read that nothing supplies is an error,
+ * naming the owner where its owner skipped the question. A read whose owner failed to resolve it has no value and adds no error, the
  * owner's being the one; `complete` is false where a read has no value.
  */
 function readsOf(
@@ -189,8 +189,21 @@ function readsOf(
     else if (Object.hasOwn(read, 'default')) values[read.name] = read.default;
     else {
       complete = false;
-      const message = `${template.manifest.name} reads ${read.name}, which no template of the render owns and no answer gives`;
-      errors.push({ template: template.manifest.name, path: MANIFEST, question: read.name, message });
+      const name = template.manifest.name;
+      const error = { template: name, path: MANIFEST, question: read.name };
+      if (owner === undefined)
+        errors.push({
+          ...error,
+          message: `${name} reads ${read.name}, which no template of the render owns and no answer gives`,
+        });
+      else {
+        const other = owner.manifest.name;
+        errors.push({
+          ...error,
+          other,
+          message: `${name} reads ${read.name}, which ${other} owns and skips without a default`,
+        });
+      }
     }
   }
   return { values, complete };
