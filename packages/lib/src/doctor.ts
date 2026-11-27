@@ -86,6 +86,8 @@ export interface RepoFacts {
   pin?: string;
   /** Every tracked marker read as configuration, the root first; undefined outside a git checkout. */
   sites?: MarkerSite[];
+  /** Why the sites could not be listed or read, when they could not. */
+  sitesProblem?: string;
 }
 
 /** What doctor read of an app. */
@@ -348,7 +350,8 @@ export const CHECKS: Readonly<Record<string, RepoCheck | AppCheck | UnitCheck>> 
 };
 
 /** Whether a repo has left copier behind: git tracks no answers file in it, at any depth. */
-const crossedOver = (repo: RepoFacts): boolean => !(repo.tracked ?? []).some((path) => basename(path) === ANSWERS_FILE);
+const crossedOver = (tracked: readonly string[] = []): boolean =>
+  !tracked.some((path) => basename(path) === ANSWERS_FILE);
 
 /**
  * What the markers as configuration must meet (sites.ts): the root's `version`
@@ -358,7 +361,8 @@ const crossedOver = (repo: RepoFacts): boolean => !(repo.tracked ?? []).some((pa
  * no requirement.
  */
 function markerConfig(repo: RepoFacts): string[] {
-  if (!crossedOver(repo)) return [];
+  if (!crossedOver(repo.tracked)) return [];
+  if (repo.sitesProblem) return [`the tracked ${MARKER_FILE} files could not be read: ${repo.sitesProblem}`];
   const sites = repo.sites ?? [];
   const problems = sites
     .filter((s) => s.problem !== undefined && !(s.dir === '.' && repo.marker?.problem))
@@ -597,8 +601,17 @@ async function readRepo(ctx: Context, dir: Directory, path: string, kind: RepoFa
     ...(conflicted?.length ? { conflicted } : {}),
     apps: [],
     ...(dir.pin ? { pin: dir.pin } : {}),
-    ...(tracked === undefined ? {} : { sites: await findSites(ctx, dir.path) }),
+    ...(tracked !== undefined && crossedOver(tracked) ? await readSites(ctx, dir.path) : {}),
   };
+}
+
+/** The repo's sites, or why they cannot be read: a marker git tracks that is not a readable file is a finding, never a failed run. */
+async function readSites(ctx: Context, repo: string): Promise<Pick<RepoFacts, 'sites' | 'sitesProblem'>> {
+  try {
+    return { sites: await findSites(ctx, repo) };
+  } catch (error) {
+    return { sitesProblem: (error as Error).message };
+  }
 }
 
 /**
