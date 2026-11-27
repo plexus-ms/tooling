@@ -32,6 +32,18 @@ const EMPTY_DIRECTORY: Entry = { bytes: new Uint8Array(), mode: DIRECTORY | 0o75
 /** The directory of a source path: everything before its last `/`, or `''`. */
 const parentOf = (source: string): string => source.slice(0, Math.max(0, source.lastIndexOf('/')));
 
+/** `part` below `parent`, both of the output and with `..` and `.` resolved; undefined where it leaves the output. */
+function join(parent: string, part: string): string | undefined {
+  if (part.startsWith('/')) return undefined;
+  const parts = parent === '' ? [] : parent.split('/');
+  for (const segment of part.split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment !== '..') parts.push(segment);
+    else if (parts.pop() === undefined) return undefined;
+  }
+  return parts.join('/');
+}
+
 /** The entries `template` renders in `context`, by rendered path; its problems go to `errors`. */
 export function renderFiles(template: Template, context: Context, errors: RenderError[]): Map<string, Rendered> {
   const rendered = new Map<string, Rendered>();
@@ -40,11 +52,31 @@ export function renderFiles(template: Template, context: Context, errors: Render
   const directories = new Map<string, string | undefined>([['', '']]);
   const directoryOf = (source: string): string | undefined => {
     if (directories.has(source)) return directories.get(source);
-    const parent = directoryOf(parentOf(source));
-    const part = parent === undefined ? '' : renderString(source.slice(source.lastIndexOf('/') + 1), context);
-    const path = part === '' ? undefined : `${parent === '' ? '' : `${parent}/`}${part}`;
+    const path = place(directoryOf(parentOf(source)), source.slice(source.lastIndexOf('/') + 1), source, true);
     directories.set(source, path);
     return path;
+  };
+
+  // The path a source name renders to below its rendered directory, or
+  // undefined where it is skipped or leaves the output, the latter an error.
+  const place = (
+    parent: string | undefined,
+    name: string,
+    source: string,
+    isDirectory: boolean,
+  ): string | undefined => {
+    const part = parent === undefined ? '' : renderString(name, context);
+    if (part === '') return undefined;
+    const path = join(parent ?? '', part);
+    if (path === undefined || (path === '' && !isDirectory)) {
+      const shown = parent === '' ? part : `${parent}/${part}`;
+      errors.push({
+        template: template.manifest.name,
+        path: `${FILES}${source}`,
+        message: `"${shown}" is forbidden: it is not inside the output`,
+      });
+    }
+    return path || undefined;
   };
 
   for (const [source, entry] of template.files) {
@@ -52,12 +84,10 @@ export function renderFiles(template: Template, context: Context, errors: Render
       directoryOf(source);
       continue;
     }
-    const parent = directoryOf(parentOf(source));
     const isTemplate = source.endsWith(SUFFIX);
     const name = source.slice(source.lastIndexOf('/') + 1, isTemplate ? -SUFFIX.length : undefined);
-    const part = parent === undefined ? '' : renderString(name, context);
-    if (part === '') continue;
-    const path = `${parent === '' ? '' : `${parent}/`}${part}`;
+    const path = place(directoryOf(parentOf(source)), name, source, false);
+    if (path === undefined) continue;
     if (!isTemplate) {
       rendered.set(path, { entry, source });
       continue;
