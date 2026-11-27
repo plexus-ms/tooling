@@ -76,3 +76,63 @@ test('a copier answers file that git does not track does not stop apply', async 
   const applied = await apply(quietContext(), options(repo, templates));
   assert.deepEqual(applied.sites, []);
 });
+
+const pears = marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: pear\n`);
+
+test('apply renders a site whose answer changed, merging into the working tree and keeping the local edit', async () => {
+  const { repo, templates } = fixture();
+  write(repo, { 'PLEXUS.md': pears, 'list.txt': '3 apples\nripe\n' });
+  const applied = await apply(quietContext(), options(repo, templates));
+  assert.equal(text(repo, 'list.txt'), '3 pears\nripe\n');
+  assert.deepEqual(applied.sites, [{ dir: '.', report: [{ path: 'list.txt', outcome: 'clean' }], defaults: {} }]);
+  assert.equal(applied.conflicted, 0);
+  assert.equal(applied.applied, true);
+  assert.equal(text(repo, 'PLEXUS.md'), pears);
+});
+
+test('apply commits nothing and stages nothing', async () => {
+  const { repo, templates } = fixture();
+  const head = git(repo, 'rev-parse', 'HEAD');
+  write(repo, { 'PLEXUS.md': pears });
+  await apply(quietContext(), options(repo, templates));
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+  assert.equal(git(repo, 'diff', '--cached', '--name-only'), '');
+  assert.equal(git(repo, 'status', '--short'), ' M PLEXUS.md\n M list.txt\n');
+});
+
+test('apply says it changed nothing when no marker differs from HEAD', async () => {
+  const { repo, templates } = fixture();
+  const applied = await apply(quietContext(), options(repo, templates));
+  assert.deepEqual(applied, { sites: [], conflicted: 0, applied: false });
+});
+
+const CRATE = marker('templates: [crate]\n', '\n- A crate.\n');
+
+test('apply re-renders a nested site that reads an answer of the root marker when the root changes it', async () => {
+  const { repo, templates } = fixture({ 'apps/crate/PLEXUS.md': CRATE, 'apps/crate/crate.txt': 'a crate of apples\n' });
+  write(repo, { 'PLEXUS.md': pears });
+  const applied = await apply(quietContext(), options(repo, templates));
+  assert.equal(text(repo, 'apps/crate/crate.txt'), 'a crate of pears\n');
+  assert.equal(text(repo, 'list.txt'), '3 pears\nfresh\n');
+  assert.deepEqual(
+    applied.sites.map((s) => [s.dir, s.report]),
+    [
+      ['.', [{ path: 'list.txt', outcome: 'clean' }]],
+      ['apps/crate', [{ path: 'crate.txt', outcome: 'clean' }]],
+    ],
+  );
+});
+
+test('apply renders only the sites whose answers or templates changed', async () => {
+  const { repo, templates } = fixture({
+    'apps/crate/PLEXUS.md': CRATE,
+    'apps/crate/crate.txt': 'a crate of apples\n',
+    'apps/old/PLEXUS.md': marker('templates: [ghost]\n'),
+  });
+  write(repo, { 'apps/crate/PLEXUS.md': marker('templates: [crate]\nextra: 1\n', '\n- A crate.\n') });
+  const applied = await apply(quietContext(), options(repo, templates));
+  assert.deepEqual(
+    applied.sites.map((s) => s.dir),
+    ['apps/crate'],
+  );
+});
