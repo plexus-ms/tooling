@@ -32,19 +32,19 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
     resolved.set(template, { scope, resolution: resolveAnswers(template.manifest, given, scope, errors) });
   }
 
+  const renderings = read.flatMap((template) => {
+    const done = resolved.get(template);
+    return done === undefined ? [] : [{ template, context: contextOf(done.scope, done.resolution) }];
+  });
   const tree = new Map<string, Entry>();
   const files = new Map<string, Origin>();
-  const birth: BirthCommand[] = [];
-  for (const template of read) {
-    const { scope, resolution } = resolved.get(template) ?? {};
-    if (scope === undefined || resolution === undefined) continue;
-    const { name, policies } = template.manifest;
-    for (const [path, { entry, source }] of renderFiles(template, contextOf(scope, resolution), errors)) {
-      tree.set(path, entry);
-      files.set(path, { template: name, policy: policies.get(source) ?? 'merge' });
-    }
-    birth.push(...template.manifest.birth.map((command) => ({ template: name, command })));
+  for (const [path, { entry, source, owner }] of renderFiles(renderings, errors)) {
+    tree.set(path, entry);
+    files.set(path, { template: owner.manifest.name, policy: owner.manifest.policies.get(source) ?? 'merge' });
   }
+  const birth: BirthCommand[] = read.flatMap(({ manifest }) =>
+    manifest.birth.map((command) => ({ template: manifest.name, command })),
+  );
 
   const answers: Answers = Object.assign({}, ...read.map((template) => resolved.get(template)?.resolution.answers));
   const unused = unusedAnswers(

@@ -19,14 +19,19 @@
 // 0o755, as types.ts states. A file whose Jinja fails is an error naming its
 // path in the template.
 //
-// Every path is written once: two sources that render to one path are an
-// error naming both, a file beside its `.jinja` sibling included, as is a file
-// with another path rendered below it. Copier differs here: the `.jinja` file
-// wins and the other is silently not written. Two
-// directories at one path are one directory. A directory that renders to a
-// path and holds nothing in the result, because the template holds nothing
-// there or because every file below it was skipped, lands as an empty
-// directory, as copier creates it; only the innermost of nested ones is kept.
+// The templates of a render land in one tree, and every path is written once,
+// by one template. Two sources that render to one path are an error naming
+// both, a file beside its `.jinja` sibling included, as is a file with another
+// path rendered below it; where the two belong to two templates, the error
+// names both templates as well, the first source's in `template`. Copier
+// differs here: the `.jinja` file wins and the other is silently not written.
+// Two directories of one template at one path are one directory. A directory
+// that renders to a path and holds nothing in the result, because the
+// template holds nothing there or because every file below it was skipped,
+// lands as an empty directory, as copier creates it; only the innermost of
+// nested ones is kept, and one below which another template writes is implied
+// by that template's paths. Two templates that both leave one directory empty
+// are two writers of one path, an error.
 // A symlink anywhere in a template is rejected where the template is read
 // (manifest.ts).
 import { messageOf } from './errors.ts';
@@ -34,10 +39,17 @@ import { type Context, renderString } from './jinja.ts';
 import { FILES, type Template } from './manifest.ts';
 import { DIRECTORY, type Entry, fileMode, isExecutable, MODE_TYPE, REGULAR, type RenderError } from './types.ts';
 
-/** A rendered entry, with the path below `files/` it came from. */
+/** A rendered entry, with the template and the path below `files/` it came from. */
 export interface Rendered {
   readonly entry: Entry;
   readonly source: string;
+  readonly owner: Template;
+}
+
+/** A template, and the context its files render in. */
+export interface Rendering {
+  readonly template: Template;
+  readonly context: Context;
 }
 
 const SUFFIX = '.jinja';
@@ -86,18 +98,66 @@ function join(parent: string, part: string): string | undefined {
  */
 type Location = { readonly path: string } | 'skipped' | 'failed';
 
-/** The entries `template` renders in `context`, by rendered path; its problems go to `errors`. */
-export function renderFiles(template: Template, context: Context, errors: RenderError[]): Map<string, Rendered> {
-  const fail = (source: string, message: string): 'failed' => {
-    errors.push({ template: template.manifest.name, path: `${FILES}${source}`, message });
-    return 'failed';
-  };
-
+/** The entries the templates of `renderings` render together, by rendered path; their problems go to `errors`. */
+export function renderFiles(renderings: readonly Rendering[], errors: RenderError[]): Map<string, Rendered> {
   const rendered = new Map<string, Rendered>();
+  // Two entries that cannot both be written: an error naming both sources, and
+  // their templates where they differ, the first one's in `template`.
+  const clash = (first: Rendered, second: Rendered, message: (a: string, b: string) => string): void => {
+    const template = first.owner.manifest.name;
+    if (first.owner === second.owner) {
+      errors.push({ template, path: `${FILES}${second.source}`, message: message(first.source, second.source) });
+      return;
+    }
+    const other = second.owner.manifest.name;
+    const text = message(`${template}'s ${first.source}`, `${other}'s ${second.source}`);
+    errors.push({ template, other, path: `${FILES}${first.source}`, message: text });
+  };
   const put = (path: string, value: Rendered): void => {
     const first = rendered.get(path);
     if (first === undefined) rendered.set(path, value);
-    else fail(value.source, `${first.source} and ${value.source} both render to ${path}`);
+    else clash(first, value, (a, b) => `${a} and ${b} both render to ${path}`);
+  };
+
+  // The directories that may land empty, by rendered path, each with the first source of each template at it.
+  const directories = new Map<string, Rendered[]>();
+  for (const { template, context } of renderings) {
+    for (const [path, source] of renderTemplate(template, context, put, errors)) {
+      directories.set(path, [...(directories.get(path) ?? []), { entry: EMPTY_DIRECTORY, source, owner: template }]);
+    }
+  }
+
+  // A directory is kept where nothing is written below it. Directories of one
+  // template at one path are one; two templates keeping one are two writers.
+  const taken = [...rendered.keys(), ...directories.keys()];
+  for (const [path, sources] of directories) {
+    if (!taken.some((other) => other.startsWith(`${path}/`))) for (const value of sources) put(path, value);
+  }
+  for (const [path, below] of rendered) {
+    for (let up = parentOf(path); up !== ''; up = parentOf(up)) {
+      const above = rendered.get(up);
+      if (above !== undefined && (above.entry.mode & MODE_TYPE) === REGULAR) {
+        clash(above, below, (a, b) => `${a} renders to ${up}, a file, and ${b} renders to ${path} below it`);
+      }
+    }
+  }
+  return rendered;
+}
+
+/**
+ * Puts the files `template` renders in `context`, and returns the paths its
+ * source directories render to, each with its first source; its problems go
+ * to `errors`.
+ */
+function renderTemplate(
+  template: Template,
+  context: Context,
+  put: (path: string, value: Rendered) => void,
+  errors: RenderError[],
+): Map<string, string> {
+  const fail = (source: string, message: string): 'failed' => {
+    errors.push({ template: template.manifest.name, path: `${FILES}${source}`, message });
+    return 'failed';
   };
 
   // Where the source name `name`, which is the last part of `source`, lands below the rendered directory `parent`.
@@ -148,35 +208,20 @@ export function renderFiles(template: Template, context: Context, errors: Render
     }
     const text = isTemplate ? textOf(entry.bytes) : undefined;
     if (text === undefined) {
-      put(path, { entry: written(entry.bytes, entry.mode), source });
+      put(path, { entry: written(entry.bytes, entry.mode), source, owner: template });
       continue;
     }
     try {
-      put(path, { entry: written(encoder.encode(renderString(text, context)), entry.mode), source });
+      put(path, { entry: written(encoder.encode(renderString(text, context)), entry.mode), source, owner: template });
     } catch (error) {
       fail(source, messageOf(error));
     }
   }
 
-  // A directory is kept where nothing is written below it. Directories at one
-  // path are one, and the first source names it.
-  const candidates = new Map<string, string>();
-  for (const [source, located] of directories) {
-    if (typeof located !== 'string' && located.path !== '' && !candidates.has(located.path)) {
-      candidates.set(located.path, source);
-    }
+  // Directories at one path are one, and the first source names it.
+  const located = new Map<string, string>();
+  for (const [source, at] of directories) {
+    if (typeof at !== 'string' && at.path !== '' && !located.has(at.path)) located.set(at.path, source);
   }
-  const taken = [...rendered.keys(), ...candidates.keys()];
-  for (const [path, source] of candidates) {
-    if (!taken.some((other) => other.startsWith(`${path}/`))) put(path, { entry: EMPTY_DIRECTORY, source });
-  }
-  for (const [path, { source }] of rendered) {
-    for (let up = parentOf(path); up !== ''; up = parentOf(up)) {
-      const above = rendered.get(up);
-      if (above !== undefined && (above.entry.mode & MODE_TYPE) === REGULAR) {
-        fail(source, `${above.source} renders to ${up}, a file, and ${source} renders to ${path} below it`);
-      }
-    }
-  }
-  return rendered;
+  return located;
 }
