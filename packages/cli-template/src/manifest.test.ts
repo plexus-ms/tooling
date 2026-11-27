@@ -2,7 +2,7 @@
 // and every way it can be wrong.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { render } from './index.ts';
+import { DIRECTORY, render } from './index.ts';
 import { template } from './testing/trees.ts';
 
 test('render gives each path its template and its policy, born-once where the manifest says so by source path', () => {
@@ -154,6 +154,11 @@ const problems: [string, string | undefined, { template: string; question?: stri
     'name: basket\npolicies:\n  b.txt: born-once\n',
     { template: 'basket', message: /b\.txt/ },
   ],
+  [
+    'a policy for a directory below files/',
+    'name: basket\npolicies:\n  shelf: born-once\n',
+    { template: 'basket', message: /shelf/ },
+  ],
   ['birth that is not a list', 'name: basket\nbirth: weave\n', { template: 'basket', message: /birth/ }],
   [
     'a birth command that is a string',
@@ -170,7 +175,7 @@ const problems: [string, string | undefined, { template: string; question?: stri
 
 for (const [what, manifest, expected] of problems) {
   test(`render reports a manifest with ${what}, and returns no files`, () => {
-    const files = { 'a.txt': 'a' };
+    const files = { 'a.txt': 'a', shelf: { text: '', mode: DIRECTORY } };
     const tree = manifest === undefined ? new Map([...template('', files)].slice(1)) : template(manifest, files);
     const result = render([tree], {});
     assert.equal(result.errors.length, 1, JSON.stringify(result.errors));

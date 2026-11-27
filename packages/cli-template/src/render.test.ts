@@ -13,6 +13,7 @@ test('render renders a file ending in .jinja with the answers, without the suffi
         'notes.md.jinja': 'A basket of {{ fruit }}.\n',
         'shelf/label.txt.jinja': '{{ fruit | upper }}',
         'bin/count.sh': { text: '#!/bin/sh\necho 3\n', mode: REGULAR | 0o755 },
+        'bin/name.sh.jinja': { text: 'echo {{ fruit }}\n', mode: REGULAR | 0o755 },
         'shelf/photo.bin': { bytes: [0xff, 0x00, 0xfe], mode: REGULAR | 0o644 },
       }),
     ],
@@ -24,6 +25,7 @@ test('render renders a file ending in .jinja with the answers, without the suffi
     'notes.md': 'A basket of pear.\n',
     'shelf/label.txt': 'PEAR',
     'bin/count.sh': { text: '#!/bin/sh\necho 3\n', mode: REGULAR | 0o755 },
+    'bin/name.sh': { text: 'echo pear\n', mode: REGULAR | 0o755 },
     'shelf/photo.bin': { bytes: [0xff, 0x00, 0xfe], mode: REGULAR | 0o644 },
   });
 });
