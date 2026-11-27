@@ -24,10 +24,13 @@ import type { Answers, BirthCommand, Entry, Origin, RenderError, RenderResult, T
 export function render(templates: readonly Tree[], given: Answers): RenderResult {
   const errors: RenderError[] = [];
   const read = readAll(templates, errors);
-  ownersOf(read, errors);
+  const owners = ownersOf(read, errors);
+  const resolutions = new Map<Template, Resolution>();
   const resolved = read.map((template) => {
-    const scope = scopeOf(readsOf(template, given, errors));
-    return { template, scope, resolution: resolveAnswers(template.manifest, given, scope, errors) };
+    const scope = scopeOf(readsOf(template, owners, resolutions, given, errors));
+    const resolution = resolveAnswers(template.manifest, given, scope, errors);
+    resolutions.set(template, resolution);
+    return { template, scope, resolution };
   });
 
   const tree = new Map<string, Entry>();
@@ -89,11 +92,23 @@ function ownersOf(read: readonly Template[], errors: RenderError[]): Map<string,
   return owners;
 }
 
-/** The value of each answer `template` reads; a read without a default that nothing supplies is an error. */
-function readsOf(template: Template, given: Answers, errors: RenderError[]): Context {
+/**
+ * The value of each answer `template` reads: what its owner resolved, else the
+ * given answer; a read without a default that nothing supplies is an error.
+ */
+function readsOf(
+  template: Template,
+  owners: ReadonlyMap<string, Template>,
+  resolutions: ReadonlyMap<Template, Resolution>,
+  given: Answers,
+  errors: RenderError[],
+): Context {
   const reads: Context = {};
   for (const read of template.manifest.reads) {
-    if (Object.hasOwn(given, read.name)) reads[read.name] = given[read.name];
+    const owner = owners.get(read.name);
+    const resolved = owner === undefined ? undefined : resolutions.get(owner)?.context;
+    if (resolved !== undefined && Object.hasOwn(resolved, read.name)) reads[read.name] = resolved[read.name];
+    else if (Object.hasOwn(given, read.name)) reads[read.name] = given[read.name];
     else if (Object.hasOwn(read, 'default')) continue;
     else {
       const message = `${template.manifest.name} reads ${read.name}, which no template of the render owns and no answer gives`;
