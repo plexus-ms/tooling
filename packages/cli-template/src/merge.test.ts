@@ -6,7 +6,7 @@
 // comment; copier is MIT-licensed, see LICENSE.copier.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { type MergeFile, merge, type Policies, REGULAR, SYMLINK } from './index.ts';
+import { DIRECTORY, type MergeFile, merge, type Policies, REGULAR, SYMLINK } from './index.ts';
 import { type Listing, listing, tree } from './testing/trees.ts';
 
 interface Case {
@@ -479,6 +479,21 @@ test('merge does not delete the target of a symlink the user put in place of a d
       'bar/templates/file.txt': 'test',
     },
     report: ['bar/templates/file.txt: added', 'foo/templates/file.txt: kept'],
+    calls: [],
+  });
+});
+
+/** An empty directory's entry. */
+const directory = (mode = 0o755) => ({ text: '', mode: DIRECTORY | mode });
+
+test('merge adds an empty directory of the new render that the current tree lacks, at its path and below, and reports it as added', async () => {
+  const result = await run({
+    new: { empty: directory(), seeds: directory(), crate: directory() },
+    current: { 'seeds/apple.txt': 'red\n', crate: directory(0o700) },
+  });
+  assert.deepEqual(result, {
+    tree: { empty: directory(), 'seeds/apple.txt': 'red\n', crate: directory(0o700) },
+    report: ['empty: added'],
     calls: [],
   });
 });
