@@ -4,6 +4,12 @@
 // release of theirs releases the cli that carries them (changesets bumps a
 // dependent, `plx changeset` reads the runtime fields); the install they
 // cause is redundant and small.
+//
+// The templates of `tooling` (templates/ at its root, outside this package)
+// are copied to dist/templates, so that `dist`, the one directory the package
+// publishes, holds them; `templatesRoot` of @plexus-ms/lib finds them beside
+// the bundle. A copy that keeps modes, dotfiles included.
+import { cpSync, rmSync } from 'node:fs';
 import { build } from 'esbuild';
 
 await build({
@@ -21,3 +27,6 @@ await build({
     ].join('\n'),
   },
 });
+
+rmSync('dist/templates', { recursive: true, force: true });
+cpSync('../../templates', 'dist/templates', { recursive: true });
