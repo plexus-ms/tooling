@@ -72,7 +72,17 @@ export function resolveAnswers(manifest: Manifest, given: Answers, scope: Contex
       let answer: unknown;
       if (Object.hasOwn(given, question.name)) answer = given[question.name];
       else if (Object.hasOwn(question, 'default')) answer = field('default', question.default, seen);
-      else continue;
+      else {
+        if (applies) {
+          const help = question.help === undefined ? '' : `: ${question.help}`;
+          errors.push({
+            template: manifest.name,
+            question: question.name,
+            message: `no answer and no default${help}`,
+          });
+        }
+        continue;
+      }
       context[question.name] = answer;
       if (applies) answers[question.name] = answer;
     } catch (error) {
