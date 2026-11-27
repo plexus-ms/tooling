@@ -11,7 +11,8 @@
 // is copied as bytes, under the name without the suffix. A file whose Jinja
 // fails is an error naming its path in the template.
 //
-// A symlink in the template is an error.
+// A symlink in the template is an error, and so are two sources
+// that render to one path.
 //
 // A directory that renders to a path and holds nothing in the result, because
 // the template holds nothing there or because every file below it was skipped,
@@ -65,6 +66,18 @@ function join(parent: string, part: string): string | undefined {
 /** The entries `template` renders in `context`, by rendered path; its problems go to `errors`. */
 export function renderFiles(template: Template, context: Context, errors: RenderError[]): Map<string, Rendered> {
   const rendered = new Map<string, Rendered>();
+  const put = (path: string, value: Rendered): void => {
+    const first = rendered.get(path);
+    if (first === undefined) {
+      rendered.set(path, value);
+      return;
+    }
+    errors.push({
+      template: template.manifest.name,
+      path: `${FILES}${value.source}`,
+      message: `${first.source} and ${value.source} both render to ${path}`,
+    });
+  };
 
   // The rendered path of each source directory, or undefined where it is skipped.
   const directories = new Map<string, string | undefined>([['', '']]);
@@ -123,20 +136,16 @@ export function renderFiles(template: Template, context: Context, errors: Render
     const name = source.slice(source.lastIndexOf('/') + 1, isTemplate ? -SUFFIX.length : undefined);
     const path = place(directoryOf(parentOf(source)), name, source, false);
     if (path === undefined) continue;
-    if (!isTemplate) {
-      // As copier does, a template beside the file wins, by either name.
-      if (template.files.has(source + SUFFIX) || template.files.has(path + SUFFIX)) continue;
-      rendered.set(path, { entry: written(entry.bytes, entry.mode), source });
-      continue;
-    }
-    const text = textOf(entry.bytes);
+    // As copier does, a template beside a file wins, by either name.
+    if (!isTemplate && (template.files.has(source + SUFFIX) || template.files.has(path + SUFFIX))) continue;
+    const text = isTemplate ? textOf(entry.bytes) : undefined;
     if (text === undefined) {
-      rendered.set(path, { entry: written(entry.bytes, entry.mode), source });
+      put(path, { entry: written(entry.bytes, entry.mode), source });
       continue;
     }
     try {
       const bytes = encoder.encode(renderString(text, context));
-      rendered.set(path, { entry: written(bytes, entry.mode), source });
+      put(path, { entry: written(bytes, entry.mode), source });
     } catch (error) {
       errors.push({ template: template.manifest.name, path: `${FILES}${source}`, message: messageOf(error) });
     }
@@ -145,7 +154,7 @@ export function renderFiles(template: Template, context: Context, errors: Render
   const paths = [...directories.values(), ...rendered.keys()];
   for (const [source, path] of directories) {
     if (path === undefined || path === '' || paths.some((other) => other?.startsWith(`${path}/`))) continue;
-    rendered.set(path, { entry: EMPTY_DIRECTORY, source });
+    put(path, { entry: EMPTY_DIRECTORY, source });
   }
   return rendered;
 }
