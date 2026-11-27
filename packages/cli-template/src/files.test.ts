@@ -332,3 +332,25 @@ test('the message about a part that leaves the output from below a directory nam
   const result = render([template(where, { 'sub/{{ target }}': 'x' })], { target: '../../x' });
   assert.equal(result.errors[0]?.message, '"sub/../../x" is forbidden: it is not inside the output');
 });
+
+// Decided in the design (§ 2.6): a symlink in a template is an error, wherever
+// in the template's tree it is.
+test('a symlink anywhere in a template is an error naming its path', () => {
+  const link = { bytes: new TextEncoder().encode('target'), mode: SYMLINK | 0o777 };
+  const plain = template(ripe, { 'a.txt': 'x' });
+  const beside = render([new Map([...plain, ['notes', link]])], { ripe: true });
+  assert.deepEqual(
+    beside.errors.map(({ template, path }) => ({ template, path })),
+    [{ template: 'basket', path: 'notes' }],
+  );
+  assert.match(beside.errors[0]?.message ?? '', /symlink/);
+  assert.deepEqual(listing(beside.tree), {});
+  const replaced = render([new Map([...plain].filter(([path]) => path !== 'files/a.txt').concat([['files', link]]))], {
+    ripe: true,
+  });
+  assert.deepEqual(
+    replaced.errors.map(({ template, path }) => ({ template, path })),
+    [{ template: 'basket', path: 'files' }],
+  );
+  assert.deepEqual(listing(replaced.tree), {});
+});
