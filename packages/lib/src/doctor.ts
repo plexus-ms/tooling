@@ -60,6 +60,7 @@ import { type Declaration, MARKER_FILE, reasonGiven } from './marker.ts';
 import { type Directory, hasMarker, isOperations, type Kind } from './model.ts';
 import { appsOf, directoryAt, overview } from './overview.ts';
 import { findSites, type MarkerSite, siteAnswers } from './sites.ts';
+import { type Bundled, templateFindings } from './siteTemplates.ts';
 import { bundledIndex } from './standardIndex.ts';
 
 export type Profile = 'stateless' | 'stateful';
@@ -91,6 +92,8 @@ export interface RepoFacts {
   sites?: MarkerSite[];
   /** Why the sites could not be listed or read, when they could not. */
   sitesProblem?: string;
+  /** The templates this plx bundles, by name; undefined where they are not given, and the checks against them are skipped. */
+  templates?: Bundled;
 }
 
 /** What doctor read of an app. */
@@ -380,7 +383,7 @@ function markerConfig(repo: RepoFacts): string[] {
       } catch (error) {
         problems.push((error as Error).message);
       }
-  return [...versionOfRoot(repo), ...problems];
+  return [...versionOfRoot(repo), ...problems, ...(repo.templates ? templateFindings(sites, repo.templates) : [])];
 }
 
 function versionOfRoot(repo: RepoFacts): string[] {
