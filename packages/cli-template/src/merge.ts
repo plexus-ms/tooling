@@ -21,6 +21,10 @@ export async function merge(input: MergeInput, mergeFile: MergeFile): Promise<Me
       report.push({ path, outcome: 'added' });
       continue;
     }
+    if (c === undefined) {
+      report.push({ path, outcome: 'kept' });
+      continue;
+    }
     if (n === undefined && same(c, o)) {
       tree.delete(path);
       report.push({ path, outcome: 'deleted' });
