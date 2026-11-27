@@ -167,3 +167,21 @@ test('a read with a default sees the default when nothing supplies it, and a sup
   assert.deepEqual(owned.errors, []);
   assert.deepEqual(listing(owned.tree), { 'box.txt': '9' });
 });
+
+test('the order of the templates does not change the tree: an owner is resolved before the templates that read from it', () => {
+  const box = 'name: box\nquestions:\n  lid:\n    type: str\n    default: "{{ rows }} rows"\nreads:\n  rows:\n';
+  const reader = template(crate, { 'crate.txt.jinja': '{{ trees + rows }}' });
+  const lidded = template(box, { 'box.txt.jinja': '{{ lid }}' });
+  const owner = template(orchard, { 'orchard.txt.jinja': '{{ trees }}' });
+  const results = [
+    [reader, lidded, owner],
+    [owner, lidded, reader],
+    [lidded, reader, owner],
+  ].map((templates) => render(templates, { trees: '4' }));
+  for (const result of results) {
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(listing(result.tree), { 'crate.txt': '6', 'box.txt': '2 rows', 'orchard.txt': '4' });
+    assert.deepEqual(result.answers, { trees: 4, rows: 2, lid: '2 rows' });
+    assert.deepEqual(new Map(result.files), new Map(results[0]?.files));
+  }
+});
