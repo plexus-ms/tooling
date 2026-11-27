@@ -36,3 +36,10 @@ test('loadTemplate rejects a name that leaves the root', async () => {
   const root = templatesAt(scratch.fresh('root'), { basket: { manifest: BASKET } });
   await assert.rejects(loadTemplate(root, '../basket'), /not a template name/);
 });
+
+test('loadTemplate refuses a template that declares a question named like a marker key', async () => {
+  const root = templatesAt(scratch.fresh('root'), {
+    odd: { manifest: 'name: odd\nquestions:\n  templates:\n    default: x\n' },
+  });
+  await assert.rejects(loadTemplate(root, 'odd'), /odd.*`templates`/s);
+});

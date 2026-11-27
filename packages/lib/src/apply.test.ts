@@ -24,6 +24,38 @@ const TEMPLATES = {
     manifest: ['name: shelf', 'questions:', '  width:', '    type: int', '    default: 4', ''].join('\n'),
     files: { 'shelf.txt': 'a shelf\n', 'bench.txt': 'a bench\n', 'width.txt.jinja': '{{ width }} wide\n' },
   },
+  owner: {
+    manifest: ['name: owner', 'questions:', '  tenant:', '    default: acme', ''].join('\n'),
+    files: { 'tenant.txt.jinja': '{{ tenant }}\n' },
+  },
+  app: {
+    manifest: ['name: app', 'reads:', '  tenant:', ''].join('\n'),
+    files: { 'app.txt.jinja': 'app of {{ tenant }}\n' },
+  },
+  lid: {
+    manifest: [
+      'name: lid',
+      'questions:',
+      '  lid_color:',
+      '    default: blue',
+      'policies:',
+      '  born-lid.txt: born-once',
+      '',
+    ].join('\n'),
+    files: { 'lid.txt.jinja': 'a {{ lid_color }} lid\n', 'born-lid.txt': 'lid born\n' },
+  },
+  lidroot: {
+    manifest: ['name: lidroot', 'questions:', '  lid_color:', '    default: blue', ''].join('\n'),
+    files: { 'lidroot.txt.jinja': '{{ lid_color }}\n' },
+  },
+  need: {
+    manifest: ['name: need', 'questions:', '  token:', '    type: str', ''].join('\n'),
+    files: { 'token.txt.jinja': '{{ token }}\n' },
+  },
+  reserved: {
+    manifest: ['name: reserved', 'questions:', '  version:', '    default: 9.9.9', ''].join('\n'),
+    files: { 'r.txt': 'r\n' },
+  },
   crate: {
     manifest: ['name: crate', 'reads:', '  fruit:', ''].join('\n'),
     files: { 'crate.txt.jinja': 'a crate of {{ fruit }}s\n' },
@@ -358,4 +390,98 @@ test('apply says a directory that is no repo is none, and a repo without a commi
     assert.doesNotMatch(error.message, /exited with/);
     return true;
   });
+});
+
+const EMPTY = marker('templates: []\n');
+
+test('apply gives a default the root adopts, a root answer, to a nested site that reads it, in the same run', async () => {
+  const { repo, templates } = fixture({ 'apps/x/PLEXUS.md': EMPTY });
+  write(repo, {
+    'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket, owner]\nfruit: apple\n`),
+    'apps/x/PLEXUS.md': marker('templates: [app]\n'),
+  });
+  const applied = await apply(quietContext(), options(repo, templates));
+  assert.equal(text(repo, 'tenant.txt'), 'acme\n');
+  assert.equal(text(repo, 'apps/x/app.txt'), 'app of acme\n');
+  assert.deepEqual(
+    applied.sites.map((s) => [s.dir, s.defaults]),
+    [
+      ['.', { tenant: 'acme' }],
+      ['apps/x', {}],
+    ],
+  );
+  assert.equal(text(repo, 'apps/x/PLEXUS.md'), marker('templates: [app]\n'));
+});
+
+test('apply refuses a default that the root and a nested site would both write, naming the key, templates and markers', async () => {
+  const { repo, templates } = fixture({ 'apps/x/PLEXUS.md': EMPTY });
+  const root = marker(`version: ${VERSION}\ntemplates: [basket, lidroot]\nfruit: apple\n`);
+  write(repo, { 'PLEXUS.md': root, 'apps/x/PLEXUS.md': marker('templates: [lid]\n') });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), (error: Error) => {
+    for (const part of [/lid_color/, /lidroot/, /\blid\b/, /PLEXUS\.md/, /apps\/x\/PLEXUS\.md/])
+      assert.match(error.message, part);
+    return true;
+  });
+  assert.equal(text(repo, 'PLEXUS.md'), root);
+  assert.equal(existsSync(join(repo, 'lidroot.txt')), false);
+});
+
+test('apply refuses a root default for a key that a nested marker already answers', async () => {
+  const { repo, templates } = fixture({ 'apps/x/PLEXUS.md': marker('templates: [lid]\nlid_color: green\n') });
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket, lidroot]\nfruit: apple\n`) });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), /lid_color.*apps\/x\/PLEXUS\.md/s);
+});
+
+test('apply refuses a template that declares a question named like a marker key, and writes nothing', async () => {
+  const { repo, templates } = fixture();
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket, reserved]\nfruit: apple\n`) });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), (error: Error) => {
+    assert.match(error.message, /reserved/);
+    assert.match(error.message, /`version`/);
+    return true;
+  });
+  assert.equal(existsSync(join(repo, 'r.txt')), false);
+});
+
+test('apply leaves a nested site alone when the root answer that changed is none its templates read or own', async () => {
+  const { repo, templates } = fixture({
+    'apps/need/PLEXUS.md': marker('templates: [need]\ntoken: t\n'),
+    'apps/need/token.txt': 't\n',
+    'apps/lid/PLEXUS.md': marker('templates: [lid]\nlid_color: blue\n'),
+    'apps/lid/lid.txt': 'a blue lid\n',
+  });
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: apple\ncount: 5\n`) });
+  const applied = await apply(quietContext(), options(repo, templates));
+  assert.deepEqual(
+    applied.sites.map((s) => s.dir),
+    ['.'],
+  );
+  assert.equal(
+    existsSync(join(repo, 'apps/lid/born-lid.txt')),
+    false,
+    'a born-once file the user does not have is not written back',
+  );
+});
+
+test('apply renders a nested site when a root answer that changed is one its template owns', async () => {
+  const { repo, templates } = fixture({
+    'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: apple\nlid_color: blue\n`),
+    'apps/lid/PLEXUS.md': marker('templates: [lid]\n'),
+    'apps/lid/lid.txt': 'a blue lid\n',
+    'apps/lid/born-lid.txt': 'lid born\n',
+  });
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: apple\nlid_color: green\n`) });
+  await apply(quietContext(), options(repo, templates));
+  assert.equal(text(repo, 'apps/lid/lid.txt'), 'a green lid\n');
+});
+
+test('apply lists a render error once, and says which markers it comes from', async () => {
+  const { repo, templates } = fixture({ 'apps/need/PLEXUS.md': marker('templates: [need]\n') });
+  write(repo, { 'apps/need/PLEXUS.md': marker('templates: [need]\nextra: 1\n') });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), (error: Error) => {
+    assert.equal(error.message.split('\n').filter((l) => /token/.test(l)).length, 1);
+    return true;
+  });
+  write(repo, { 'apps/need/PLEXUS.md': marker('templates: [need]\ntoken: x\n') });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), /apps\/need.*markers at HEAD/s);
 });
