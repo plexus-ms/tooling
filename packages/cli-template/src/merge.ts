@@ -26,6 +26,10 @@ export async function merge(input: MergeInput, mergeFile: MergeFile): Promise<Me
       report.push({ path, outcome: 'deleted' });
       continue;
     }
+    if (n === undefined && c !== undefined) {
+      report.push({ path, outcome: 'conflicted' });
+      continue;
+    }
     const base = o ?? EMPTY;
     if (n !== undefined && (same(c, base) || same(c, n))) {
       tree.set(path, n);
