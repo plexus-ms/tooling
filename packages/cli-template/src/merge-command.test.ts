@@ -207,3 +207,19 @@ test('merge adds an empty directory of the new render, and a file the user delet
     ]);
   });
 });
+
+test('a file of both renders against a directory of the target is a conflict, whether the directory holds a file or nothing', () => {
+  const old = { x: 'one\n', e: 'one\n' };
+  const next = { x: 'two\n', e: 'two\n' };
+  withDirectories(old, next, {}, (s) => {
+    put(s.path('target'), { 'x/inside.txt': 'mine\n' });
+    mkdirSync(s.path('target/e'));
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(JSON.parse(run.stdout).report, [
+      { path: 'e', outcome: 'conflicted' },
+      { path: 'x', outcome: 'conflicted' },
+    ]);
+    assert.deepEqual(read(s.path('target')), { 'x/inside.txt': 'mine\n', 'e/': '' });
+  });
+});
