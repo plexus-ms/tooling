@@ -5,7 +5,9 @@
 // subtree for a directory. A file whose name ends in `.jinja` is rendered with
 // the context and lands without the suffix; any other is copied as bytes. The
 // mode is reduced to 0o644 or, where its owner may execute it, 0o755, as
-// types.ts states. A file whose Jinja fails is an error naming its path in the template.
+// types.ts states. A `.jinja` file that is not valid text
+// is copied as bytes, under the name without the suffix. A file whose Jinja
+// fails is an error naming its path in the template.
 //
 // A directory that renders to a path and holds nothing in the result, because
 // the template holds nothing there or because every file below it was skipped,
@@ -31,6 +33,15 @@ const EMPTY_DIRECTORY: Entry = { bytes: new Uint8Array(), mode: DIRECTORY | 0o75
 
 /** A file's entry as `render` writes it: its bytes, and a mode of 0o644 or 0o755. */
 const written = (bytes: Uint8Array, mode: number): Entry => ({ bytes, mode: REGULAR | (mode & 0o100 ? 0o755 : 0o644) });
+
+/** The text of `bytes`, or undefined where they are not valid UTF-8. */
+function textOf(bytes: Uint8Array): string | undefined {
+  try {
+    return utf8.decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
 
 /** The directory of a source path: everything before its last `/`, or `''`. */
 const parentOf = (source: string): string => source.slice(0, Math.max(0, source.lastIndexOf('/')));
@@ -104,8 +115,13 @@ export function renderFiles(template: Template, context: Context, errors: Render
       rendered.set(path, { entry: written(entry.bytes, entry.mode), source });
       continue;
     }
+    const text = textOf(entry.bytes);
+    if (text === undefined) {
+      rendered.set(path, { entry: written(entry.bytes, entry.mode), source });
+      continue;
+    }
     try {
-      const bytes = encoder.encode(renderString(utf8.decode(entry.bytes), context));
+      const bytes = encoder.encode(renderString(text, context));
       rendered.set(path, { entry: written(bytes, entry.mode), source });
     } catch (error) {
       errors.push({ template: template.manifest.name, path: `${FILES}${source}`, message: messageOf(error) });
