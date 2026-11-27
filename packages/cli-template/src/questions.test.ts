@@ -169,3 +169,179 @@ weave:
   );
   assert.deepEqual(result.answers, { size: 3, weave: null });
 });
+
+// Ported from tests/test_copy.py::test_validate_default_value: a default is cast to its question's
+// type, and a default that cannot be cast is an error. Python's `TypeError` and `ValueError` are
+// both an error here; where Python's `int(1.0)` and the like tell integers from floats, a YAML
+// `1.0` is the number 1 here. The `path` type is not ported, and the `secret` ones neither.
+const casts: [string, string, unknown][] = [
+  ['str', '"string"', 'string'],
+  ['str', '"1.0"', '1.0'],
+  ['str', '1.5', '1.5'],
+  ['str', 'null', 'ERROR'],
+  ['int', '1', 1],
+  ['int', '1.0', 1],
+  ['int', '"1"', 1],
+  ['int', '"1.0"', 'ERROR'],
+  ['int', '"no-int"', 'ERROR'],
+  ['int', '1.5', 'ERROR'],
+  ['int', 'null', 'ERROR'],
+  ['int', '{}', 'ERROR'],
+  ['int', '[]', 'ERROR'],
+  ['float', '1.1', 1.1],
+  ['float', '1', 1],
+  ['float', '"1.1"', 1.1],
+  ['float', '"no-float"', 'ERROR'],
+  ['float', 'null', 'ERROR'],
+  ['float', '{}', 'ERROR'],
+  ['float', '[]', 'ERROR'],
+  ['bool', 'true', true],
+  ['bool', 'false', false],
+  ['bool', '"y"', true],
+  ['bool', '"n"', false],
+  ['bool', 'null', 'ERROR'],
+  ['json', '"\\"string\\""', 'string'],
+  ['json', '"1"', 1],
+  ['json', '1', 1],
+  ['json', '"1.1"', 1.1],
+  ['json', '"true"', true],
+  ['json', 'false', false],
+  ['json', '"{}"', {}],
+  ['json', '{}', {}],
+  ['json', '"[]"', []],
+  ['json', '[]', []],
+  ['json', '"null"', null],
+  ['json', 'null', null],
+  ['json', '"{nope"', 'ERROR'],
+  ['yaml', '"\\"string\\""', 'string'],
+  ['yaml', '"string"', 'string'],
+  ['yaml', '"1"', 1],
+  ['yaml', '1.1', 1.1],
+  ['yaml', '"true"', true],
+  ['yaml', 'false', false],
+  ['yaml', '"{}"', {}],
+  ['yaml', '"[]"', []],
+  ['yaml', '"null"', null],
+  ['yaml', 'null', null],
+];
+for (const [type, source, expected] of casts) {
+  test(`a ${type} default of ${source} is ${expected === 'ERROR' ? 'an error' : `the answer ${JSON.stringify(expected)}`}`, () => {
+    const result = basket(`q:\n  type: ${type}\n  default: ${source}`, {});
+    if (expected === 'ERROR') {
+      assert.equal(result.errors.length, 1);
+      assert.equal(result.errors[0]?.question, 'q');
+    } else {
+      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.answers, { q: expected });
+    }
+  });
+}
+
+// Ported from tests/test_complex_questions.py::test_api_str_data: answers that arrive as strings,
+// as from a command line, are cast to their question's type.
+test('given answers that are strings are cast to the question type', () => {
+  const questions = `love_me:
+  type: bool
+your_name:
+  type: str
+your_age:
+  type: int
+your_height:
+  type: float
+more_json_info:
+  type: json
+anything_else:
+  type: yaml`;
+  const result = basket(questions, {
+    love_me: 'false',
+    your_name: 'LeChuck',
+    your_age: '220',
+    your_height: '1.9',
+    more_json_info: '["bad", "guy"]',
+    anything_else: "{'hates': 'all'}",
+  });
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, {
+    love_me: false,
+    your_name: 'LeChuck',
+    your_age: 220,
+    your_height: 1.9,
+    more_json_info: ['bad', 'guy'],
+    anything_else: { hates: 'all' },
+  });
+});
+
+test('a given answer that cannot be cast is an error naming its question', () => {
+  const result = basket('age:\n  type: int\n  default: 1', { age: 'old' });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.question, 'age');
+  assert.match(result.errors[0]?.message ?? '', /old/);
+});
+
+// Ported from tests/test_tools.py::test_cast_to_bool_treats_blank_strings_as_false and
+// test_cast_to_bool_ignores_surrounding_whitespace, through a given bool answer.
+for (const [text, expected] of [
+  ['', false],
+  [' ', false],
+  ['\t', false],
+  ['\n', false],
+  ['  \n\t  ', false],
+  [' true ', true],
+  ['\nfalse\n', false],
+  ['Yes', true],
+  ['off', false],
+  ['0', false],
+  ['2', true],
+] as const) {
+  test(`a bool answer of ${JSON.stringify(text)} is ${expected}`, () => {
+    assert.deepEqual(basket('q:\n  type: bool', { q: text }).answers, { q: expected });
+  });
+}
+
+test('a question without a type takes it from its default: a number, a bool or a string stay one, anything else is YAML', () => {
+  const questions =
+    'count:\n  default: 10\nripe:\n  default: false\nlabel:\n  default: "3"\nshelf:\n  default: [a]\nnote:';
+  const result = basket(questions, { count: '12', ripe: 'yes', label: '4', shelf: '[b, c]', note: '- 1' });
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, { count: 12, ripe: true, label: '4', shelf: ['b', 'c'], note: [1] });
+});
+
+// A default is rendered to text and then cast, as copier does, so an expression and a literal agree.
+test('a default is rendered, then cast to the type, which without one is the raw default type', () => {
+  const questions = `a:
+  default: x
+b:
+  default: y
+n:
+  type: int
+  default: 1
+joined:
+  type: str
+  default: "{{ a }}-{{ b }}"
+next:
+  type: int
+  default: "{{ n + 1 }}"
+text:
+  default: "{{ n + 1 }}"
+ripe:
+  type: bool
+  default: "true"
+three:
+  default: "3"
+list:
+  type: yaml
+  default: "{{ [a, b] | tojson }}"`;
+  const result = basket(questions, {});
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, {
+    a: 'x',
+    b: 'y',
+    n: 1,
+    joined: 'x-y',
+    next: 2,
+    text: '2',
+    ripe: true,
+    three: '3',
+    list: ['x', 'y'],
+  });
+});
