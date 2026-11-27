@@ -4,8 +4,8 @@
 // be a condition: a part that renders empty skips the file, or the whole
 // subtree for a directory. A file whose name ends in `.jinja` is rendered with
 // the context and lands without the suffix; any other is copied as bytes. The
-// mode is carried as it is, not yet reduced to the executable bit as types.ts
-// states. A file whose Jinja fails is an error naming its path in the template.
+// mode is reduced to 0o644 or, where its owner may execute it, 0o755, as
+// types.ts states. A file whose Jinja fails is an error naming its path in the template.
 //
 // A directory that renders to a path and holds nothing in the result, because
 // the template holds nothing there or because every file below it was skipped,
@@ -13,7 +13,7 @@
 import { messageOf } from './errors.ts';
 import { type Context, renderString } from './jinja.ts';
 import { FILES, type Template } from './manifest.ts';
-import { DIRECTORY, type Entry, MODE_TYPE, type RenderError } from './types.ts';
+import { DIRECTORY, type Entry, MODE_TYPE, REGULAR, type RenderError } from './types.ts';
 
 /** A rendered entry, with the path below `files/` it came from. */
 export interface Rendered {
@@ -28,6 +28,9 @@ const encoder = new TextEncoder();
 
 /** What an empty directory is written as. */
 const EMPTY_DIRECTORY: Entry = { bytes: new Uint8Array(), mode: DIRECTORY | 0o755 };
+
+/** A file's entry as `render` writes it: its bytes, and a mode of 0o644 or 0o755. */
+const written = (bytes: Uint8Array, mode: number): Entry => ({ bytes, mode: REGULAR | (mode & 0o100 ? 0o755 : 0o644) });
 
 /** The directory of a source path: everything before its last `/`, or `''`. */
 const parentOf = (source: string): string => source.slice(0, Math.max(0, source.lastIndexOf('/')));
@@ -98,12 +101,12 @@ export function renderFiles(template: Template, context: Context, errors: Render
     const path = place(directoryOf(parentOf(source)), name, source, false);
     if (path === undefined) continue;
     if (!isTemplate) {
-      rendered.set(path, { entry, source });
+      rendered.set(path, { entry: written(entry.bytes, entry.mode), source });
       continue;
     }
     try {
       const bytes = encoder.encode(renderString(utf8.decode(entry.bytes), context));
-      rendered.set(path, { entry: { bytes, mode: entry.mode }, source });
+      rendered.set(path, { entry: written(bytes, entry.mode), source });
     } catch (error) {
       errors.push({ template: template.manifest.name, path: `${FILES}${source}`, message: messageOf(error) });
     }
