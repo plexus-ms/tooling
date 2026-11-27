@@ -565,10 +565,25 @@ test('apply names the template, path and question of a render error', async () =
 
 test('apply reports a missing template alone, without the errors of the templates that were found', async () => {
   const { repo, templates } = fixture({ 'apps/x/PLEXUS.md': EMPTY });
-  write(repo, { 'apps/x/PLEXUS.md': marker('templates: [crate, ghost]\n') });
+  write(repo, { 'apps/x/PLEXUS.md': marker('templates: [need, ghost]\n') });
   await assert.rejects(apply(quietContext(), options(repo, templates)), (error: Error) => {
     assert.match(error.message, /no template ghost/);
-    assert.doesNotMatch(error.message, /fruit/);
+    assert.doesNotMatch(error.message, /token/);
     return true;
   });
+});
+
+test('apply gives the nested site of the old side the root defaults of the old side', async () => {
+  const { repo, templates } = fixture({
+    'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket, owner]\nfruit: apple\n`),
+    'tenant.txt': 'acme\n',
+    'apps/x/PLEXUS.md': marker('templates: [app]\n'),
+    'apps/x/app.txt': 'app of acme\n',
+  });
+  write(repo, { 'apps/x/PLEXUS.md': marker('templates: [app]\nnote: 1\n') });
+  const applied = await apply(quietContext(), options(repo, templates));
+  assert.deepEqual(
+    applied.sites.map((s) => [s.dir, s.report]),
+    [['apps/x', []]],
+  );
 });
