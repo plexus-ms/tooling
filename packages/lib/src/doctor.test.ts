@@ -1079,6 +1079,18 @@ test('a key set in both the root marker and a nested one is a finding naming the
   ]);
 });
 
+test('the marker checks are skipped in a repo that still tracks a copier answers file, at any depth', () => {
+  const failing = [
+    site('.', { version: '0.130.0', templates: ['repo-turbo'], answers: { tenant: 'a' } }),
+    { dir: 'apps/a', problem: "`version` belongs in the repo's root marker only" },
+    site('apps/b', { answers: { tenant: 'b' } }),
+  ];
+  assert.equal(findings(crossed(failing)).length, 3, 'the same sites fail once the repo has crossed over');
+  for (const answers of ['.copier-answers.yml', 'apps/a/.copier-answers.yml'])
+    assert.deepEqual(findings(crossed(failing, { tracked: ['mise.toml', answers] })), [], answers);
+  assert.equal(findings(crossed(failing, { tracked: ['docs/.copier-answers.yml.md'] })).length, 3);
+});
+
 test('a tracked file holding a conflict marker is a finding of the repo, of no requirement, that no deviation silences', () => {
   const marked = repo({ conflicted: ['apps/a/page.tsx', 'mise.toml'] });
   assert.deepEqual(findings(marked), [
