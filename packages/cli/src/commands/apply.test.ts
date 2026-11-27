@@ -166,3 +166,30 @@ test('an answer of no writes nothing and fails: the outcome says so', () => {
     code: 1,
   });
 });
+
+test('apply names a templates root it was given relatively by its absolute path', async () => {
+  const { repo, templates } = fixture('named', 'apple\n');
+  put(repo, { 'PLEXUS.md': `---\nversion: ${version}\ntemplates: [basket, ghost]\nfruit: pear\n---\n` });
+  const cwd = process.cwd();
+  process.chdir(dir);
+  try {
+    await assert.rejects(plx('-y', 'apply', '--templates', basename(templates), repo), (error: Error) => {
+      assert.ok(error.message.includes(`no template ghost in ${templates}`), error.message);
+      return true;
+    });
+  } finally {
+    process.chdir(cwd);
+  }
+});
+
+test('apply takes a repo given relatively as the repo it is, not as a directory inside one', async () => {
+  const { repo, templates } = fixture('top', 'apple\n');
+  const cwd = process.cwd();
+  process.chdir(dir);
+  try {
+    const { stderr } = await plx('-y', 'apply', '--templates', templates, basename(repo));
+    assert.doesNotMatch(stderr, /using the top of the repo/);
+  } finally {
+    process.chdir(cwd);
+  }
+});
