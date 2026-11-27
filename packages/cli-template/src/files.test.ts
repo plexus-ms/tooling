@@ -311,3 +311,24 @@ test('a file named only .jinja is an error naming its path', () => {
   assert.equal(result.errors[0]?.path, 'files/shelf/.jinja');
   assert.deepEqual(listing(result.tree), {});
 });
+
+// No original: copier's path would fail at the operating system.
+test('a rendered part with a NUL character is an error', () => {
+  const result = render([template(where, { '{{ target }}.txt': 'x' })], { target: 'a\0b' });
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0]?.message ?? '', /is forbidden/);
+  assert.deepEqual(listing(result.tree), {});
+});
+
+// No original: the message shows the path as rendered, not joined to its directory.
+test('the message about an absolute part below a directory shows the part as rendered', () => {
+  const result = render([template(where, { 'sub/{{ target }}': 'x' })], { target: '/etc/passwd' });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.message, '"/etc/passwd" is forbidden: it is not inside the output');
+});
+
+// No original: the message names the directory a relative part was below.
+test('the message about a part that leaves the output from below a directory names both', () => {
+  const result = render([template(where, { 'sub/{{ target }}': 'x' })], { target: '../../x' });
+  assert.equal(result.errors[0]?.message, '"sub/../../x" is forbidden: it is not inside the output');
+});
