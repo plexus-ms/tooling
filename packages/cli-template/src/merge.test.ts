@@ -554,3 +554,9 @@ test('merge never reports a conflict for an empty directory the template drops o
   });
   assert.deepEqual(result, { tree: { apple: 'red\n', pear: 'green\n' }, report: ['pear: clean'], calls: [] });
 });
+
+test('merge refuses a render that holds a symlink, which render never writes', async () => {
+  const link = { text: 'elsewhere', mode: SYMLINK | 0o777 };
+  await assert.rejects(run({ old: { apple: link }, current: { apple: link } }), /apple.*symlink/);
+  await assert.rejects(run({ new: { apple: link } }), /apple.*symlink/);
+});
