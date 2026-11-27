@@ -1,7 +1,8 @@
 // A template's files rendered: which file lands where, and with what bytes.
 // A file whose name ends in `.jinja` is rendered with the context and lands
 // without the suffix; any other is copied as bytes. The mode is carried as it
-// is. A file whose Jinja fails is an error naming its path in the template.
+// is, not yet reduced to the executable bit as types.ts states. A file whose
+// Jinja fails is an error naming its path in the template.
 import { messageOf } from './errors.ts';
 import { type Context, renderString } from './jinja.ts';
 import { FILES, type Template } from './manifest.ts';
