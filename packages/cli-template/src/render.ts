@@ -29,10 +29,12 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   const resolved = new Map<Template, Resolved>();
   for (const template of resolutionOrder(read, owners, errors)) {
     const own: RenderError[] = [];
-    const scope = scopeOf(engine, readsOf(template, owners, resolved, given, own));
+    const reads = readsOf(template, owners, resolved, given, own);
+    const scope = scopeOf(engine, reads.values);
     const resolution = resolveAnswers(template.manifest, given, scope, own);
     errors.push(...own);
-    resolved.set(template, { scope, resolution, failed: own.length > 0 });
+    const unresolved = new Set(own.flatMap(({ question }) => question ?? []));
+    resolved.set(template, { scope, resolution, unresolved, failed: own.length > 0 || !reads.complete });
   }
 
   const renderings = read.flatMap((template) => {
@@ -76,10 +78,13 @@ function readAll(templates: readonly Tree[], errors: RenderError[]): Template[] 
   });
 }
 
-/** A template's questions resolved, the scope they were resolved in, and whether a read or a question failed. */
+/** A template's questions resolved, the scope they were resolved in, and what failed. */
 interface Resolved {
   readonly scope: Context;
   readonly resolution: Resolution;
+  /** The questions and reads whose resolution failed. */
+  readonly unresolved: ReadonlySet<string>;
+  /** Whether any read or question failed, its own or an owner's: its files are not rendered. */
   readonly failed: boolean;
 }
 
@@ -162,6 +167,8 @@ function ownersOf(read: readonly Template[], errors: RenderError[]): Map<string,
 /**
  * The value of each answer `template` reads: what its owner resolved, else the
  * given answer, else the read's default; a read that nothing supplies is an error.
+ * A read whose owner failed to resolve it has no value and adds no error, the
+ * owner's being the one; `complete` is false where a read has no value.
  */
 function readsOf(
   template: Template,
@@ -169,20 +176,24 @@ function readsOf(
   resolved: ReadonlyMap<Template, Resolved>,
   given: Answers,
   errors: RenderError[],
-): Context {
-  const reads: Context = {};
+): { values: Context; complete: boolean } {
+  const values: Context = {};
+  let complete = true;
   for (const read of template.manifest.reads) {
     const owner = owners.get(read.name);
-    const owned = owner === undefined ? undefined : resolved.get(owner)?.resolution.context;
-    if (owned !== undefined && Object.hasOwn(owned, read.name)) reads[read.name] = owned[read.name];
-    else if (Object.hasOwn(given, read.name)) reads[read.name] = given[read.name];
-    else if (Object.hasOwn(read, 'default')) reads[read.name] = read.default;
+    const done = owner === undefined ? undefined : resolved.get(owner);
+    const owned = done?.resolution.context ?? {};
+    if (done?.unresolved.has(read.name)) complete = false;
+    else if (Object.hasOwn(owned, read.name)) values[read.name] = owned[read.name];
+    else if (Object.hasOwn(given, read.name)) values[read.name] = given[read.name];
+    else if (Object.hasOwn(read, 'default')) values[read.name] = read.default;
     else {
+      complete = false;
       const message = `${template.manifest.name} reads ${read.name}, which no template of the render owns and no answer gives`;
       errors.push({ template: template.manifest.name, path: MANIFEST, question: read.name, message });
     }
   }
-  return reads;
+  return { values, complete };
 }
 
 /** The engine's variables, the same for every template of a render. */
