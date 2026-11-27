@@ -108,8 +108,9 @@ function cast(type: QuestionType, answer: unknown): unknown {
       if (typeof answer === 'boolean') return answer ? 'True' : 'False';
       throw fail();
     case 'int':
-      if (typeof answer === 'number' && Number.isInteger(answer)) return answer;
-      if (typeof answer === 'string' && INTEGER.test(answer)) return Number.parseInt(answer, 10);
+      if (typeof answer === 'number' && Number.isSafeInteger(answer)) return answer;
+      if (typeof answer === 'string' && INTEGER.test(answer) && Number.isSafeInteger(Number.parseInt(answer, 10)))
+        return Number.parseInt(answer, 10);
       throw fail();
     case 'float':
       if (typeof answer === 'number') return answer;
@@ -124,16 +125,24 @@ function cast(type: QuestionType, answer: unknown): unknown {
   }
 }
 
-/** A value as a boolean the way copier reads one: a number by its truth, a string by its YAML boolean words, anything else by its truthiness. */
+const DECIMAL = '\\d+(?:_\\d+)*';
+/** What Python's `float()` reads: a decimal with a sign, a fraction, an exponent and underscores between digits, or nan and inf. */
+const PYTHON_FLOAT = new RegExp(
+  `^[+-]?(?:(?:${DECIMAL}(?:\\.(?:${DECIMAL})?)?|\\.${DECIMAL})(?:e[+-]?${DECIMAL})?|nan|inf(?:inity)?)$`,
+  'i',
+);
+const FALSE_WORDS = ['', 'n', 'no', 'f', 'false', 'off', '~', 'null', 'none'];
+
+/** `cast_to_bool` of copier: a number by its value, a string that Python reads as a number the same, a string else by its words, anything else by its truthiness. */
 function toBool(source: unknown): boolean {
-  if (typeof source === 'number') return source !== 0;
+  if (typeof source === 'number') return Number.isNaN(source) || source !== 0;
   if (typeof source === 'string') {
-    const text = source.trim().toLowerCase();
-    if (text === '') return false;
-    if (Number.isFinite(Number(text))) return Number(text) !== 0;
-    if (['y', 'yes', 't', 'true', 'on'].includes(text)) return true;
-    if (['n', 'no', 'f', 'false', 'off', '~', 'null', 'none'].includes(text)) return false;
-    return true;
+    const text = source.trim();
+    if (PYTHON_FLOAT.test(text)) {
+      const number = Number(text.replaceAll('_', ''));
+      return Number.isNaN(number) || number !== 0;
+    }
+    return !FALSE_WORDS.includes(text.toLowerCase());
   }
   if (Array.isArray(source)) return source.length > 0;
   if (typeof source === 'object' && source !== null) return Object.keys(source).length > 0;
