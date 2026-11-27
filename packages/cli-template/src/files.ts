@@ -3,7 +3,9 @@
 // Every part of a path is Jinja and is rendered by itself, so that a part can
 // be a condition: a part that renders empty skips the file, or the whole
 // subtree for a directory. A file whose name ends in `.jinja` is rendered with
-// the context and lands without the suffix; any other is copied as bytes. The
+// the context and lands without the suffix; any other is copied as bytes, unless
+// a `.jinja` file of the template stands beside it, by its own name or by the
+// name it renders to: the template wins and the file is not written. The
 // mode is reduced to 0o644 or, where its owner may execute it, 0o755, as
 // types.ts states. A `.jinja` file that is not valid text
 // is copied as bytes, under the name without the suffix. A file whose Jinja
@@ -112,6 +114,8 @@ export function renderFiles(template: Template, context: Context, errors: Render
     const path = place(directoryOf(parentOf(source)), name, source, false);
     if (path === undefined) continue;
     if (!isTemplate) {
+      // As copier does, a template beside the file wins, by either name.
+      if (template.files.has(source + SUFFIX) || template.files.has(path + SUFFIX)) continue;
       rendered.set(path, { entry: written(entry.bytes, entry.mode), source });
       continue;
     }
