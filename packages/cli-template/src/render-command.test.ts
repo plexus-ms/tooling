@@ -1,7 +1,7 @@
 // `plx-template render` as a process, on template directories of baskets and
 // shelves in a scratch directory.
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, symlinkSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, symlinkSync } from 'node:fs';
 import { test } from 'node:test';
 import { plxTemplate, put, read, type Scratch, scratch } from './testing/run.ts';
 
@@ -192,5 +192,20 @@ test('a symlink in a template is an error, and a template that holds nothing is 
     const errors = JSON.parse(run.stdout).errors;
     assert.ok(errors.some((e: { path?: string }) => e.path === 'files/link'));
     assert.ok(errors.some((e: { template: string }) => e.template === '#2'));
+  });
+});
+
+test('render prints its result only after everything is written: a failed write is code 1 with nothing on standard output', () => {
+  withBasket((s, basket) => {
+    mkdirSync(s.path('locked'));
+    chmodSync(s.path('locked'), 0o555);
+    try {
+      const run = plxTemplate(['render', '--answers', '-', s.path('locked/out'), basket], '{"fruit": "fig"}');
+      assert.equal(run.code, 1);
+      assert.equal(run.stdout, '');
+      assert.match(run.stderr, /locked\/out/);
+    } finally {
+      chmodSync(s.path('locked'), 0o755);
+    }
   });
 });
