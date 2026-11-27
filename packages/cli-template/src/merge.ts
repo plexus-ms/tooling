@@ -101,6 +101,7 @@ async function mergePath(
   tree: Map<string, Entry>,
   mergeFile: MergeFile,
 ): Promise<Outcome | undefined> {
+  if (kind(old) === SYMLINK || kind(next) === SYMLINK) throw new Error(`merge: ${path} is a symlink in a render`);
   const current = at(tree, path);
   // The rules of the header, by number.
   // 1
