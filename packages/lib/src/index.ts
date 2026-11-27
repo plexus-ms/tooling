@@ -123,6 +123,7 @@ export {
   parseMarkerConfig,
   RESERVED_KEYS,
   reasonGiven,
+  setMarkerKeys,
   splitFrontmatter,
 } from './marker.ts';
 export {
