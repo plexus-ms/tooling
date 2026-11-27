@@ -3,17 +3,72 @@
 // that each pass can see what the one before produced for all of them:
 //
 //   1. read each template: its manifest and its files (manifest.ts)
-//   2. resolve each template's questions against the given answers
+//   2. resolve each template's reads and questions against the given answers
 //      (questions.ts), in the scope `scopeOf` builds
-//   3. render each template's files (files.ts) in the context `contextOf`
-//      builds, and give each path its owner and policy
+//   3. render the files of all templates together (files.ts), each template's
+//      in the context `contextOf` builds, and give each path its owner and
+//      policy
 //
 // Every step adds what it finds wrong to one list of errors and carries on, so
 // that one render reports them all; a render with errors returns no files.
 //
-// For now the scope is empty and the context is a template's own answers, so
-// several templates render one after the other into the same tree, each seeing
-// only the answers to its own questions.
+// The rules of composing several templates into one tree:
+//
+// Templates. Each template has a name of its own: two templates of one name
+// are an error naming both by their position in the list, and the second is
+// left out.
+//
+// Answers. The given answers are one flat namespace for the whole render. Each
+// question is declared by exactly one template, its owner: two templates
+// declaring the same question are an error naming both. A template takes the
+// given answers to its own questions, and declares as reads the answers it
+// uses but does not own.
+//
+// Reads. The value of a read is what its owner in the render resolved, cast
+// to the owner's type; else the given answer, as it is given, which is how a
+// caller passes an answer that no template of the render owns; else the read's
+// default from the manifest. A supplied value always wins over the default.
+// A read without a default that nothing supplies is an error naming the
+// template and the read. A read sees what its owner's files see: where the
+// owner's `when` skips the question, that is the owner's given answer or
+// default, and where the owner has neither, the read falls to its own default,
+// and without one it is an error naming the owner as well.
+//
+// Order. A template is resolved after the owners of the answers it reads, and
+// otherwise in the order given, so that the order of the templates does not
+// change the tree; there are no dependencies between templates besides their
+// reads. Templates whose reads form a cycle are one error naming them, and
+// neither they nor the templates that read from them are resolved.
+//
+// Scope. A template sees only its own slice of the namespace: the engine's
+// variables, its declared reads, and its own questions. Its questions'
+// defaults, `when`, choices and validators see the scope (the engine's
+// variables and its reads) and its own answers as questions.ts states; its
+// file names and contents see the scope and its own answers. A variable
+// outside the slice is undefined, which is an error wherever it is used, even
+// when another template of the render owns it.
+//
+// Engine variables. Their names start with `_`, which the manifest reader
+// forbids for questions and reads. There is one: `_templates`, the names of
+// the templates rendered together, sorted by name so that it does not depend
+// on the order given, for a file that is written only when another template
+// is present (`{% if 'shelf' in _templates %}`).
+//
+// One cause, one error. A template whose read or question fails renders no
+// files, since every file that uses the failed variable would add an error of
+// its own; its other files are checked by the render that follows the fix. A
+// read of a question whose owner failed to resolve it has no value and adds no
+// error, and the reader renders no files; the reader's own questions are still
+// resolved, so that every missing answer is listed, and one that uses that
+// read reports it as undefined.
+//
+// Paths. Each path is written by exactly one template; files.ts checks it
+// across the templates where it checks it within one. The result names each
+// path's owner and policy, and lists the birth commands of each template in
+// the order the templates were given, which `render` does not run.
+//
+// Unused answers. A given answer that no template owns or reads is listed as
+// unused and is no error: a caller may pass more than one render needs.
 import { renderFiles } from './files.ts';
 import type { Context } from './jinja.ts';
 import { MANIFEST, readTemplate, type Template } from './manifest.ts';
