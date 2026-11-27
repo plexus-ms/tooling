@@ -1,4 +1,39 @@
-// apply: bring a repo's files in line with its markers.
+// apply: bring a repo's files in line with its markers, at the version the
+// repo is on. It is the second step of edit, apply, commit: a human edits a
+// marker's answers or its `templates` list, and `plx apply` renders what that
+// changes into the working tree. It is how a site adopts or drops a template.
+// It commits nothing and stages nothing; the marker's `version` is never
+// written here (only `plx update` moves it).
+//
+// The procedure.
+//   1. Refuse, before reading anything else, when git tracks a
+//      `.copier-answers.yml` at any depth (the repo has not crossed over from
+//      copier, and its markers are not yet its configuration), pointing to the
+//      crossover runbook; and when the root marker names no version or one
+//      that is not the running plx's, since the templates this plx bundles
+//      are the ones that version was rendered with.
+//   2. Read the markers twice (sites.ts): old as `HEAD` has them, new as the
+//      working tree has them. A site is a directory with a tracked marker, so
+//      a new marker needs `git add` before it is a site.
+//   3. Take each site whose templates or answers differ between the two, a
+//      nested site's answers being the root's plus its own, so that a root
+//      answer changed reaches every nested site. A site that listed no
+//      templates on either side renders nothing, and one that did not change
+//      is not rendered at all, so it cannot fail.
+//   4. Plan (sync.ts): render the old side and the new side of each site with
+//      the templates below the root of templates, merge them into the site's
+//      directory by the engine's rules, and work out the defaults of
+//      questions that became applicable. Nothing is written yet, and every
+//      render error of every site is reported together.
+//   5. Confirm, then perform: write the merges and splice the defaults into
+//      the markers. A conflict stays in the file; a file the template dropped
+//      and the user had edited is kept; both are reported `conflicted`, and
+//      the caller exits non-zero.
+// Birth commands of a template are never run: they belong to creating a repo.
+//
+// The one gap: an answer edited and committed without `apply` is not noticed
+// afterwards. HEAD then already holds the new marker, so apply sees no
+// difference, and no lock file records what the files were rendered from.
 import { isDeepStrictEqual } from 'node:util';
 import { bundledTemplatesRoot } from './bundled.ts';
 import type { Context } from './context.ts';
@@ -60,6 +95,11 @@ export async function apply(ctx: Context, options: ApplyOptions): Promise<Applie
   }
   if (sides.length === 0) return { sites: [], conflicted: 0, applied: false };
   const plan = await planSync(ctx, repo, options.templates ?? bundledTemplatesRoot(), sides);
+  const changes = plan.sites.reduce((n, s) => n + s.report.length + Object.keys(s.defaults).length, 0);
+  const result = { sites: plan.sites, conflicted: plan.conflicted };
+  if (changes === 0) return { ...result, applied: false };
+  const where = plan.sites.length === 1 ? 'one site' : `${plan.sites.length} sites`;
+  if (!(await ctx.confirm(`apply ${changes} changes in ${where} to ${repo}?`))) return { ...result, applied: false };
   await plan.perform();
-  return { sites: plan.sites, conflicted: plan.conflicted, applied: true };
+  return { ...result, applied: !ctx.dryRun };
 }
