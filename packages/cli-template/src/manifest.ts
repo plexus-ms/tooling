@@ -31,7 +31,11 @@
 // the question or read where there is one; the reader reports all of them, and
 // a template with any is not rendered. Until its name is read, a template is
 // named by its position in the list, `#1` for the first.
-import { parse } from 'yaml';
+//
+// Maps keep the order the manifest writes them in: questions resolve in it, and
+// a map of choices is read into a `Map`, since a parsed object would move keys
+// that look like integers to its front.
+import { type Document, isNode, isMap as isYamlMap, parseDocument } from 'yaml';
 import { messageOf } from './errors.ts';
 import {
   type Manifest,
@@ -79,15 +83,16 @@ export function readTemplate(tree: Tree, position: number, errors: RenderError[]
     failed = true;
     errors.push({ template, path: MANIFEST, ...(question === undefined ? {} : { question }), message });
   };
-  const data = parseManifest(tree, problem);
-  if (data === undefined) return undefined;
+  const parsed = parseManifest(tree, problem);
+  if (parsed === undefined) return undefined;
+  const { data, doc } = parsed;
   if (typeof data.name === 'string' && NAME.test(data.name)) template = data.name;
   else problem('the name is lowercase letters, digits and hyphens, starting with a letter');
   for (const key of Object.keys(data)) if (!KEYS.includes(key)) problem(`unknown key ${key}`);
   const files = new Map(
     [...tree].filter(([path]) => path.startsWith(FILES)).map(([path, entry]) => [path.slice(FILES.length), entry]),
   );
-  const questions = readQuestions(data.questions, problem);
+  const questions = readQuestions(data.questions, doc, problem);
   const reads = readReads(data.reads, questions, problem);
   const policies = readPolicies(data.policies, files, problem);
   const birth = readBirth(data.birth, problem);
@@ -95,15 +100,19 @@ export function readTemplate(tree: Tree, position: number, errors: RenderError[]
   return { manifest: { name: template, questions, reads, policies, birth }, files };
 }
 
-function parseManifest(tree: Tree, problem: Problem): YamlMap | undefined {
+function parseManifest(tree: Tree, problem: Problem): { data: YamlMap; doc: Document } | undefined {
   const entry = tree.get(MANIFEST);
   if (entry === undefined) {
     problem(`the template has no ${MANIFEST}`);
     return undefined;
   }
+  let doc: Document;
   let data: unknown;
   try {
-    data = parse(utf8.decode(entry.bytes));
+    doc = parseDocument(utf8.decode(entry.bytes));
+    const [error] = doc.errors;
+    if (error !== undefined) throw error;
+    data = doc.toJS();
   } catch (error) {
     problem(`${MANIFEST} is no YAML: ${messageOf(error)}`);
     return undefined;
@@ -112,7 +121,14 @@ function parseManifest(tree: Tree, problem: Problem): YamlMap | undefined {
     problem(`${MANIFEST} is not a map`);
     return undefined;
   }
-  return data;
+  return { data, doc };
+}
+
+/** The map at `path` in `doc`, in the order the document writes it. */
+function orderedMap(doc: Document, path: readonly string[]): Map<string, unknown> {
+  const node = doc.getIn(path, true);
+  const js = (value: unknown) => (isNode(value) ? value.toJS(doc) : value);
+  return new Map(isYamlMap(node) ? node.items.map((pair) => [String(js(pair.key)), js(pair.value)]) : []);
 }
 
 /** The entries of an optional map section, or none when it is no map. */
@@ -129,7 +145,7 @@ function variable(name: string, what: string, problem: Problem): boolean {
   return false;
 }
 
-function readQuestions(value: unknown, problem: Problem): Question[] {
+function readQuestions(value: unknown, doc: Document, problem: Problem): Question[] {
   return section(value, 'questions', problem).flatMap(([name, fields]): Question[] => {
     if (!variable(name, 'question', problem)) return [];
     if (fields === null) return [{ name }];
@@ -156,7 +172,9 @@ function readQuestions(value: unknown, problem: Problem): Question[] {
       choices === undefined || typeof choices === 'string' || (typeof choices === 'object' && choices !== null),
       'choices are a list, a map or a string',
     );
-    return valid ? [{ name, ...fields } as Question] : [];
+    if (!valid) return [];
+    const ordered = isMap(choices) ? { choices: orderedMap(doc, ['questions', name, 'choices']) } : {};
+    return [{ name, ...fields, ...ordered } as Question];
   });
 }
 
