@@ -25,18 +25,18 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   const errors: RenderError[] = [];
   const read = readAll(templates, errors);
   const owners = ownersOf(read, errors);
-  const resolutions = new Map<Template, Resolution>();
-  const resolved = read.map((template) => {
-    const scope = scopeOf(readsOf(template, owners, resolutions, given, errors));
-    const resolution = resolveAnswers(template.manifest, given, scope, errors);
-    resolutions.set(template, resolution);
-    return { template, scope, resolution };
-  });
+  const resolved = new Map<Template, Resolved>();
+  for (const template of resolutionOrder(read, owners)) {
+    const scope = scopeOf(readsOf(template, owners, resolved, given, errors));
+    resolved.set(template, { scope, resolution: resolveAnswers(template.manifest, given, scope, errors) });
+  }
 
   const tree = new Map<string, Entry>();
   const files = new Map<string, Origin>();
   const birth: BirthCommand[] = [];
-  for (const { template, scope, resolution } of resolved) {
+  for (const template of read) {
+    const { scope, resolution } = resolved.get(template) ?? {};
+    if (scope === undefined || resolution === undefined) continue;
     const { name, policies } = template.manifest;
     for (const [path, { entry, source }] of renderFiles(template, contextOf(scope, resolution), errors)) {
       tree.set(path, entry);
@@ -45,7 +45,7 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
     birth.push(...template.manifest.birth.map((command) => ({ template: name, command })));
   }
 
-  const answers: Answers = Object.assign({}, ...resolved.map(({ resolution }) => resolution.answers));
+  const answers: Answers = Object.assign({}, ...read.map((template) => resolved.get(template)?.resolution.answers));
   const unused = unusedAnswers(
     read.map(({ manifest }) => manifest),
     given,
@@ -70,6 +70,25 @@ function readAll(templates: readonly Tree[], errors: RenderError[]): Template[] 
     errors.push({ template: name, other: name, path: MANIFEST, message });
     return [];
   });
+}
+
+/** A template's questions resolved, and the scope they were resolved in. */
+interface Resolved {
+  readonly scope: Context;
+  readonly resolution: Resolution;
+}
+
+/** The templates in the order they resolve: each after the owners of the answers it reads, else in the order given. */
+function resolutionOrder(read: readonly Template[], owners: ReadonlyMap<string, Template>): Template[] {
+  const ownersOfReads = (template: Template): Template[] =>
+    template.manifest.reads.flatMap(({ name }) => owners.get(name) ?? []);
+  const order: Template[] = [];
+  const pending = [...read];
+  for (;;) {
+    const next = pending.findIndex((template) => ownersOfReads(template).every((owner) => order.includes(owner)));
+    if (next === -1) return [...order, ...pending];
+    order.push(...pending.splice(next, 1));
+  }
 }
 
 /** The template that declares each question; a question two templates declare is an error naming both. */
@@ -99,15 +118,15 @@ function ownersOf(read: readonly Template[], errors: RenderError[]): Map<string,
 function readsOf(
   template: Template,
   owners: ReadonlyMap<string, Template>,
-  resolutions: ReadonlyMap<Template, Resolution>,
+  resolved: ReadonlyMap<Template, Resolved>,
   given: Answers,
   errors: RenderError[],
 ): Context {
   const reads: Context = {};
   for (const read of template.manifest.reads) {
     const owner = owners.get(read.name);
-    const resolved = owner === undefined ? undefined : resolutions.get(owner)?.context;
-    if (resolved !== undefined && Object.hasOwn(resolved, read.name)) reads[read.name] = resolved[read.name];
+    const owned = owner === undefined ? undefined : resolved.get(owner)?.resolution.context;
+    if (owned !== undefined && Object.hasOwn(owned, read.name)) reads[read.name] = owned[read.name];
     else if (Object.hasOwn(given, read.name)) reads[read.name] = given[read.name];
     else if (Object.hasOwn(read, 'default')) reads[read.name] = read.default;
     else {
