@@ -7,6 +7,7 @@
 // whose bytes are UTF-8; any other entry is spelled out with its mode, and with
 // its bytes as numbers where they are not UTF-8.
 import { REGULAR, type Tree } from '../index.ts';
+import { FILES, MANIFEST } from '../manifest.ts';
 
 export type Listed =
   | string
@@ -29,11 +30,11 @@ export function tree(listing: Listing): Tree {
   );
 }
 
-/** A template: its manifest as `template.yml`, and `files` below `files/`. */
+/** A template: its manifest, and `files` below the files directory. */
 export function template(manifest: string, files: Listing = {}): Tree {
   return tree({
-    'template.yml': manifest,
-    ...Object.fromEntries(Object.entries(files).map(([path, listed]) => [`files/${path}`, listed])),
+    [MANIFEST]: manifest,
+    ...Object.fromEntries(Object.entries(files).map(([path, listed]) => [`${FILES}${path}`, listed])),
   });
 }
 
