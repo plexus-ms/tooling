@@ -21,12 +21,25 @@ function listing(dir: string, base = dir): Record<string, string> {
   );
 }
 
+const build = () => execFileSync(process.execPath, ['build.js'], { cwd: PACKAGE });
+
 test('the build puts the templates beside the bundle, where templatesRoot finds them', () => {
-  execFileSync(process.execPath, ['build.js'], { cwd: PACKAGE });
+  build();
   const bundle = join(PACKAGE, 'dist', 'plx.js');
   const root = templatesRoot(pathToFileURL(bundle).href);
   assert.equal(root, join(PACKAGE, 'dist', 'templates'));
   const bundled = listing(root);
   assert.ok(Object.keys(bundled).includes('repo-turbo/template.yml'));
   assert.deepEqual(bundled, listing(TEMPLATES));
+});
+
+test('the package holds every file of the templates, which npm leaves out for some names', () => {
+  build();
+  const packed = JSON.parse(
+    execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: PACKAGE, encoding: 'utf8' }),
+  )[0].files.map((file: { path: string }) => file.path);
+  const missing = Object.keys(listing(TEMPLATES))
+    .map((path) => `dist/templates/${path}`)
+    .filter((path) => !packed.includes(path));
+  assert.deepEqual(missing, []);
 });
