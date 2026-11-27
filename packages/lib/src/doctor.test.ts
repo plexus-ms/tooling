@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { REGULAR, type Tree as Template } from '@plexus-ms/cli-template';
 import { type Compose, type Mapping, parseCompose } from './compose.ts';
 import { Context } from './context.ts';
 import { type AppFacts, CHECKS, diagnose, examine, type Facts, type RepoFacts } from './doctor.ts';
@@ -1226,4 +1227,45 @@ test('doctor reads which tracked files hold a conflict marker, and fails the rep
       ['apps/site', []],
     ],
   );
+});
+
+// --- the marker against the templates this plx bundles -------------------------------------
+
+/** A template as the engine reads it: its manifest, which names the template, and no files. */
+const template = (name: string, manifest = ''): Template =>
+  new Map([['template.yml', { bytes: new TextEncoder().encode(`name: ${name}\n${manifest}`), mode: REGULAR | 0o644 }]]);
+
+/** The templates a plx bundles, by name, each with the manifest lines given. */
+const bundle = (manifests: Record<string, string>): Map<string, Template> =>
+  new Map(Object.entries(manifests).map(([name, manifest]) => [name, template(name, manifest)]));
+
+const BUNDLED = bundle({ 'repo-turbo': '', 'app-nextjs': '' });
+
+test('a name in templates that this plx does not bundle is a finding naming the marker and the template', () => {
+  const sites = [
+    site('.', { version: '0.131.0', templates: ['repo-turbo', 'ghost'] }),
+    site('apps/a', { templates: ['app-nextjs', 'spectre'] }),
+  ];
+  assert.deepEqual(findings(crossed(sites, { templates: BUNDLED })), [
+    {
+      problem:
+        'PLEXUS.md: `templates` names `ghost`, which this plx does not bundle (it bundles `app-nextjs`, `repo-turbo`)',
+    },
+    {
+      problem:
+        'apps/a/PLEXUS.md: `templates` names `spectre`, which this plx does not bundle (it bundles `app-nextjs`, `repo-turbo`)',
+    },
+  ]);
+});
+
+test('names that this plx bundles pass, and an empty list too', () => {
+  const sites = [ROOT, site('apps/a', { templates: ['app-nextjs'] }), site('apps/b', { templates: [] })];
+  assert.deepEqual(findings(crossed(sites, { templates: BUNDLED })), []);
+});
+
+test('the template names are not checked where no bundled templates are given, or before the repo has crossed over', () => {
+  const sites = [site('.', { version: '0.131.0', templates: ['ghost'] })];
+  assert.deepEqual(findings(crossed(sites)), []);
+  const onCopier = crossed(sites, { templates: BUNDLED, tracked: ['.copier-answers.yml'] });
+  assert.deepEqual(findings(onCopier), []);
 });
