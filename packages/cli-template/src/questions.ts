@@ -15,6 +15,7 @@
 // holding a whole expression is evaluated to a native value, any other string is
 // rendered to text (`value`). Nothing else of a manifest value is touched.
 
+import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml } from 'yaml';
 import { messageOf } from './errors.ts';
 import { type Context, evaluate, renderString } from './jinja.ts';
@@ -91,6 +92,29 @@ function toBool(source: unknown): boolean {
   return Boolean(source);
 }
 
+/** The values a question's choices allow, rendered and cast to its type, in the manifest's order. */
+function allowed(question: Question, type: QuestionType, context: Context): unknown[] {
+  const rendered = typeof question.choices === 'string';
+  const choices: unknown = rendered
+    ? parseYaml(renderString(question.choices as string, context), { mapAsMap: true })
+    : question.choices;
+  const values = choices instanceof Map ? [...choices.values()] : Array.isArray(choices) ? choices : [];
+  return values.map((choice) => cast(type, rendered ? choice : value(choice, context)));
+}
+
+/** `answer` cast to the question's type, and checked against its choices. */
+function accept(question: Question, answer: unknown, context: Context): unknown {
+  const type = typeOf(question);
+  const result = cast(type, answer);
+  if (question.choices === undefined) return result;
+  const choices = allowed(question, type, context);
+  if (choices.length > 0 && !choices.some((choice) => isDeepStrictEqual(choice, result))) {
+    const listed = choices.map((choice) => (typeof choice === 'string' ? choice : JSON.stringify(choice)));
+    throw new Error(`${JSON.stringify(result)} is not one of ${listed.join(', ')}`);
+  }
+  return result;
+}
+
 /** `value` of the field `what` of a question, an error naming the field's source where it fails. */
 function field(what: string, source: unknown, context: Context): unknown {
   try {
@@ -109,9 +133,9 @@ export function resolveAnswers(manifest: Manifest, given: Answers, scope: Contex
       const seen = { ...scope, ...context };
       const applies = question.when === undefined || toBool(field('when', question.when, seen));
       let answer: unknown;
-      if (Object.hasOwn(given, question.name)) answer = cast(typeOf(question), given[question.name]);
+      if (Object.hasOwn(given, question.name)) answer = accept(question, given[question.name], seen);
       else if (Object.hasOwn(question, 'default'))
-        answer = cast(typeOf(question), field('default', question.default, seen));
+        answer = accept(question, field('default', question.default, seen), seen);
       else {
         if (applies) {
           const help = question.help === undefined ? '' : `: ${question.help}`;
