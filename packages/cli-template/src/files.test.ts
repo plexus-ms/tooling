@@ -8,6 +8,8 @@ import { listing, template } from './testing/trees.ts';
 const ripe =
   'name: basket\nquestions:\n  ripe:\n    type: bool\n    default: false\n  target:\n    type: str\n    default: x\n';
 
+const dir = { text: '', mode: DIRECTORY | 0o755 };
+
 // tests/test_conditional_file_name.py::test_render_conditional
 test('a file whose name part renders to text lands under it', () => {
   const result = render([template(ripe, { '{% if ripe %}apple.txt{% endif %}.jinja': 'It is ripe.' })], { ripe: true });
@@ -34,15 +36,12 @@ test('a file below a directory renders its name part by part', () => {
 });
 
 // tests/test_conditional_file_name.py::test_dont_render_conditional_subdir
-test('a skipped file below a directory is not written', () => {
+test('a skipped file below a directory is not written, and its directory lands empty', () => {
   const result = render([template(ripe, { 'shelf/{% if ripe %}apple.txt{% endif %}.jinja': 'It is ripe.' })], {
     ripe: false,
   });
   assert.deepEqual(result.errors, []);
-  assert.deepEqual(
-    Object.keys(listing(result.tree)).filter((path) => path.includes('apple')),
-    [],
-  );
+  assert.deepEqual(listing(result.tree), { shelf: dir });
 });
 
 // tests/test_conditional_file_name.py::test_answer_changes, its render half:
@@ -53,8 +52,6 @@ test('the answer decides whether a file is in the tree', () => {
   assert.deepEqual(Object.keys(listing(render([basket], { ripe: true }).tree)), ['apple.txt']);
   assert.deepEqual(Object.keys(listing(render([basket], { ripe: false }).tree)), []);
 });
-
-const dir = { text: '', mode: DIRECTORY | 0o755 };
 
 // tests/test_copy.py::test_empty_dir, both parametrisations. Copier's `four`
 // is a symlink to `three`; a symlink in a template is an error here, so the
@@ -360,4 +357,50 @@ test('only a regular .jinja file beside a file wins, not a directory of that nam
   const result = render([template(ripe, { 'a.txt': 'plain', 'a.txt.jinja': dir })], { ripe: true });
   assert.deepEqual(result.errors, []);
   assert.deepEqual(listing(result.tree), { 'a.txt': 'plain', 'a.txt.jinja': dir });
+});
+
+// No original: the source name of a plain file is looked up beside its
+// template too, not only the name it renders to.
+test('a file whose own name holds Jinja is not written beside its .jinja sibling', () => {
+  const result = render([template(ripe, { '{{ target }}.txt.jinja': 'rendered', '{{ target }}.txt': 'plain' })], {
+    ripe: true,
+    target: 'b',
+  });
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(listing(result.tree), { 'b.txt': 'rendered' });
+});
+
+// No original.
+test('a . segment inside a part is dropped', () => {
+  const result = render([template(where, { '{{ target }}': 'x' })], { target: 'a/./b' });
+  assert.deepEqual(listing(result.tree), { 'a/b': 'x' });
+});
+
+// No original: copier would write the file over the destination itself.
+test('a file that renders to the output root is an error naming its path', () => {
+  for (const target of ['.', 'x/..']) {
+    const result = render([template(where, { '{{ target }}': 'x' })], { target });
+    assert.equal(result.errors.length, 1);
+    assert.equal(result.errors[0]?.path, 'files/{{ target }}');
+    assert.match(result.errors[0]?.message ?? '', /root/);
+  }
+});
+
+// No original: copier creates the outer directories on the way; the tree holds
+// only the innermost, the others being implied by its path.
+test('nested empty directories are kept as the innermost only', () => {
+  const result = render([template(ripe, { 'a/b/c': dir })], { ripe: true });
+  assert.deepEqual(listing(result.tree), { 'a/b/c': dir });
+  assert.deepEqual([...result.files.keys()], ['a/b/c']);
+});
+
+// Decisions § 2.6: bytes are carried as they are. A byte order mark at the
+// start of a .jinja file is kept, in front of the rendered text.
+test('a byte order mark in a .jinja file is kept', () => {
+  const bom = [0xef, 0xbb, 0xbf];
+  const text = [...new TextEncoder().encode('{{ ripe }}')];
+  const result = render([template(ripe, { 'a.txt.jinja': { bytes: [...bom, ...text], mode: REGULAR | 0o644 } })], {
+    ripe: true,
+  });
+  assert.deepEqual(listing(result.tree), { 'a.txt': '\ufeffTrue' });
 });
