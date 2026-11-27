@@ -10,6 +10,9 @@ import {
   REGULAR,
 } from './types.ts';
 
+/** The one bit of a file's mode the engine carries: executable by its owner, as git decides. */
+const EXECUTABLE = 0o100;
+
 /** The old side of a path the old render lacks. */
 const EMPTY: Entry = { bytes: new Uint8Array(), mode: REGULAR | 0o644 };
 
@@ -63,10 +66,14 @@ function binary(bytes: Uint8Array): boolean {
   return bytes.subarray(0, 8000).includes(0);
 }
 
+function executable(entry: Entry): boolean {
+  return (entry.mode & EXECUTABLE) !== 0;
+}
+
 /** Whether two entries, either absent, are alike. */
 function same(a: Entry | undefined, b: Entry | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
-  return equal(a.bytes, b.bytes);
+  return equal(a.bytes, b.bytes) && executable(a) === executable(b);
 }
 
 function equal(a: Uint8Array, b: Uint8Array): boolean {
