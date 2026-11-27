@@ -27,3 +27,27 @@ test('render renders a file ending in .jinja with the answers, without the suffi
     'shelf/photo.bin': { bytes: [0xff, 0x00, 0xfe], mode: REGULAR | 0o644 },
   });
 });
+
+test('render reports every file whose Jinja fails, by template and path, and then returns no files', () => {
+  const result = render(
+    [
+      template(basket, {
+        'a.txt.jinja': '{{ fruit }}',
+        'b.txt.jinja': '{{ colour }}',
+        'c.txt.jinja': '{% if fruit %}',
+      }),
+    ],
+    { fruit: 'pear' },
+  );
+  assert.deepEqual(
+    result.errors.map(({ template, path }) => ({ template, path })),
+    [
+      { template: 'basket', path: 'files/b.txt.jinja' },
+      { template: 'basket', path: 'files/c.txt.jinja' },
+    ],
+  );
+  assert.match(result.errors[0]?.message ?? '', /undefined/);
+  assert.deepEqual(listing(result.tree), {});
+  assert.deepEqual([...result.files], []);
+  assert.deepEqual(result.birth, []);
+});
