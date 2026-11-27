@@ -21,6 +21,13 @@
       "automerge": false
     },
     {
+      "description": "Outside the weekly group, waiting for a human: the template engine library behind plx-template's adapter (packages/cli-template/src/jinja.ts), pinned exact, decides the bytes every template renders to.",
+      "matchPackageNames": ["minijinja-js"],
+      "groupName": null,
+      "schedule": ["at any time"],
+      "automerge": false
+    },
+    {
       "description": "The actions' patch, minor and digest updates still wait for a human, but arrive together once a week in a pull request of their own, the same morning as the weekly group; a major still comes on its own.",
       "matchManagers": ["github-actions"],
       "matchUpdateTypes": ["patch", "minor", "digest"],

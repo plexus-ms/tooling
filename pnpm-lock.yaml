@@ -241,6 +241,19 @@ importers:
         specifier: 'catalog:'
         version: 6.0.3
 
+  packages/cli-template:
+    dependencies:
+      minijinja-js:
+        specifier: 3.1.0
+        version: 3.1.0
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+
   packages/dev:
     dependencies:
       '@inquirer/prompts':
@@ -708,6 +721,9 @@ packages:
     resolution: {integrity: sha512-IKXpvIzjnC9XTAUbVBcMfGS0EPaIXtW6v+zr+RRp+hqULEpo0owZax6wyRwPOJbWbzjYspQwusTsfVr0ifh4uQ==}
     engines: {node: '>=0.10.0'}
 
+  minijinja-js@3.1.0:
+    resolution: {integrity: sha512-7/ihbrBo/XSyijji4FPlluIh+I899gVCTYPOTj3OGAokqtgTR98NMNTST0S3yqA+Uuv7BdOT1KTf0Xy0lSwokg==}
+
   mute-stream@4.0.0:
     resolution: {integrity: sha512-gSrprq0fJ3EiOErzjdIZrjysVVmJ4uu1QWfCDss5LypA5OXvrMje5Ym5z6V6RLyJ2eF87lasX7t6a0AnFvZblg==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
@@ -1057,6 +1073,8 @@ snapshots:
   iconv-lite@0.7.3:
     dependencies:
       safer-buffer: 2.1.2
+
+  minijinja-js@3.1.0: {}
 
   mute-stream@4.0.0: {}
 
