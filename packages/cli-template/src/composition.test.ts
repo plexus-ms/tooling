@@ -411,3 +411,19 @@ test('a read that nothing supplies adds no error when a template of the render f
     { template: 'orchard', other: 'orchard', path: 'template.yml', question: undefined },
   ]);
 });
+
+test('a question two templates declare is owned, for reads, by the template whose name sorts first', () => {
+  const walnut = template('name: walnut\nquestions:\n  trees:\n    type: str\n');
+  const acorn = template('name: acorn\nquestions:\n  trees:\n    type: int\n');
+  const box = template('name: box\nreads:\n  trees:\n', { 'box.txt.jinja': '{{ trees + 1 }}' });
+  for (const templates of [
+    [walnut, acorn, box],
+    [box, acorn, walnut],
+  ]) {
+    const result = render(templates, { trees: 'x' });
+    assert.deepEqual(where(result.errors), [
+      { template: 'acorn', other: 'walnut', path: 'template.yml', question: 'trees' },
+      { template: 'acorn', other: undefined, path: undefined, question: 'trees' },
+    ]);
+  }
+});
