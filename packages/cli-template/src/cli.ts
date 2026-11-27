@@ -90,7 +90,7 @@
 // git-merge-file.ts, that touches the filesystem or runs a command
 // (boundary.test.ts).
 import { readFile, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { text as readAll } from 'node:stream/consumers';
 import { parseArgs } from 'node:util';
 import { applyChanges, readCurrent, readTree, requireDirectory, requireEmpty } from './directory.ts';
@@ -105,6 +105,7 @@ import {
   type Policy,
   type RenderError,
   type RenderResult,
+  SYMLINK,
   type Tree,
 } from './types.ts';
 
@@ -277,16 +278,36 @@ function refuse(errors: readonly RenderError[]): number {
   return EXIT.input;
 }
 
+/** A render directory as a tree with its policies; a symlink in it is an input error, for it is no render. */
+async function readRender(
+  dir: string,
+  { problems, attempt }: ReturnType<typeof collector>,
+): Promise<{ tree: Tree; policies: Policies } | undefined> {
+  const tree = await attempt(() => readTree(dir));
+  if (tree === undefined) return undefined;
+  const links = [...tree].filter(([, e]) => (e.mode & MODE_TYPE) === SYMLINK).map(([path]) => join(dir, path));
+  for (const path of links) problems.push({ message: 'is a symlink, and a render holds none', path });
+  if (links.length > 0) return undefined;
+  const policies = await attempt(() => readPolicies(dir));
+  return policies && { tree, policies };
+}
+
 async function mergeCommand(oldDir: string, newDir: string, target: string): Promise<number> {
-  const { problems, attempt, holds } = collector();
-  const old = await attempt(() => readTree(oldDir));
-  const oldPolicies = old && (await attempt(() => readPolicies(oldDir)));
-  const next = await attempt(() => readTree(newDir));
-  const newPolicies = next && (await attempt(() => readPolicies(newDir)));
+  const found = collector();
+  const { problems, attempt, holds } = found;
+  const oldRender = await readRender(oldDir, found);
+  const newRender = await readRender(newDir, found);
   const present = await holds(() => requireDirectory(target));
   const current =
-    present && old && next && (await attempt(() => readCurrent(target, new Set([...old.keys(), ...next.keys()]))));
-  if (!old || !next || !oldPolicies || !newPolicies || !current || problems.length > 0) return refuse(problems);
+    present &&
+    oldRender &&
+    newRender &&
+    (await attempt(() => readCurrent(target, new Set([...oldRender.tree.keys(), ...newRender.tree.keys()]))));
+  if (!oldRender || !newRender || !current || problems.length > 0) return refuse(problems);
+  const old = oldRender.tree;
+  const next = newRender.tree;
+  const oldPolicies = oldRender.policies;
+  const newPolicies = newRender.policies;
   const { tree, report } = await merge(
     { old, new: next, current, files: { old: oldPolicies, new: newPolicies } },
     gitMergeFile,
