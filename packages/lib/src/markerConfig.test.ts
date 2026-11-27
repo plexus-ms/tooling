@@ -224,3 +224,10 @@ test('setMarkerKeys writes a string that would end a YAML document at the top le
     assert.equal(parseMarkerConfig(written).answers.a, value);
   }
 });
+
+test('setMarkerKeys writes a new key on one line, a string with a line break double-quoted', () => {
+  assert.equal(
+    setMarkerKeys('---\na: 1\n---\n', { b: 'line1\nline2', c: ['x\ny'] }),
+    '---\na: 1\nb: "line1\\nline2"\nc: ["x\\ny"]\n---\n',
+  );
+});
