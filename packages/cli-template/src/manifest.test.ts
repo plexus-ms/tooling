@@ -68,6 +68,9 @@ birth:
   const tree = template(manifest, { 'notes.md.jinja': '{{ fruit }}' });
   const result = render([new Map([...tree, ['NOTES.md', { bytes: new Uint8Array(), mode: 0o100644 }]])], {
     fruit: 'pear',
+    count: 1,
+    ripe: true,
+    shape: 'round',
   });
   assert.deepEqual(result.errors, []);
   assert.deepEqual([...result.tree.keys()], ['notes.md']);
