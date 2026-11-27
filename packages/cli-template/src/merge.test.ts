@@ -112,3 +112,33 @@ test('merge gives a path the user did not edit the new render’s entry, and rep
     calls: [],
   });
 });
+
+test('merge merges a path that differs on all three sides with the merge of one file, line endings unnormalised, and reports it clean', async () => {
+  const result = await run({
+    old: { 'apple.txt': 'red\nround\n', 'pear.txt': 'green\n' },
+    new: { 'apple.txt': 'red\nround\nsweet\n', 'pear.txt': 'yellow\n' },
+    current: { 'apple.txt': 'crimson\nround\n', 'pear.txt': 'green\r\n' },
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.txt': 'merged\n', 'pear.txt': 'merged\n' },
+    report: ['apple.txt: clean', 'pear.txt: clean'],
+    calls: [
+      { path: 'apple.txt', old: 'red\nround\n', new: 'red\nround\nsweet\n', current: 'crimson\nround\n' },
+      { path: 'pear.txt', old: 'green\n', new: 'yellow\n', current: 'green\r\n' },
+    ],
+  });
+});
+
+test('merge reports as conflicted a path whose merge of one file holds a conflict, and keeps the markers in the file', async () => {
+  const result = await run({
+    old: { 'apple.txt': 'red\n' },
+    new: { 'apple.txt': 'green\n' },
+    current: { 'apple.txt': 'crimson\n' },
+    conflicted: true,
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.txt': 'merged\n' },
+    report: ['apple.txt: conflicted'],
+    calls: [{ path: 'apple.txt', old: 'red\n', new: 'green\n', current: 'crimson\n' }],
+  });
+});
