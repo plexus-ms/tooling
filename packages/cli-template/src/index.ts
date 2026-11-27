@@ -8,6 +8,7 @@
 // directory and runs no command (boundary.test.ts). `gitMergeFile`, the real
 // merge of one file that the caller hands to `merge`, is the one function
 // that does: it writes temporary files and runs git.
+export { readTree } from './directory.ts';
 export { gitMergeFile } from './git-merge-file.ts';
 export { merge } from './merge.ts';
 export { render } from './render.ts';

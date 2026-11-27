@@ -278,6 +278,9 @@ importers:
 
   packages/lib:
     dependencies:
+      '@plexus-ms/cli-template':
+        specifier: workspace:*
+        version: link:../cli-template
       semver:
         specifier: ^7.8.6
         version: 7.8.6
