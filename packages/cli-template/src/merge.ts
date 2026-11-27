@@ -7,8 +7,10 @@ import {
   type MergeFile,
   type MergeInput,
   type MergeResult,
+  MODE_TYPE,
   type Outcome,
   REGULAR,
+  SYMLINK,
 } from './types.ts';
 
 /** The one bit of a file's mode the engine carries: executable by its owner, as git decides. */
@@ -41,11 +43,12 @@ async function mergePath(
 ): Promise<Outcome | undefined> {
   const c = tree.get(path);
   if (c === undefined && n !== undefined && (bornOnce || o === undefined)) {
+    if (ancestors(path).some((a) => isSymlink(tree.get(a)))) return 'kept';
     tree.set(path, n);
     return 'added';
   }
   if (same(o, n)) return undefined;
-  if (bornOnce || c === undefined) return 'kept';
+  if (bornOnce || c === undefined || isSymlink(c)) return 'kept';
   if (n === undefined) {
     if (!same(c, o)) return 'conflicted';
     tree.delete(path);
@@ -71,6 +74,16 @@ async function mergeContent(
   if (equal(next, old)) return { bytes: current, conflicted: false };
   if ([old, next, current].some(binary)) return undefined;
   return mergeFile({ path, old, new: next, current });
+}
+
+/** The paths of the directories `path` lies in, outermost first. */
+function ancestors(path: string): string[] {
+  const parts = path.split('/');
+  return parts.slice(1).map((_, i) => parts.slice(0, i + 1).join('/'));
+}
+
+function isSymlink(entry: Entry | undefined): boolean {
+  return entry !== undefined && (entry.mode & MODE_TYPE) === SYMLINK;
 }
 
 /** Whether git takes `bytes` as binary: a NUL byte among the first 8000, as its `buffer_is_binary` decides. */
