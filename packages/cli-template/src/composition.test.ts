@@ -125,3 +125,15 @@ test('a declared read that no template of the render owns and no answer gives is
   assert.match(result.errors[0]?.message ?? '', /fruit/);
   assert.deepEqual(listing(result.tree), {});
 });
+
+test('a given answer that no template of the render owns satisfies a declared read, as given, in files, paths and questions', () => {
+  const crate =
+    'name: crate\nquestions:\n  label:\n    type: str\n    default: "{{ fruit }} x{{ count }}"\nreads:\n  fruit:\n  count:\n';
+  const result = render(
+    [template(crate, { '{{ fruit }}/label.txt.jinja': '{{ label }}, {{ count + 1 }} next time' })],
+    { fruit: 'pear', count: 3 },
+  );
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.answers, { label: 'pear x3' });
+  assert.deepEqual(listing(result.tree), { 'pear/label.txt': 'pear x3, 4 next time' });
+});
