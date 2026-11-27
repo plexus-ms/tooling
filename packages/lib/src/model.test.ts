@@ -68,6 +68,22 @@ test('what a unit is follows from where it sits, never from what a marker says',
   );
 });
 
+test('the operations repo is the one whose answers file or whose marker names the operations template', () => {
+  const crossed = { config: { templates: ['repo-operations'], deviations: [], answers: {} } };
+  const other = { config: { templates: ['repo-turbo', 'updates'], deviations: [], answers: {} } };
+  const tree = dir('/ws', {}, [
+    dir('/ws/ops', { ...git, ...marker, ...crossed }),
+    dir('/ws/web', { ...git, ...marker, ...other }),
+  ]);
+  assert.deepEqual(
+    unitsOf(tree).map((u) => [u.dir.path, u.kind]),
+    [
+      ['/ws/ops', 'operations'],
+      ['/ws/web', 'repo'],
+    ],
+  );
+});
+
 test('an app holds something besides dotfiles, and no checkout of its own', () => {
   const entries = (...names: string[]) => names.map((name) => ({ name }));
   assert.equal(holdsApp(entries('docker', 'package.json')), true);
