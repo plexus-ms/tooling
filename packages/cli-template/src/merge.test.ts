@@ -224,3 +224,32 @@ test('merge deletes a path the new render drops and the user never edited, and r
     calls: [],
   });
 });
+
+// Ported from tests/test_updatediff.py, test_file_removed, where our rule
+// differs: copier deletes the file the template drops even when the user
+// edited it; merge keeps it.
+test('merge keeps a path the new render drops and the user edited, and reports it as conflicted', async () => {
+  const result = await run({
+    old: { '1.txt': 'content 1', 'dir 2/2.txt': 'content 2' },
+    new: {},
+    current: { '1.txt': 'content 1, edited', 'dir 2/2.txt': 'content 2\r\n' },
+  });
+  assert.deepEqual(result, {
+    tree: { '1.txt': 'content 1, edited', 'dir 2/2.txt': 'content 2\r\n' },
+    report: ['1.txt: conflicted', 'dir 2/2.txt: conflicted'],
+    calls: [],
+  });
+});
+
+test('merge keeps the user’s edits to a file the template renames, as a deletion of the old name, conflicted, and an addition', async () => {
+  const result = await run({
+    old: { 'apple.txt': 'red\nround\n' },
+    new: { 'fruit/apple.txt': 'red\nround\n' },
+    current: { 'apple.txt': 'red\nround\ncrisp\n' },
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.txt': 'red\nround\ncrisp\n', 'fruit/apple.txt': 'red\nround\n' },
+    report: ['apple.txt: conflicted', 'fruit/apple.txt: added'],
+    calls: [],
+  });
+});
