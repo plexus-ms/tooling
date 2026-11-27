@@ -267,3 +267,17 @@ test('a render directory that holds a pipe is an error in the inputs, code 3, na
     assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'one\n');
   });
 });
+
+test('a symlink in a render directory is an error in the inputs, code 3, with JSON naming the path, and nothing is written', () => {
+  withDirectories({ 'a.txt': 'one\n' }, { 'a.txt': 'two\n' }, { 'a.txt': 'one\n' }, (s) => {
+    symlinkSync('a.txt', s.path('old/link'));
+    symlinkSync('a.txt', s.path('new/link'));
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 3, run.stderr);
+    assert.deepEqual(
+      JSON.parse(run.stdout).errors.map((e: { path: string }) => e.path),
+      [s.path('old/link'), s.path('new/link')],
+    );
+    assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'one\n');
+  });
+});
