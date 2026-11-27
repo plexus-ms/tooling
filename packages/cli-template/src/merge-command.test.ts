@@ -281,3 +281,18 @@ test('a symlink in a render directory is an error in the inputs, code 3, with JS
     assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'one\n');
   });
 });
+
+test('a failure while applying names the path that failed and says that the paths before it were applied', () => {
+  const old = { 'a.txt': 'one\n', 'b.txt': 'one\n', 'c.txt': 'one\n' };
+  const next = { 'a.txt': 'two\n', 'b.txt': 'two\n', 'c.txt': 'two\n' };
+  withDirectories(old, next, old, (s) => {
+    chmodSync(s.path('target/b.txt'), 0o444);
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 1);
+    assert.equal(run.stdout, '');
+    assert.match(run.stderr, /b\.txt/);
+    assert.match(run.stderr, /already applied/);
+    assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'two\n');
+    assert.equal(readFileSync(s.path('target/c.txt'), 'utf8'), 'one\n');
+  });
+});
