@@ -147,6 +147,10 @@ export function resolveAnswers(manifest: Manifest, given: Answers, scope: Contex
         }
         continue;
       }
+      if (applies && question.validator !== undefined) {
+        const message = renderString(question.validator, { ...seen, [question.name]: answer }).trim();
+        if (message !== '') throw new Error(message);
+      }
       context[question.name] = answer;
       if (applies) answers[question.name] = answer;
     } catch (error) {
