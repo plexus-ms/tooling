@@ -338,13 +338,14 @@ async function renderCommand(
   await attempt(() => requireEmpty(out));
   const result = problems.length === 0 && answers !== undefined ? render(trees, answers) : undefined;
   const errors = result === undefined ? problems : result.errors;
-  print(renderJson(result, errors));
   if (result === undefined || errors.length > 0) {
+    print(renderJson(result, errors));
     complain(errors);
     return EXIT.input;
   }
   await applyChanges(out, result.tree);
   await writeFile(policiesOf(out), `${JSON.stringify({ files: Object.fromEntries(result.files) }, null, 2)}\n`);
+  print(renderJson(result, errors));
   return EXIT.ok;
 }
 
