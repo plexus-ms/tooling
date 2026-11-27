@@ -171,5 +171,13 @@ export function renderFiles(template: Template, context: Context, errors: Render
   for (const [path, source] of candidates) {
     if (!taken.some((other) => other.startsWith(`${path}/`))) put(path, { entry: EMPTY_DIRECTORY, source });
   }
+  for (const [path, { source }] of rendered) {
+    for (let up = parentOf(path); up !== ''; up = parentOf(up)) {
+      const above = rendered.get(up);
+      if (above !== undefined && (above.entry.mode & MODE_TYPE) === REGULAR) {
+        fail(source, `${above.source} renders to ${up}, a file, and ${source} renders to ${path} below it`);
+      }
+    }
+  }
   return rendered;
 }
