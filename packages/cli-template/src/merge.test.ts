@@ -142,3 +142,12 @@ test('merge reports as conflicted a path whose merge of one file holds a conflic
     calls: [{ path: 'apple.txt', old: 'red\n', new: 'green\n', current: 'crimson\n' }],
   });
 });
+
+test('merge reports as clean a path the user already changed as the template did, without merging it', async () => {
+  const result = await run({
+    old: { 'apple.txt': 'red\n' },
+    new: { 'apple.txt': 'green\n' },
+    current: { 'apple.txt': 'green\n' },
+  });
+  assert.deepEqual(result, { tree: { 'apple.txt': 'green\n' }, report: ['apple.txt: clean'], calls: [] });
+});
