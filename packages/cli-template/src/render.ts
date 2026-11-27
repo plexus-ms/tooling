@@ -94,7 +94,7 @@ function ownersOf(read: readonly Template[], errors: RenderError[]): Map<string,
 
 /**
  * The value of each answer `template` reads: what its owner resolved, else the
- * given answer; a read without a default that nothing supplies is an error.
+ * given answer, else the read's default; a read that nothing supplies is an error.
  */
 function readsOf(
   template: Template,
@@ -109,7 +109,7 @@ function readsOf(
     const resolved = owner === undefined ? undefined : resolutions.get(owner)?.context;
     if (resolved !== undefined && Object.hasOwn(resolved, read.name)) reads[read.name] = resolved[read.name];
     else if (Object.hasOwn(given, read.name)) reads[read.name] = given[read.name];
-    else if (Object.hasOwn(read, 'default')) continue;
+    else if (Object.hasOwn(read, 'default')) reads[read.name] = read.default;
     else {
       const message = `${template.manifest.name} reads ${read.name}, which no template of the render owns and no answer gives`;
       errors.push({ template: template.manifest.name, path: MANIFEST, question: read.name, message });
