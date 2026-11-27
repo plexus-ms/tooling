@@ -185,3 +185,34 @@ test('the order of the templates does not change the tree: an owner is resolved 
     assert.deepEqual(new Map(result.files), new Map(results[0]?.files));
   }
 });
+
+test('templates that read from each other in a cycle are one error naming them, and a template that reads from them adds none', () => {
+  const reading = (name: string, owns: string, reads: string) =>
+    template(`name: ${name}\nquestions:\n  ${owns}:\n    type: str\nreads:\n  ${reads}:\n`, { [`${name}.txt`]: name });
+  const result = render(
+    [
+      reading('basket', 'fruit', 'book'),
+      template(crate, { 'crate.txt.jinja': '{{ trees }}' }),
+      reading('orchard', 'trees', 'fruit'),
+      reading('shelf', 'book', 'fruit'),
+    ],
+    { fruit: 'pear', book: 'atlas', trees: 'oak', rows: 1 },
+  );
+  assert.deepEqual(where(result.errors), [
+    { template: 'basket', other: 'shelf', path: 'template.yml', question: undefined },
+  ]);
+  assert.equal(
+    result.errors[0]?.message,
+    'the reads of basket and shelf form a cycle: basket reads book from shelf, shelf reads fruit from basket',
+  );
+  const three = render(
+    [reading('basket', 'fruit', 'book'), reading('shelf', 'book', 'trees'), reading('orchard', 'trees', 'fruit')],
+    {},
+  );
+  assert.deepEqual(
+    three.errors.map(({ message }) => message),
+    [
+      'the reads of basket, shelf and orchard form a cycle: basket reads book from shelf, shelf reads trees from orchard, orchard reads fruit from basket',
+    ],
+  );
+});
