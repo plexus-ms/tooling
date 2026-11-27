@@ -116,13 +116,11 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { text as readAll } from 'node:stream/consumers';
 import { parseArgs } from 'node:util';
-import { applyChanges, readCurrent, readTree, requireDirectory, requireEmpty } from './directory.ts';
+import { applyChanges, planMerge, readTree, requireDirectory, requireEmpty } from './directory.ts';
 import { InputError, messageOf } from './errors.ts';
-import { gitMergeFile, merge, render } from './index.ts';
+import { render } from './render.ts';
 import {
   type Answers,
-  DIRECTORY,
-  type Entry,
   MODE_TYPE,
   type Policies,
   type Policy,
@@ -350,28 +348,10 @@ async function mergeCommand(oldDir: string, newDir: string, target: string): Pro
   const oldRender = await readRender(oldDir, found);
   const newRender = await readRender(newDir, found);
   const present = await holds(() => requireDirectory(target));
-  const current =
-    present &&
-    oldRender &&
-    newRender &&
-    (await attempt(() => readCurrent(target, new Set([...oldRender.tree.keys(), ...newRender.tree.keys()]))));
-  if (!oldRender || !newRender || !current || problems.length > 0) return refuse(problems);
-  const old = oldRender.tree;
-  const next = newRender.tree;
-  const oldPolicies = oldRender.policies;
-  const newPolicies = newRender.policies;
-  const { tree, report } = await merge(
-    { old, new: next, current, files: { old: oldPolicies, new: newPolicies } },
-    gitMergeFile,
-  );
-  const changes = new Map<string, Entry | undefined>();
-  for (const { path, outcome } of report) {
-    if (outcome === 'deleted') changes.set(path, undefined);
-    else if (outcome !== 'kept' && tree.has(path)) changes.set(path, tree.get(path));
-  }
-  const directories = new Set([...next].filter(([, e]) => (e.mode & MODE_TYPE) === DIRECTORY).map(([path]) => path));
-  await applyChanges(target, changes, directories);
-  print({ report });
+  const plan = present && oldRender && newRender && (await attempt(() => planMerge(target, oldRender, newRender)));
+  if (!plan || problems.length > 0) return refuse(problems);
+  await plan.apply();
+  print({ report: plan.report });
   return EXIT.ok;
 }
 

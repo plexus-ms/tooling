@@ -31,7 +31,7 @@ test('readManifest names every problem of a manifest that cannot be read', async
     put(s.dir, { 'template.yml': 'name: Basket\nquestions:\n  1x:\n', 'files/a.txt': 'a' });
     await assert.rejects(readManifest(s.dir), (error: Error) => {
       assert.match(error.message, /template\.yml/);
-      assert.match(error.message, /Basket/);
+      assert.match(error.message, /the name is lowercase/);
       assert.match(error.message, /1x/);
       return true;
     });

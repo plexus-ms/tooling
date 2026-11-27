@@ -46,10 +46,33 @@
 // from it and no further than the directory itself: copier removes directories
 // that end empty, and `merge` never deletes one. A directory that was empty
 // before, or the render still holds as an empty directory (`keep`), stays.
+//
+// What a caller of the library uses, beside `readTree`: `readManifest` reads
+// the manifest of a template directory, throwing one error that lists every
+// problem of it, and `planMerge` reads what `merge` looks at in a directory,
+// merges two renders given as trees with their policies, and returns the
+// report with `apply`, which makes the directory hold the result. Nothing is
+// written before `apply`, so a caller can show the report first; the merge of
+// the command `plx-template merge` is the same plan applied at once.
 import { chmod, lstat, mkdir, readdir, readFile, readlink, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { InputError, messageOf } from './errors.ts';
-import { DIRECTORY, type Entry, isExecutable, MODE_TYPE, REGULAR, SYMLINK, type Tree } from './types.ts';
+import { gitMergeFile } from './git-merge-file.ts';
+import { readTemplate } from './manifest.ts';
+import { merge } from './merge.ts';
+import {
+  DIRECTORY,
+  type Entry,
+  isExecutable,
+  type Manifest,
+  type MergeEntry,
+  MODE_TYPE,
+  type Policies,
+  REGULAR,
+  type RenderError,
+  SYMLINK,
+  type Tree,
+} from './types.ts';
 
 /** An entry for a directory that holds nothing. */
 const EMPTY_DIRECTORY: Entry = { bytes: new Uint8Array(), mode: DIRECTORY | 0o755 };
@@ -223,4 +246,46 @@ export async function requireEmpty(path: string): Promise<void> {
   if (st.isSymbolicLink()) throw new InputError(SYMLINK_ARGUMENT, path);
   if (!st.isDirectory()) throw new InputError('exists and is not a directory', path);
   if ((await readdir(path)).length > 0) throw new InputError('is not empty', path);
+}
+
+/** The manifest of the template directory `root`; the error lists every problem that keeps it from being read. */
+export async function readManifest(root: string): Promise<Manifest> {
+  const errors: RenderError[] = [];
+  const template = readTemplate(await readTree(root), 1, errors);
+  if (template === undefined) {
+    const lines = errors.map((e) => `${e.path ?? root}: ${e.message}${e.question ? ` (question ${e.question})` : ''}`);
+    throw new Error(`${root} is no template:\n${lines.join('\n')}`);
+  }
+  return template.manifest;
+}
+
+/** One side of a merge: a render's tree, and the policies of its paths. */
+export interface RenderedSide {
+  readonly tree: Tree;
+  readonly policies: Policies;
+}
+
+/** A merge decided, not yet applied. */
+export interface MergePlan {
+  readonly report: readonly MergeEntry[];
+  /** Makes the directory hold the merge; touches only the paths of the report. */
+  apply(): Promise<void>;
+}
+
+/** The merge of `old` and `next` into the directory `target`, as the header says. */
+export async function planMerge(target: string, old: RenderedSide, next: RenderedSide): Promise<MergePlan> {
+  const current = await readCurrent(target, new Set([...old.tree.keys(), ...next.tree.keys()]));
+  const { tree, report } = await merge(
+    { old: old.tree, new: next.tree, current, files: { old: old.policies, new: next.policies } },
+    gitMergeFile,
+  );
+  const changes = new Map<string, Entry | undefined>();
+  for (const { path, outcome } of report) {
+    if (outcome === 'deleted') changes.set(path, undefined);
+    else if (outcome !== 'kept' && tree.has(path)) changes.set(path, tree.get(path));
+  }
+  const directories = new Set(
+    [...next.tree].filter(([, e]) => (e.mode & MODE_TYPE) === DIRECTORY).map(([path]) => path),
+  );
+  return { report, apply: () => applyChanges(target, changes, directories) };
 }
