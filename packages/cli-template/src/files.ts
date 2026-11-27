@@ -23,13 +23,19 @@ const encoder = new TextEncoder();
 export function renderFiles(template: Template, context: Context, errors: RenderError[]): Map<string, Rendered> {
   const rendered = new Map<string, Rendered>();
   for (const [source, entry] of template.files) {
-    if (!source.endsWith(SUFFIX)) {
-      rendered.set(source, { entry, source });
+    const isTemplate = source.endsWith(SUFFIX);
+    const parts = (isTemplate ? source.slice(0, -SUFFIX.length) : source)
+      .split('/')
+      .map((part) => renderString(part, context));
+    if (parts.some((part) => part === '')) continue;
+    const path = parts.join('/');
+    if (!isTemplate) {
+      rendered.set(path, { entry, source });
       continue;
     }
     try {
       const bytes = encoder.encode(renderString(utf8.decode(entry.bytes), context));
-      rendered.set(source.slice(0, -SUFFIX.length), { entry: { bytes, mode: entry.mode }, source });
+      rendered.set(path, { entry: { bytes, mode: entry.mode }, source });
     } catch (error) {
       errors.push({ template: template.manifest.name, path: `${FILES}${source}`, message: messageOf(error) });
     }
