@@ -37,9 +37,9 @@
 //
 // Order. A template is resolved after the owners of the answers it reads, and
 // otherwise by name, so that the order of the templates does not change the
-// tree; there are no dependencies between templates besides their
-// reads. Templates whose reads form a cycle, and the templates that read from
-// them, are one error naming them all by name, and none of them is resolved.
+// tree; there are no dependencies between templates besides their reads.
+// Templates whose reads form a cycle, and the templates that read from them,
+// are one error naming them all by name, and none of them is resolved.
 //
 // Nor does the order given change the rest of the result, but for the birth
 // commands: `tree` and `files` come in path order, `answers` and `unused` in
@@ -77,8 +77,9 @@
 // a read that nothing supplies then adds no error of its own either, and the
 // reader renders no files.
 //
-// Paths. Each path is written by exactly one template; files.ts checks it
-// across the templates where it checks it within one. The result names each
+// Paths. Each path is written by exactly one template, and an empty directory
+// several templates hold is one, owned by the one whose name sorts first;
+// files.ts checks it across the templates where it checks it within one. The result names each
 // path's owner and policy, and lists the birth commands of each template in
 // the order the templates were given, which `render` does not run.
 //
