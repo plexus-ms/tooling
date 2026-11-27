@@ -545,3 +545,12 @@ test('merge leaves absent a path the user deleted where the template turns a fil
   });
   assert.deepEqual(result, { tree: {}, report: ['date: kept', 'fig: kept'], calls: [] });
 });
+
+test('merge never reports a conflict for an empty directory the template drops or turns into the file the user already has', async () => {
+  const result = await run({
+    old: { apple: directory(), pear: directory() },
+    new: { pear: 'green\n' },
+    current: { apple: 'red\n', pear: 'green\n' },
+  });
+  assert.deepEqual(result, { tree: { apple: 'red\n', pear: 'green\n' }, report: ['pear: clean'], calls: [] });
+});
