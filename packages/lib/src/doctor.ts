@@ -206,9 +206,9 @@ const LOOPBACK_FORM = `127.0.0.1:${LOOPBACK_PORT}:<container-port>`;
  */
 const isLoopbackVar = (host: string): boolean => /^\$\{PLEXUS_LOOPBACK_PORT:\?[^}]*\}$/.test(host);
 
-/** Any spelling of the platform's port: not a host port a service fixes of its own. */
+/** Any spelling of the platform's port without a default: not a host port a service fixes of its own. */
 const namesLoopbackVar = (host: string): boolean =>
-  /^(?:\$\{PLEXUS_LOOPBACK_PORT(?::\?[^}]*)?\}|\$PLEXUS_LOOPBACK_PORT)$/.test(host);
+  /^(?:\$\{PLEXUS_LOOPBACK_PORT(?::?\?[^}]*)?\}|\$PLEXUS_LOOPBACK_PORT)$/.test(host);
 
 function loopbackPort(compose: Compose): string[] {
   const problems: string[] = [];
@@ -220,6 +220,8 @@ function loopbackPort(compose: Compose): string[] {
   for (const [name, service] of Object.entries(compose.services)) {
     if (name === APP_SERVICE) continue;
     for (const port of portsOf(service)) {
+      if (hostIpOf(port) !== '127.0.0.1')
+        problems.push(`service \`${name}\` publishes \`${renderPort(port)}\` beyond 127.0.0.1`);
       const host = hostPortOf(port);
       if (host && !namesLoopbackVar(host))
         problems.push(`service \`${name}\` fixes host port \`${host}\` (\`${renderPort(port)}\`)`);
@@ -646,6 +648,13 @@ function partsOf(spec: string): string[] {
     else parts[parts.length - 1] += ch;
   }
   return parts;
+}
+
+/** The address a port is published on: undefined for every interface. */
+function hostIpOf(port: unknown): string | undefined {
+  if (isMapping(port)) return port.host_ip == null ? undefined : String(port.host_ip);
+  const parts = partsOf(String(port));
+  return parts.length >= 3 ? parts[0] : undefined;
 }
 
 /** The host side of a published port: '' or undefined when compose picks one. */

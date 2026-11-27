@@ -309,7 +309,7 @@ test('the compose checks read either spelling compose accepts', () => {
   assert.deepEqual(findings(appOf(longForm)), []);
 });
 
-test('PLX-App/LoopbackPort: a data service may publish no fixed host port, the app service only the loopback binding', () => {
+test('PLX-App/LoopbackPort: a data service publishes only on 127.0.0.1 and fixes no host port, the app service only the loopback binding', () => {
   const text = `services:
   web:
     image: \${PLEXUS_DEPLOYMENT_IMAGE}
@@ -320,13 +320,25 @@ test('PLX-App/LoopbackPort: a data service may publish no fixed host port, the a
   cache:
     image: valkey
     labels: { plexus.tenant: t }
-    ports: ["127.0.0.1:6379:6379", "6380", "127.0.0.1::6381"]
+    ports:
+      - "127.0.0.1:6379:6379"
+      - "6380"
+      - "127.0.0.1::6381"
+      - "0.0.0.0::6382"
+      - "\${PLEXUS_LOOPBACK_PORT}:6383"
+      - "127.0.0.1:\${PLEXUS_LOOPBACK_PORT?set}:6384"
+      - { target: 6385 }
+      - { target: 6386, host_ip: 127.0.0.1 }
 `;
   assert.deepEqual(
     named(appOf(text), 'PLX-App/LoopbackPort').map((f) => f.problem),
     [
       'the web service publishes `127.0.0.1:${PLEXUS_LOOPBACK_PORT:-3000}:3000`, not 127.0.0.1:${PLEXUS_LOOPBACK_PORT:?<message>}:<container-port>',
       'service `cache` fixes host port `6379` (`127.0.0.1:6379:6379`)',
+      'service `cache` publishes `6380` beyond 127.0.0.1',
+      'service `cache` publishes `0.0.0.0::6382` beyond 127.0.0.1',
+      'service `cache` publishes `${PLEXUS_LOOPBACK_PORT}:6383` beyond 127.0.0.1',
+      'service `cache` publishes `{"target":6385}` beyond 127.0.0.1',
     ],
   );
 });
