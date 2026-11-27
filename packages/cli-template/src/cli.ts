@@ -32,14 +32,21 @@
 // How the policies travel from `render` to `merge`. `merge` needs the policy
 // of every path of both renders (`merge` or `born-once`, types.ts). `render`
 // writes them to `<output-dir>.plx-template.json` beside the rendered
-// directory, `{ "files": { "<path>": { "template": ..., "policy": ... } } }`,
-// the `files` of its own JSON; `merge` reads the file beside each of its two
-// directories. It is beside the render and not in it so that the directory
+// directory, `{ "version": 1, "files": { "<path>": { "template": ...,
+// "policy": ... } } }`, the `files` of its own JSON; `merge` reads the file
+// beside each of its two directories. It is beside the render and not in it so that the directory
 // holds exactly the files the templates rendered: a file inside would be taken
 // for one of them by `merge` and by a person comparing two renders with
 // `diff -r`. A render moved or copied needs its policies file moved with it;
-// `merge` fails, naming the file it expected, where one is missing or is not
-// what `render` writes. Output directory `old/` or `old` give the same file.
+// `merge` fails with an input error, naming the file, where one is missing, is
+// of a version it does not know (a later plx-template wrote it), or does not
+// name exactly the paths its render directory holds, each with a policy of
+// `merge` or `born-once`: a policy taken for granted could make `merge` delete
+// a born-once file, which the engine never does. Output directory `old/` and
+// `old` give the same file. Because the file lands beside the output
+// directory, rendering into `.` or straight into a temporary directory leaves
+// it in the parent, so render into a directory of its own; `render` overwrites
+// a policies file that is already there.
 //
 // What `merge` reads of the target directory. Not all of it: for each path of
 // either render, the entry at the path (a file with its bytes and mode, a
@@ -48,7 +55,16 @@
 // stops. That answers every rule of merge.ts, which looks at the path and at
 // "entries below it" and at the directories the path lies in, and it leaves
 // `.git`, `node_modules` and everything the templates do not name unread.
-// Nothing is read through a symlink.
+// Nothing is read through a symlink. That the partial read answers as a whole
+// read would holds where the filesystem tells names apart exactly; on a
+// case-insensitive or normalising one, the default on macOS, `lstat('A')`
+// finds `a`, and the partial read reports what the writes will meet, which is
+// the safer answer, and differs from a whole read.
+//
+// What `merge` refuses before it reads the target: an old and a new render that
+// are one directory, a target that is one of the two renders, a symlink in a
+// render, a directory argument that is a symlink (none is followed), and a
+// policies file that is wrong. Each is an input error, and nothing is written.
 //
 // How `merge` writes. It applies the report of the core to the target:
 // `added`, `clean` and `conflicted` paths are written where the merged entry
@@ -63,7 +79,13 @@
 // 0o755. A deletion that leaves a directory empty removes it, upward to the
 // target and no further, as copier does, unless the new render holds it as an
 // empty directory; `merge` itself never deletes a directory, and an empty
-// directory that was there already stays.
+// directory that was there already stays. The merge of one file's text is
+// gitMergeFile's, which does not merge a file that already holds a conflict of
+// its own labels again: running `merge` a second time leaves such a file as it
+// is, reported conflicted. A failure while applying, such as a file that cannot
+// be written, stops the run with code 1 and a message on standard error that
+// names the path and says that the paths before it in path order were already
+// applied; the report is not printed then, since it would claim the rest.
 //
 // Standard output carries only JSON, messages for people go to standard error.
 //   render prints { answers, unused, files, birth, errors }: the core's result
@@ -80,7 +102,8 @@
 //
 // The exit codes (`EXIT`): 0 done, a merge that left conflicts too; 1 failed:
 // something other than the inputs went wrong, a file that cannot be written or
-// git that cannot be run; 2 a usage error, with nothing on standard output;
+// git that cannot be run, and then nothing is printed on standard output; 2 a
+// usage error, with nothing on standard output either;
 // 3 an error in the inputs: a missing answer, paths two templates write, a bad
 // manifest, a directory or policies file that is missing, an output directory
 // that is not empty.
@@ -128,8 +151,10 @@ Answers are JSON, from a file or from standard input. Standard output carries
 only JSON; messages for people go to standard error.
 The exit codes are:
   0  done; a merge that left conflicts is done, its report says which
-  1  failed: the command could not read or write, or git is missing
-  2  a usage error: an unknown command or option, a missing argument
+  1  failed: the command could not read or write, or git is missing; nothing on
+     standard output
+  2  a usage error: an unknown command or option, a missing argument; nothing on
+     standard output
   3  an error in the inputs, each listed in the JSON and on standard error
 `;
 
@@ -139,6 +164,8 @@ Renders the templates, which are rendered together as one, into <output-dir>.
 <output-dir> must be empty or missing, and is created. Beside it, in
 <output-dir>.plx-template.json, the command writes the owner and policy of each
 path, which \`merge\` reads; nothing is written when the render has errors.
+Render into a directory of its own: the policies file lands beside it, in the
+parent of \`.\` or of a temporary directory, and an existing one is overwritten.
 
   --answers <file|->  A JSON object of answers, from a file or, with -, from
                       standard input. Without it there are none: the command
@@ -151,8 +178,9 @@ Standard output is one JSON object:
   birth     the birth commands the templates declare, never run: { template, command }
   errors    every error: { message, template?, path?, question?, other? }
 
-Exit codes: 0 rendered; 1 failed; 2 usage error; 3 errors in the inputs, which
-are listed under errors and on standard error, with nothing written.
+Exit codes: 0 rendered; 1 failed; 2 usage error (1 and 2 print nothing on
+standard output); 3 errors in the inputs, which are listed under errors and on
+standard error, with nothing written.
 `;
 
 const MERGE_HELP = `Usage: plx-template merge <old-dir> <new-dir> <target-dir>
@@ -167,8 +195,8 @@ Standard output is one JSON object:
             outcome one of clean, added, deleted, conflicted or kept
   errors    instead of report, where the inputs are wrong: { message, path? }
 
-Exit codes: 0 merged, also when conflicts are left; 1 failed; 2 usage error;
-3 errors in the inputs, such as a missing policies file, listed under errors
+Exit codes: 0 merged, also when conflicts are left; 1 failed; 2 usage error (1 and
+2 print nothing on standard output); 3 errors in the inputs, such as a missing policies file, listed under errors
 and on standard error, with nothing written.
 `;
 

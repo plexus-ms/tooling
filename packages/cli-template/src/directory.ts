@@ -19,19 +19,28 @@
 //     order, so that "current holds entries below the path" is answered, or the
 //     empty directory itself as a DIRECTORY entry
 // so that a repository's `.git` and `node_modules` are never read, and neither
-// is any file no render names.
+// is any file no render names. This answers as a whole read would where the
+// filesystem tells names apart exactly. On a case-insensitive or normalising
+// one, the default on macOS, `lstat('A')` finds `a`: the partial read then
+// reports what the writes will meet, which is the safer answer, and differs
+// from a whole read.
 //
 // Writing. `applyChanges` makes a directory hold what the core decided, for the
 // paths it is given, an entry to write or nothing to delete, and touches
 // nothing else. It never writes or deletes through a symlink: a path whose
 // directory above it is a symlink or a file, or that is itself a symlink, is
-// skipped. A file is written only where its bytes differ from what is there. A
+// skipped. No test reaches these guards, since the core already answers `kept`
+// where a directory above a path is a symlink or the path is one (rules 1 and 4
+// of merge.ts) and never hands this such a path; they are a second line of
+// defence for a caller that hands it something else. A file is written only where its bytes differ from what is there. A
 // file that exists keeps its permissions but for its executable bits, which
 // follow the entry's, and never widen beyond that: where the entry is
 // executable, a mode gains the owner's execute bit and the group's and others'
 // only where they may read (0o600 becomes 0o700, 0o644 becomes 0o755); where it
 // is not, all three are cleared. A new file or directory takes the entry's
-// mode under the process's umask.
+// mode under the process's umask. A failure stops the run with the path that
+// failed and the note that the paths before it, in the order given, were
+// already applied.
 //
 // A deletion removes a file, and then the directories it leaves empty, upward
 // from it and no further than the directory itself: copier removes directories
