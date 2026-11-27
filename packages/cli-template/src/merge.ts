@@ -1,6 +1,7 @@
 // merge: three rendered trees into one, the current directory's with the
 // template's changes applied (types.ts states the shapes).
 import {
+  DIRECTORY,
   type Entry,
   type MergedFile,
   type MergeEntry,
@@ -11,10 +12,14 @@ import {
   type Outcome,
   REGULAR,
   SYMLINK,
+  type Tree,
 } from './types.ts';
 
 /** The one bit of a file's mode the engine carries: executable by its owner, as git decides. */
 const EXECUTABLE = 0o100;
+
+/** What the current tree holds at a path that has entries below it and none of its own. */
+const HOLDS: Entry = { bytes: new Uint8Array(), mode: DIRECTORY };
 
 /** The old side of a path the old render lacks. */
 const EMPTY: Entry = { bytes: new Uint8Array(), mode: REGULAR | 0o644 };
@@ -41,7 +46,7 @@ async function mergePath(
   tree: Map<string, Entry>,
   mergeFile: MergeFile,
 ): Promise<Outcome | undefined> {
-  const c = tree.get(path);
+  const c = at(tree, path);
   if (c === undefined && n !== undefined && (bornOnce || o === undefined)) {
     if (ancestors(path).some((a) => isSymlink(tree.get(a)))) return 'kept';
     tree.set(path, n);
@@ -49,6 +54,7 @@ async function mergePath(
   }
   if (same(o, n)) return undefined;
   if (bornOnce || c === undefined || isSymlink(c)) return 'kept';
+  if (isDirectory(o) || isDirectory(n)) return undefined;
   if (n === undefined) {
     if (!same(c, o)) return 'conflicted';
     tree.delete(path);
@@ -76,6 +82,15 @@ async function mergeContent(
   return mergeFile({ path, old, new: next, current });
 }
 
+/** The entry at `path` in `tree`; a directory where entries lie below it. */
+function at(tree: Tree, path: string): Entry | undefined {
+  const entry = tree.get(path);
+  if (entry !== undefined) return entry;
+  const below = `${path}/`;
+  for (const p of tree.keys()) if (p.startsWith(below)) return HOLDS;
+  return undefined;
+}
+
 /** The paths of the directories `path` lies in, outermost first. */
 function ancestors(path: string): string[] {
   const parts = path.split('/');
@@ -84,6 +99,10 @@ function ancestors(path: string): string[] {
 
 function isSymlink(entry: Entry | undefined): boolean {
   return entry !== undefined && (entry.mode & MODE_TYPE) === SYMLINK;
+}
+
+function isDirectory(entry: Entry | undefined): boolean {
+  return entry !== undefined && (entry.mode & MODE_TYPE) === DIRECTORY;
 }
 
 /** Whether git takes `bytes` as binary: a NUL byte among the first 8000, as its `buffer_is_binary` decides. */
