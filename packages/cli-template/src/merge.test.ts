@@ -413,3 +413,24 @@ test('merge gives a file the template makes executable the bit, also where its c
     ],
   });
 });
+
+test('merge merges the executable bit apart from the content: a change of the bit on one side combines with a change of the content on the other', async () => {
+  const result = await run({
+    old: { 'apple.sh': 'red\n', 'pear.sh': 'green\n', 'plum.sh': 'blue\n' },
+    new: { 'apple.sh': 'green\n', 'pear.sh': { text: 'green\n', mode: REGULAR | 0o755 }, 'plum.sh': 'purple\n' },
+    current: {
+      'apple.sh': { text: 'red\n', mode: REGULAR | 0o755 },
+      'pear.sh': 'yellow\n',
+      'plum.sh': { text: 'dark blue\n', mode: REGULAR | 0o755 },
+    },
+  });
+  assert.deepEqual(result, {
+    tree: {
+      'apple.sh': { text: 'green\n', mode: REGULAR | 0o755 },
+      'pear.sh': { text: 'yellow\n', mode: REGULAR | 0o755 },
+      'plum.sh': { text: 'merged\n', mode: REGULAR | 0o755 },
+    },
+    report: ['apple.sh: clean', 'pear.sh: clean', 'plum.sh: clean'],
+    calls: [{ path: 'plum.sh', old: 'blue\n', new: 'purple\n', current: 'dark blue\n' }],
+  });
+});
