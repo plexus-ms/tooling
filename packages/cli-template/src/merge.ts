@@ -13,6 +13,11 @@ export async function merge(input: MergeInput, mergeFile: MergeFile): Promise<Me
     const n = next.get(path);
     const c = tree.get(path);
     if (same(o, n)) continue;
+    if (n !== undefined && o === undefined && c === undefined) {
+      tree.set(path, n);
+      report.push({ path, outcome: 'added' });
+      continue;
+    }
     if (n !== undefined && (same(c, o) || same(c, n))) {
       tree.set(path, n);
       report.push({ path, outcome: 'clean' });
