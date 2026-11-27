@@ -3,8 +3,11 @@
 // whose files are what the fixture templates render for the markers at HEAD,
 // changes a marker in the working tree, and applies.
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { after, test } from 'node:test';
-import { apply } from './index.ts';
+import { apply, Context, planSync, realIo } from './index.ts';
 import { type Files, git, quietContext, repoWith, scratchDir, templatesAt, text, write } from './testing/siteRepo.ts';
 
 const scratch = scratchDir('apply');
@@ -135,4 +138,138 @@ test('apply renders only the sites whose answers or templates changed', async ()
     applied.sites.map((s) => s.dir),
     ['apps/crate'],
   );
+});
+
+const both = (keys = '') => marker(`version: ${VERSION}\ntemplates: [basket, shelf]\nfruit: apple\n${keys}`);
+
+test('apply adds the files of a template added to a site, and writes the defaults of its questions into the marker', async () => {
+  const { repo, templates } = fixture();
+  write(repo, { 'PLEXUS.md': both() });
+  const applied = await apply(quietContext(), options(repo, templates));
+  assert.equal(text(repo, 'shelf.txt'), 'a shelf\n');
+  assert.equal(text(repo, 'bench.txt'), 'a bench\n');
+  assert.equal(text(repo, 'width.txt'), '4 wide\n');
+  assert.deepEqual(applied.sites, [
+    {
+      dir: '.',
+      report: [
+        { path: 'bench.txt', outcome: 'added' },
+        { path: 'shelf.txt', outcome: 'added' },
+        { path: 'width.txt', outcome: 'added' },
+      ],
+      defaults: { width: 4 },
+    },
+  ]);
+  assert.equal(text(repo, 'PLEXUS.md'), both('width: 4\n'));
+});
+
+test('apply writes no default for a question that was applicable before, and none the marker answers', async () => {
+  const { repo, templates } = fixture();
+  write(repo, { 'PLEXUS.md': both('width: 9\n') });
+  const applied = await apply(quietContext(), options(repo, templates));
+  assert.deepEqual(applied.sites[0]?.defaults, {});
+  assert.equal(text(repo, 'width.txt'), '9 wide\n');
+  assert.equal(text(repo, 'PLEXUS.md'), both('width: 9\n'));
+});
+
+test('apply deletes the unedited files of a template removed from a site, keeps the edited ones, and reports the conflict', async () => {
+  const { repo, templates } = fixture();
+  git(repo, 'rm', '-q', '--cached', 'PLEXUS.md');
+  write(repo, { 'PLEXUS.md': both(), 'shelf.txt': 'a shelf\n', 'bench.txt': 'a bench\n', 'width.txt': '4 wide\n' });
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-q', '-m', 'shelf');
+  write(repo, {
+    'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: apple\n`),
+    'bench.txt': 'my bench\n',
+  });
+  const applied = await apply(quietContext(), options(repo, templates));
+  assert.equal(existsSync(join(repo, 'shelf.txt')), false);
+  assert.equal(existsSync(join(repo, 'width.txt')), false);
+  assert.equal(text(repo, 'bench.txt'), 'my bench\n');
+  assert.deepEqual(applied.sites[0]?.report, [
+    { path: 'bench.txt', outcome: 'conflicted' },
+    { path: 'shelf.txt', outcome: 'deleted' },
+    { path: 'width.txt', outcome: 'deleted' },
+  ]);
+  assert.equal(applied.conflicted, 1);
+});
+
+test('apply renders a site whose marker is new, from nothing, once git tracks it', async () => {
+  const { repo, templates } = fixture();
+  write(repo, { 'apps/crate/PLEXUS.md': CRATE });
+  assert.deepEqual((await apply(quietContext(), options(repo, templates))).sites, []);
+  git(repo, 'add', 'apps/crate/PLEXUS.md');
+  const applied = await apply(quietContext(), options(repo, templates));
+  assert.equal(text(repo, 'apps/crate/crate.txt'), 'a crate of apples\n');
+  assert.deepEqual(
+    applied.sites.map((s) => s.dir),
+    ['apps/crate'],
+  );
+});
+
+test('apply lists every render error of every site, and writes nothing', async () => {
+  const { repo, templates } = fixture({ 'apps/crate/PLEXUS.md': CRATE, 'apps/crate/crate.txt': 'a crate of apples\n' });
+  write(repo, { 'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket, ghost]\ncount: 4\n`) });
+  await assert.rejects(apply(quietContext(), options(repo, templates)), (error: Error) => {
+    assert.match(error.message, /^\.: no template ghost/m);
+    assert.match(error.message, /^apps\/crate: .*fruit/m);
+    return true;
+  });
+  assert.equal(text(repo, 'list.txt'), '3 apples\nfresh\nsweet\n');
+  assert.equal(text(repo, 'apps/crate/crate.txt'), 'a crate of apples\n');
+});
+
+test('apply under --dry-run reports what it would do and writes nothing', async () => {
+  const { repo, templates } = fixture();
+  write(repo, { 'PLEXUS.md': both() });
+  const applied = await apply(quietContext({ dryRun: true }), options(repo, templates));
+  assert.equal(applied.applied, false);
+  assert.equal(applied.sites[0]?.report.length, 3);
+  assert.equal(existsSync(join(repo, 'shelf.txt')), false);
+  assert.equal(text(repo, 'PLEXUS.md'), both());
+});
+
+test('apply asks before it writes, and writes nothing when the answer is no', async () => {
+  const { repo, templates } = fixture();
+  write(repo, { 'PLEXUS.md': pears });
+  const asked: string[] = [];
+  const io = {
+    ...realIo(),
+    stderr: new PassThrough(),
+    prompt: async (question: string) => {
+      asked.push(question);
+      return false;
+    },
+  };
+  const applied = await apply(new Context({}, io), options(repo, templates));
+  assert.equal(asked.length, 1);
+  assert.equal(applied.applied, false);
+  assert.equal(text(repo, 'list.txt'), '3 apples\nfresh\nsweet\n');
+});
+
+test('planSync takes an old side that arrived rendered, with its policies', async () => {
+  const { repo, templates } = fixture({ 'old.txt': 'old\n', 'mine.txt': 'mine\n' });
+  const rendered = {
+    tree: new Map([
+      ['list.txt', { bytes: Buffer.from('3 apples\nfresh\nsweet\n'), mode: 0o100644 }],
+      ['old.txt', { bytes: Buffer.from('old\n'), mode: 0o100644 }],
+    ]),
+    policies: new Map([
+      ['list.txt', { template: 'basket', policy: 'merge' as const }],
+      ['old.txt', { template: 'basket', policy: 'merge' as const }],
+    ]),
+    answers: { fruit: 'apple', count: 3 },
+  };
+  const plan = await planSync(quietContext(), repo, templates, [
+    { dir: '.', old: rendered, new: { templates: ['basket'], answers: { fruit: 'pear' } } },
+  ]);
+  assert.deepEqual(plan.sites[0]?.report, [
+    { path: 'list.txt', outcome: 'clean' },
+    { path: 'old.txt', outcome: 'deleted' },
+  ]);
+  assert.equal(text(repo, 'list.txt'), '3 apples\nfresh\nsweet\n');
+  await plan.perform();
+  assert.equal(text(repo, 'list.txt'), '3 pears\nfresh\nsweet\n');
+  assert.equal(existsSync(join(repo, 'old.txt')), false);
+  assert.equal(text(repo, 'mine.txt'), 'mine\n');
 });
