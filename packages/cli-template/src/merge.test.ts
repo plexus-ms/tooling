@@ -497,3 +497,16 @@ test('merge adds an empty directory of the new render that the current tree lack
     calls: [],
   });
 });
+
+test('merge never deletes a directory, and reports none it does not add', async () => {
+  const result = await run({
+    old: { empty: directory(), gone: directory(), seeds: directory(), 'basket/apple.txt': 'red\n' },
+    new: {},
+    current: { empty: directory(), 'seeds/apple.txt': 'red\n' },
+  });
+  assert.deepEqual(result, {
+    tree: { empty: directory(), 'seeds/apple.txt': 'red\n' },
+    report: ['basket/apple.txt: kept'],
+    calls: [],
+  });
+});
