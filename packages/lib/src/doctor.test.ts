@@ -1044,6 +1044,41 @@ test('a repo whose markers list no templates needs no version', () => {
   assert.deepEqual(findings(crossed([site('.'), site('apps/a')], { pin: '0.131.0' })), []);
 });
 
+test('a nested marker that carries `version` is a finding of the repo, once per marker', () => {
+  const nested = (dir: string): MarkerSite => ({ dir, problem: "`version` belongs in the repo's root marker only" });
+  assert.deepEqual(findings(crossed([ROOT, nested('apps/a'), nested('packages/x')])), [
+    { problem: "apps/a/PLEXUS.md: `version` belongs in the repo's root marker only" },
+    { problem: "packages/x/PLEXUS.md: `version` belongs in the repo's root marker only" },
+  ]);
+});
+
+test('a marker that cannot be read as configuration is named, unless the repo contract reports it already', () => {
+  const broken: MarkerSite[] = [
+    { dir: '.', problem: 'marker: `templates` must be a list of template names' },
+    { dir: 'apps/a', problem: 'marker: `templates` must be a list of template names' },
+  ];
+  assert.deepEqual(findings(crossed(broken)), [
+    { problem: 'PLEXUS.md: marker: `templates` must be a list of template names' },
+    { problem: 'apps/a/PLEXUS.md: marker: `templates` must be a list of template names' },
+  ]);
+  const reported = crossed(broken, { marker: { problem: 'PLEXUS.md: no frontmatter' } });
+  assert.deepEqual(
+    findings(reported).filter((f) => f.requirement === undefined),
+    [{ problem: 'apps/a/PLEXUS.md: marker: `templates` must be a list of template names' }],
+  );
+});
+
+test('a key set in both the root marker and a nested one is a finding naming the keys', () => {
+  const sites = [
+    site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { tenant: 'plexus', ci: 'github' } }),
+    site('apps/a', { templates: ['app-nextjs'], answers: { tenant: 'other', ci: 'x', profile: 'stateless' } }),
+    site('apps/b', { answers: { profile: 'stateless' } }),
+  ];
+  assert.deepEqual(findings(crossed(sites)), [
+    { problem: 'apps/a/PLEXUS.md: `tenant`, `ci` are answered in the root marker already' },
+  ]);
+});
+
 test('a tracked file holding a conflict marker is a finding of the repo, of no requirement, that no deviation silences', () => {
   const marked = repo({ conflicted: ['apps/a/page.tsx', 'mise.toml'] });
   assert.deepEqual(findings(marked), [
