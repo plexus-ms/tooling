@@ -354,3 +354,10 @@ test('a symlink anywhere in a template is an error naming its path', () => {
   );
   assert.deepEqual(listing(replaced.tree), {});
 });
+
+// No original: in copier a directory beside a file is no template of it either.
+test('only a regular .jinja file beside a file wins, not a directory of that name', () => {
+  const result = render([template(ripe, { 'a.txt': 'plain', 'a.txt.jinja': dir })], { ripe: true });
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(listing(result.tree), { 'a.txt': 'plain', 'a.txt.jinja': dir });
+});
