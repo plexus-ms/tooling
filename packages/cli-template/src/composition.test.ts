@@ -92,3 +92,14 @@ test('the result lists the birth commands of each template in the order the temp
     ['basket', 'basket', 'shelf'],
   );
 });
+
+test('two templates declaring the same question is an error naming both, and the render writes nothing', () => {
+  const other = 'name: crate\nquestions:\n  fruit:\n    type: str\n';
+  const result = render([template(basket, { 'a.txt': 'a' }), template(other, { 'b.txt': 'b' })], { fruit: 'pear' });
+  assert.deepEqual(where(result.errors), [
+    { template: 'basket', other: 'crate', path: 'template.yml', question: 'fruit' },
+  ]);
+  assert.match(result.errors[0]?.message ?? '', /basket/);
+  assert.match(result.errors[0]?.message ?? '', /crate/);
+  assert.deepEqual(listing(result.tree), {});
+});
