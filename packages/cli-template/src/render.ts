@@ -16,7 +16,7 @@
 // only the answers to its own questions.
 import { renderFiles } from './files.ts';
 import type { Context } from './jinja.ts';
-import { readTemplate, type Template } from './manifest.ts';
+import { MANIFEST, readTemplate, type Template } from './manifest.ts';
 import { type Resolution, resolveAnswers, unusedAnswers } from './questions.ts';
 import type { Answers, BirthCommand, Entry, Origin, RenderError, RenderResult, Tree } from './types.ts';
 
@@ -24,6 +24,7 @@ import type { Answers, BirthCommand, Entry, Origin, RenderError, RenderResult, T
 export function render(templates: readonly Tree[], given: Answers): RenderResult {
   const errors: RenderError[] = [];
   const read = templates.flatMap((tree, i) => readTemplate(tree, i + 1, errors) ?? []);
+  ownersOf(read, errors);
   const resolved = read.map((template) => ({
     template,
     resolution: resolveAnswers(template.manifest, given, scopeOf(template), errors),
@@ -48,6 +49,26 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   );
   if (errors.length > 0) return { tree: new Map(), answers, unused, files: new Map(), birth: [], errors };
   return { tree, answers, unused, files, birth, errors };
+}
+
+/** The template that declares each question; a question two templates declare is an error naming both. */
+function ownersOf(read: readonly Template[], errors: RenderError[]): Map<string, Template> {
+  const owners = new Map<string, Template>();
+  for (const template of read) {
+    for (const { name } of template.manifest.questions) {
+      const first = owners.get(name);
+      if (first === undefined) owners.set(name, template);
+      else
+        errors.push({
+          template: first.manifest.name,
+          other: template.manifest.name,
+          path: MANIFEST,
+          question: name,
+          message: `${first.manifest.name} and ${template.manifest.name} both declare the question ${name}`,
+        });
+    }
+  }
+  return owners;
 }
 
 /** What a template's questions see besides its own earlier answers. */
