@@ -10,11 +10,59 @@
 // is absent from the answers, while its default, where it has one, is in the
 // context.
 //
-// A question takes the given answer of its name, and without one its default.
-// A string default is Jinja, in the scope and the answers before it: one `{{ }}`
-// holding a whole expression is evaluated to a native value, any other string is
-// rendered to text (`value`). Nothing else of a manifest value is touched.
-
+// A question takes the given answer of its name, and without one its default; a
+// question with neither is an error, one per question, naming its help text, so
+// that one render lists all of them. Either is then cast to the question's type
+// and checked against its choices, and a failure is an error naming the question.
+// Only the questions of the render's manifests own answers; the rest are unused.
+//
+// Strings in a manifest are Jinja, rendered as copier renders them, to text, in
+// the scope and the answers before the question (so a later question's name is
+// undefined, which fails). A list is rendered item by item, anything else taken as
+// it is. There is no second path for "an expression": a default is rendered to
+// text and then cast by the type, so `"{{ n + 1 }}"` is 2 for `int` and "2" for
+// `str`, `"true"` is true for `bool`, and `"{{ a }}-{{ b }}"` is text. The adapter's
+// `evaluate` is not used here, since a native value and render-then-cast can
+// differ (a float with no fraction), and one rule is better than two.
+//
+// Type: the question's own, else that of its raw default (a string `str`, a bool
+// `bool`, a whole number `int`, any other number `float`), else `yaml`, as copier
+// does. Casts follow copier's, with Python's int and float told apart by the number
+// rather than by how it was written:
+//   str    a string; a number is its text, a bool is `True` or `False`
+//   int    a whole number, or a string of digits; 1.5 and "1.0" are errors
+//   float  a number, or a string that reads as one
+//   bool   a number by whether it is 0; a string, trimmed and lower-cased, by the
+//          words y yes t true on and n no f false off ~ null none, a blank one
+//          false, a numeric one by its value, any other true
+//   json   a string is parsed as JSON; any other value is taken as it is
+//   yaml   a string is parsed as YAML; any other value is taken as it is
+// A null is an error for every type but `json` and `yaml`.
+//
+// `when` is rendered and read as a bool. A question it skips is left out of the
+// reported answers and is not validated; where it has a given answer or a default,
+// the context still holds it, the given answer first, as it does in copier, so
+// that later questions and the template's files see it; where it has neither, the
+// variable is absent and no error is made. A skipped question's choices are still
+// checked against the value it holds.
+//
+// `choices` is a list, a map of label to value (only the values restrict, in the
+// manifest's order), or a string of Jinja that renders YAML of either. List items
+// are rendered; every value is cast to the question's type, and the answer must
+// equal one of them, deeply. No choices, or an empty list, restrict nothing. The
+// extended forms of copier (pairs, `{value, validator}`) and `multiselect` are not
+// part of the engine.
+//
+// `validator` is rendered with the cast answer added to the context; its output,
+// trimmed, is the error message when it is not empty, and a validator that fails to
+// render is an error as well.
+//
+// Answers no question owns are unused. Declared reads and several templates are
+// the render's composition, which extends `unusedAnswers`.
+//
+// Ported from copier v9.19.1 (see LICENSE.copier): `copier/_main.py` `_ask`,
+// `copier/_user_data.py` `Question` and `copier/_tools.py` `cast_to_bool`, without
+// prompts, answers files, `ask`, `secret`, `multiselect` or user defaults.
 import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml } from 'yaml';
 import { messageOf } from './errors.ts';
@@ -161,6 +209,7 @@ export function resolveAnswers(manifest: Manifest, given: Answers, scope: Contex
 }
 
 /** The names of the `given` answers that no template of the render owns or reads, `manifests` being the render's. */
-export function unusedAnswers(_manifests: readonly Manifest[], _given: Answers): string[] {
-  return [];
+export function unusedAnswers(manifests: readonly Manifest[], given: Answers): string[] {
+  const owned = new Set(manifests.flatMap(({ questions }) => questions.map(({ name }) => name)));
+  return Object.keys(given).filter((name) => !owned.has(name));
 }
