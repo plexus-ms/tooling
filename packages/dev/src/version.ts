@@ -21,6 +21,7 @@ export const PHASES: readonly (readonly string[])[] = [[TOOLING], VERSIONED_REPO
 export const VERSIONED_PACKAGES = [
   { name: '@plexus-ms/cli', dir: 'packages/cli' },
   { name: '@plexus-ms/cli-ci', dir: 'packages/cli-ci' },
+  { name: '@plexus-ms/cli-template', dir: 'packages/cli-template' },
   { name: '@plexus-ms/lib', dir: 'packages/lib' },
 ] as const;
 
