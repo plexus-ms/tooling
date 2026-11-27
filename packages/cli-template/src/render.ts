@@ -20,7 +20,8 @@
 //
 // Answers. The given answers are one flat namespace for the whole render. Each
 // question is declared by exactly one template, its owner: two templates
-// declaring the same question are an error naming both. A template takes the
+// declaring the same question are an error naming both, and the one whose name
+// sorts first owns it for the templates that read it. A template takes the
 // given answers to its own questions, and declares as reads the answers it
 // uses but does not own.
 //
@@ -35,8 +36,8 @@
 // and without one it is an error naming the owner as well.
 //
 // Order. A template is resolved after the owners of the answers it reads, and
-// otherwise in the order given, so that the order of the templates does not
-// change the tree; there are no dependencies between templates besides their
+// otherwise by name, so that the order of the templates does not change the
+// tree; there are no dependencies between templates besides their
 // reads. Templates whose reads form a cycle, and the templates that read from
 // them, are one error naming them all by name, and none of them is resolved.
 //
@@ -81,13 +82,15 @@ import type { Answers, BirthCommand, Entry, Origin, RenderError, RenderResult, T
 /** The tree `templates` render with the `given` answers, and what it is made of. */
 export function render(templates: readonly Tree[], given: Answers): RenderResult {
   const errors: RenderError[] = [];
-  const read = readAll(templates, errors);
+  // In the order given for the birth commands, and by name for everything else.
+  const listed = readAll(templates, errors);
+  const read = listed.toSorted((a, b) => (a.manifest.name < b.manifest.name ? -1 : 1));
   const owners = ownersOf(read, errors);
   const engine = engineVariables(read);
   const resolved = new Map<Template, Resolved>();
   for (const template of resolutionOrder(read, owners, errors)) {
     const own: RenderError[] = [];
-    const reads = readsOf(template, owners, resolved, read.length < templates.length, given, own);
+    const reads = readsOf(template, owners, resolved, listed.length < templates.length, given, own);
     const scope = scopeOf(engine, reads.values);
     const resolution = resolveAnswers(template.manifest, given, scope, own);
     errors.push(...own);
@@ -105,7 +108,7 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
     tree.set(path, entry);
     files.set(path, { template: owner.manifest.name, policy: owner.manifest.policies.get(source) ?? 'merge' });
   }
-  const birth: BirthCommand[] = read.flatMap(({ manifest }) =>
+  const birth: BirthCommand[] = listed.flatMap(({ manifest }) =>
     manifest.birth.map((command) => ({ template: manifest.name, command })),
   );
 
@@ -148,7 +151,7 @@ interface Resolved {
 
 /**
  * The templates in the order they resolve: each after the owners of the answers
- * it reads, else in the order given. The templates left over each read from
+ * it reads, else in the order of `read`. The templates left over each read from
  * another left over, in a cycle or from one; they are one error naming them
  * all, and none of them is resolved.
  */
