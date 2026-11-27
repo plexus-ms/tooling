@@ -22,7 +22,7 @@
 // Reducing a file's mode to that bit is `render`'s, when it writes an entry
 // (files.ts): a rendered tree holds files of mode 0o100644 or 0o100755 only.
 // `merge` compares a current file, whose mode comes from a directory, with them
-// by the bit alone, and writes the mode of the new render.
+// by the bit alone, and writes a render's mode with the bit merged (merge.ts).
 //
 // A template is a tree too: its manifest at `template.yml` and the files it
 // renders below `files/`. The manifest's format is stated in manifest.ts; the

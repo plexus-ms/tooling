@@ -1,5 +1,61 @@
 // merge: three rendered trees into one, the current directory's with the
-// template's changes applied (types.ts states the shapes).
+// template's changes applied (types.ts states the shapes). It looks at each
+// path that either render holds, in path order, with its policy from the new
+// render (from the old one where only the old has it), and the first rule that
+// fits decides; "current" is what the current tree holds at the path, a
+// directory where it holds entries below it:
+//
+//   1. current holds nothing there, the new render does, and the path is
+//      born-once or new to the template: written, `added`; but `kept` where a
+//      directory it lies in is a symlink in the current tree, and
+//      `conflicted` where one is a file
+//   2. the old and the new render hold it alike: left alone
+//   3. current is a symlink: `kept`, never written, deleted or written through
+//   4. a file on one side, a directory on another: current stays, `conflicted`
+//   5. an empty directory otherwise: left alone; merge never deletes one
+//   6. born-once, or current lacks it: `kept`. A born-once path is never
+//      touched once it exists, nor deleted when the template drops it or its
+//      name no longer renders; a path the user deleted stays deleted
+//   7. the new render lacks it: `deleted` where current is the old render's
+//      entry, else current stays, `conflicted`. A template that renames a file
+//      drops one path and adds another, so the user's edits to the old name
+//      survive this way
+//   8. otherwise both are files and the two changes are merged: the content
+//      and the executable bit apart
+//
+// Alike means the same type and bytes, and for a file the same executable bit,
+// the one bit of a mode the engine carries (types.ts); a change of the bit
+// alone is a change. Bytes are compared and carried as they are, line endings
+// included.
+//
+// The content: where current is the old or the new render's, the new render's
+// wins; where only the user changed it, current's stays; where all three differ
+// it goes to the injected `MergeFile`, which says whether the result holds a
+// conflict, its markers left in the file. An old render that lacks the path is
+// an empty, non-executable file, so a path both sides add is merged against
+// empty content. Where all three differ and one side is binary, current stays,
+// `conflicted`, and `MergeFile` is not called. Binary is git's rule, since git
+// merges the rest and fails on a binary file: a NUL byte among the first 8000.
+//
+// The executable bit is merged as the content is, but cannot conflict: where
+// the template changed it the new render's wins, else current's stays. So a
+// change of the bit on one side combines with a change of the content on the
+// other. A written file takes a render's mode, 0o100644 or 0o100755 by the
+// merged bit; where nothing changes the bit, that is the new render's.
+//
+// The report holds one entry, in path order, for each path the template
+// changed, the old and the new render holding it differently, and for each
+// path rule 1 writes; a path the template left alone is not reported, whatever
+// the current tree holds there, and neither is an empty directory merge does
+// not add. A path that neither render holds is the user's: untouched and
+// unreported. The tree no longer implies a directory whose files were all
+// deleted; whether such a directory is removed is for whoever applies the tree.
+//
+// Two rules are ported from copier v9.19.1, copier/_main.py: comparing a file's
+// mode by its executable bits (`_render_allowed`, here the owner's bit alone), and
+// never deleting through a symlink (`_remove_old_files`); MIT-licensed, see
+// LICENSE.copier. Copier's update algorithm is not: it replays a diff, this
+// merges trees.
 import {
   DIRECTORY,
   type Entry,
