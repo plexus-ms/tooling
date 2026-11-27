@@ -164,3 +164,24 @@ test('merge writes a path the new render adds and the current tree lacks, and re
     calls: [],
   });
 });
+
+// Ported from tests/test_updatediff.py,
+// test_update_with_new_file_in_template_and_project: both sides add the file.
+test('merge merges a path the new render adds and the current tree already has against an empty old side', async () => {
+  const result = await run({
+    new: { 'basket.yml': 'apple:\n  colour: green\n', 'empty.txt': 'pear\n' },
+    current: { 'basket.yml': 'apple:\n  colour: red\n\npear:\n  colour: yellow\n', 'empty.txt': '' },
+  });
+  assert.deepEqual(result, {
+    tree: { 'basket.yml': 'merged\n', 'empty.txt': 'pear\n' },
+    report: ['basket.yml: clean', 'empty.txt: clean'],
+    calls: [
+      {
+        path: 'basket.yml',
+        old: '',
+        new: 'apple:\n  colour: green\n',
+        current: 'apple:\n  colour: red\n\npear:\n  colour: yellow\n',
+      },
+    ],
+  });
+});
