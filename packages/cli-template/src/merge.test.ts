@@ -529,3 +529,17 @@ test('merge keeps a path that is a file on one side and a directory on another a
     calls: [],
   });
 });
+
+test('merge never touches a born-once path that the current tree holds as a directory, whatever the renders hold, and reports it as kept', async () => {
+  const result = await run({
+    old: { apple: 'red\n', pear: 'green\n' },
+    new: { pear: 'yellow\n', plum: 'blue\n' },
+    current: { apple: directory(), 'pear/seed.txt': 'small\n', plum: directory() },
+    bornOnce: ['apple', 'pear', 'plum'],
+  });
+  assert.deepEqual(result, {
+    tree: { apple: directory(), 'pear/seed.txt': 'small\n', plum: directory() },
+    report: ['apple: kept', 'pear: kept', 'plum: kept'],
+    calls: [],
+  });
+});
