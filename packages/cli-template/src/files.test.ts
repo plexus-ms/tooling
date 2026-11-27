@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import { DIRECTORY, REGULAR, render } from './index.ts';
 import { listing, template } from './testing/trees.ts';
 
-const ripe = 'name: basket\nquestions:\n  ripe:\n    type: bool\n    default: false\n';
+const ripe =
+  'name: basket\nquestions:\n  ripe:\n    type: bool\n    default: false\n  target:\n    type: str\n    default: x\n';
 
 // tests/test_conditional_file_name.py::test_render_conditional
 test('a file whose name part renders to text lands under it', () => {
@@ -183,4 +184,25 @@ test('a .jinja file that is not valid text is copied as bytes, without the suffi
   const result = render([template(ripe, { 'logo.png.jinja': { bytes, mode: REGULAR | 0o644 } })], { ripe: true });
   assert.deepEqual(result.errors, []);
   assert.deepEqual(listing(result.tree), { 'logo.png': { bytes, mode: REGULAR | 0o644 } });
+});
+
+// No test of its own in copier; the rule is `_render_path` and `_render_parts`
+// in copier/_main.py: a file whose `.jinja` sibling exists is not written, by
+// its source name or by the name it renders to, so the template wins.
+test('a file beside its .jinja sibling is not written, and the sibling is', () => {
+  const result = render(
+    [
+      template(ripe, {
+        'a.txt.jinja': 'rendered {{ ripe }}',
+        'a.txt': 'plain',
+        'b.md.jinja': 'rendered',
+        '{{ target }}.md': 'plain',
+        'dir/c.txt.jinja': 'rendered',
+        'dir/c.txt': 'plain',
+      }),
+    ],
+    { ripe: true, target: 'b' },
+  );
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(listing(result.tree), { 'a.txt': 'rendered True', 'b.md': 'rendered', 'dir/c.txt': 'rendered' });
 });
