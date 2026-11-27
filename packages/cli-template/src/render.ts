@@ -25,9 +25,10 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   const errors: RenderError[] = [];
   const read = readAll(templates, errors);
   const owners = ownersOf(read, errors);
+  const engine = engineVariables(read);
   const resolved = new Map<Template, Resolved>();
   for (const template of resolutionOrder(read, owners, errors)) {
-    const scope = scopeOf(readsOf(template, owners, resolved, given, errors));
+    const scope = scopeOf(engine, readsOf(template, owners, resolved, given, errors));
     resolved.set(template, { scope, resolution: resolveAnswers(template.manifest, given, scope, errors) });
   }
 
@@ -180,9 +181,14 @@ function readsOf(
   return reads;
 }
 
-/** What a template's questions see besides its own earlier answers: the answers it reads. */
-function scopeOf(reads: Context): Context {
-  return { ...reads };
+/** The engine's variables, the same for every template of a render. */
+function engineVariables(read: readonly Template[]): Context {
+  return { _templates: read.map(({ manifest }) => manifest.name).sort() };
+}
+
+/** What a template's questions see besides its own earlier answers: the engine's variables and the answers it reads. */
+function scopeOf(engine: Context, reads: Context): Context {
+  return { ...engine, ...reads };
 }
 
 /** What a template's files render with: its scope and its own answers. */
