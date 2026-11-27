@@ -60,7 +60,10 @@
 // read of a question whose owner failed to resolve it has no value and adds no
 // error, and the reader renders no files; the reader's own questions are still
 // resolved, so that every missing answer is listed, and one that uses that
-// read reports it as undefined.
+// read reports it as undefined. Where a template of the render failed to read,
+// whether its manifest is wrong or its name is taken, what it owns is unknown:
+// a read that nothing supplies then adds no error of its own either, and the
+// reader renders no files.
 //
 // Paths. Each path is written by exactly one template; files.ts checks it
 // across the templates where it checks it within one. The result names each
@@ -84,7 +87,7 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   const resolved = new Map<Template, Resolved>();
   for (const template of resolutionOrder(read, owners, errors)) {
     const own: RenderError[] = [];
-    const reads = readsOf(template, owners, resolved, given, own);
+    const reads = readsOf(template, owners, resolved, read.length < templates.length, given, own);
     const scope = scopeOf(engine, reads.values);
     const resolution = resolveAnswers(template.manifest, given, scope, own);
     errors.push(...own);
@@ -221,14 +224,17 @@ function ownersOf(read: readonly Template[], errors: RenderError[]): Map<string,
 
 /**
  * The value of each answer `template` reads: what its owner resolved, else the
- * given answer, else the read's default; a read that nothing supplies is an error,
- * naming the owner where its owner skipped the question. A read whose owner failed to resolve it has no value and adds no error, the
- * owner's being the one; `complete` is false where a read has no value.
+ * given answer, else the read's default. A read that nothing supplies is an
+ * error, naming the owner where the owner skipped the question. A read adds no
+ * error where the error is another's: where its owner failed to resolve it, or
+ * where it has no owner and a template of the render failed to read (`unread`),
+ * which may have owned it. `complete` is false where a read has no value.
  */
 function readsOf(
   template: Template,
   owners: ReadonlyMap<string, Template>,
   resolved: ReadonlyMap<Template, Resolved>,
+  unread: boolean,
   given: Answers,
   errors: RenderError[],
 ): { values: Context; complete: boolean } {
@@ -246,18 +252,13 @@ function readsOf(
       complete = false;
       const name = template.manifest.name;
       const error = { template: name, path: MANIFEST, question: read.name };
-      if (owner === undefined)
-        errors.push({
-          ...error,
-          message: `${name} reads ${read.name}, which no template of the render owns and no answer gives`,
-        });
-      else {
+      if (owner !== undefined) {
         const other = owner.manifest.name;
-        errors.push({
-          ...error,
-          other,
-          message: `${name} reads ${read.name}, which ${other} owns and skips without a default`,
-        });
+        const message = `${name} reads ${read.name}, which ${other} owns and skips without a default`;
+        errors.push({ ...error, other, message });
+      } else if (!unread) {
+        const message = `${name} reads ${read.name}, which no template of the render owns and no answer gives`;
+        errors.push({ ...error, message });
       }
     }
   }
