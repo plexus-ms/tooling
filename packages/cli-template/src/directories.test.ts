@@ -105,3 +105,52 @@ test('planMerge rejects a target that is not a directory', async () => {
     s.remove();
   }
 });
+
+/** A side from literal files, every one under one policy. */
+function literal(files: Record<string, string>, policy: 'merge' | 'born-once' = 'merge') {
+  return {
+    tree: new Map(Object.entries(files).map(([path, text]) => [path, { bytes: Buffer.from(text), mode: 0o100644 }])),
+    policies: new Map(Object.keys(files).map((path) => [path, { policy }])),
+  };
+}
+
+test('planMerge reads from the directory the paths of the new render too: a file the user has where the new render adds one is not overwritten', async () => {
+  const s = scratch();
+  try {
+    put(s.dir, { 'x.txt': 'mine\n' });
+    const plan = await planMerge(s.dir, literal({ 'a.txt': 'a\n' }), literal({ 'a.txt': 'a\n', 'x.txt': 'theirs\n' }));
+    assert.deepEqual(plan.report, [{ path: 'x.txt', outcome: 'conflicted' }]);
+    await plan.apply();
+    assert.equal(read(s.dir)['x.txt'], '<<<<<<< current\nmine\n=======\ntheirs\n>>>>>>> new render\n');
+  } finally {
+    s.remove();
+  }
+});
+
+test('planMerge gives each render its own policies: a path that became born-once is never touched', async () => {
+  const s = scratch();
+  try {
+    put(s.dir, { 'p.txt': 'a\nlocal\n' });
+    const old = literal({ 'p.txt': 'a\n' });
+    const next = literal({ 'p.txt': 'b\n' }, 'born-once');
+    const plan = await planMerge(s.dir, old, next);
+    assert.deepEqual(plan.report, [{ path: 'p.txt', outcome: 'kept' }]);
+    await plan.apply();
+    assert.deepEqual(read(s.dir), { 'p.txt': 'a\nlocal\n' });
+  } finally {
+    s.remove();
+  }
+});
+
+test('planMerge takes the policy of a path only the old render has from the old render: a born-once file the template dropped stays', async () => {
+  const s = scratch();
+  try {
+    put(s.dir, { 'p.txt': 'a\n' });
+    const plan = await planMerge(s.dir, literal({ 'p.txt': 'a\n' }, 'born-once'), literal({}));
+    assert.deepEqual(plan.report, [{ path: 'p.txt', outcome: 'kept' }]);
+    await plan.apply();
+    assert.deepEqual(read(s.dir), { 'p.txt': 'a\n' });
+  } finally {
+    s.remove();
+  }
+});
