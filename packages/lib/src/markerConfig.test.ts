@@ -238,3 +238,23 @@ test('setMarkerKeys indents a new key as the keys of an indented frontmatter are
     '---\n  templates: [t]\n  profile: x\n  b: [2]\n  c: 3\n---\n',
   );
 });
+
+test('setMarkerKeys replaces a folded block scalar on the key line', () => {
+  assert.equal(setMarkerKeys('---\na: >\n  t\n  u\nb: 1\n---\n', { a: 'y' }), '---\na: y\nb: 1\n---\n');
+});
+
+test('setMarkerKeys refuses a key with an anchor or a tag of its own', () => {
+  assert.throws(() => setMarkerKeys('---\n&k a: 1\n---\n', { a: 2 }), /`a` is not written as `a: value`/);
+  assert.throws(() => setMarkerKeys('---\n!!str a: 1\n---\n', { a: 2 }), /`a` is not written as `a: value`/);
+});
+
+test('setMarkerKeys refuses to put a value on a key line that holds more than the old one', () => {
+  assert.throws(() => setMarkerKeys('---\na: &x |\n  t\n---\n', { a: 'y' }), /`a` holds more than a value/);
+  assert.throws(() => setMarkerKeys('---\na: &m\n  - 1\n---\n', { a: 'y' }), /`a` holds `&m` on its line/);
+});
+
+test('setMarkerKeys sets a key beside a key that is not a scalar', () => {
+  const text = '---\n[x]: 1\nb: 2\n---\n';
+  assert.equal(setMarkerKeys(text, { b: 3 }), '---\n[x]: 1\nb: 3\n---\n');
+  assert.equal(setMarkerKeys(text, { templates: ['t'], c: 4 }), '---\ntemplates: [t]\n[x]: 1\nb: 2\nc: 4\n---\n');
+});
