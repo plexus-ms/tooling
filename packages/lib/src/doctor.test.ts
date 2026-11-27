@@ -1091,6 +1091,30 @@ test('the marker checks are skipped in a repo that still tracks a copier answers
   assert.equal(findings(crossed(failing, { tracked: ['docs/.copier-answers.yml.md'] })).length, 3);
 });
 
+test('doctor reads the plx pin and the tracked markers, and fails the repo for each marker finding', async () => {
+  const tree = ws();
+  const web = tree.web as Tree;
+  web['PLEXUS.md'] = '---\nversion: 0.130.0\ntemplates: [repo-turbo]\n---\n';
+  web['mise.toml'] = '[tools]\n"npm:@plexus-ms/cli" = "0.131.0"\n';
+  const site = (web.apps as Tree).site as Tree;
+  site['PLEXUS.md'] = '---\nprofile: stateless\nversion: 0.131.0\n---\n';
+  const tracked = { '/ws/web': ['PLEXUS.md', 'mise.toml', 'apps/site/PLEXUS.md', 'apps/site/docker/compose.yaml'] };
+  const report = await doctorOver(tree, '/ws/web', VERBS, tracked);
+  assert.deepEqual(
+    report.units.map((u) => [u.path, u.findings]),
+    [
+      [
+        '.',
+        [
+          { problem: '`version` in PLEXUS.md is 0.130.0, but mise.toml pins plx 0.131.0; only `plx update` moves it' },
+          { problem: "apps/site/PLEXUS.md: `version` belongs in the repo's root marker only" },
+        ],
+      ],
+      ['apps/site', []],
+    ],
+  );
+});
+
 test('a tracked file holding a conflict marker is a finding of the repo, of no requirement, that no deviation silences', () => {
   const marked = repo({ conflicted: ['apps/a/page.tsx', 'mise.toml'] });
   assert.deepEqual(findings(marked), [
