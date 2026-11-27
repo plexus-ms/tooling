@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseMarkerConfig, RESERVED_KEYS } from './index.ts';
+import { parseMarkerConfig, RESERVED_KEYS, setMarkerKeys } from './index.ts';
 
 test('parseMarkerConfig reads version, templates and deviations, and every other key as an answer', () => {
   const text = [
@@ -51,4 +51,102 @@ test('parseMarkerConfig rejects a reserved key of the wrong shape, and what is n
   assert.throws(() => parseMarkerConfig('# just prose'), /no frontmatter/);
   assert.throws(() => parseMarkerConfig('---\n- a list\n---\n'), /not a mapping/);
   assert.throws(() => parseMarkerConfig('---\na: 1\na: 2\n---\n'), /unique/);
+});
+
+test('setMarkerKeys changes only the keys it sets: comments, order, quoting, spacing, blank lines and the body survive', () => {
+  const body = ['', '- `PLX-Repo/Verbs`: a reason.', '', '---', 'A rule in the body, not frontmatter.', ''];
+  const text = [
+    '---',
+    '# Written by hand; plx keeps what it does not set.',
+    'version:   "0.131.0"   # moved by plx update only',
+    'templates:',
+    '    - repo-turbo   # the base',
+    '',
+    "tenant: 'plexus'",
+    'ci_strategy:    github',
+    'deviations: [ PLX-Repo/Verbs ]   # see below',
+    'extra:',
+    '  nested: {a: 1}',
+    '---',
+    ...body,
+  ].join('\n');
+  const written = setMarkerKeys(text, {
+    version: '0.132.0',
+    templates: ['repo-turbo', 'updates'],
+    tenant: 'acme',
+    update_max_age: 7,
+  });
+  assert.equal(
+    written,
+    [
+      '---',
+      '# Written by hand; plx keeps what it does not set.',
+      'version:   "0.132.0"   # moved by plx update only',
+      'templates:',
+      '    - repo-turbo',
+      '    - updates',
+      '',
+      "tenant: 'acme'",
+      'ci_strategy:    github',
+      'deviations: [ PLX-Repo/Verbs ]   # see below',
+      'extra:',
+      '  nested: {a: 1}',
+      'update_max_age: 7',
+      '---',
+      ...body,
+    ].join('\n'),
+  );
+  assert.deepEqual(parseMarkerConfig(written), {
+    version: '0.132.0',
+    templates: ['repo-turbo', 'updates'],
+    deviations: ['PLX-Repo/Verbs'],
+    answers: { tenant: 'acme', ci_strategy: 'github', extra: { nested: { a: 1 } }, update_max_age: 7 },
+  });
+  assert.equal(setMarkerKeys(written, { version: '0.132.0', extra: { nested: { a: 1 } } }), written, 'already so');
+});
+
+test('setMarkerKeys puts a new reserved key in the reserved order ahead of the answers, and a new answer last', () => {
+  assert.equal(
+    setMarkerKeys('---\n---\n', { version: '0.131.0', templates: ['repo-turbo', 'updates'], tenant: 'plexus' }),
+    '---\nversion: 0.131.0\ntemplates: [repo-turbo, updates]\ntenant: plexus\n---\n',
+  );
+  assert.equal(
+    setMarkerKeys('---\n# An app.\nprofile: stateful\n---\n\n- An app.\n', { templates: ['app-nextjs'], port: 3000 }),
+    '---\n# An app.\ntemplates: [app-nextjs]\nprofile: stateful\nport: 3000\n---\n\n- An app.\n',
+  );
+  assert.equal(
+    setMarkerKeys('---\ntemplates: [repo-turbo]\ndeviations: []\nmajor: 1\n---\n', { version: '0.131.0' }),
+    '---\nversion: 0.131.0\ntemplates: [repo-turbo]\ndeviations: []\nmajor: 1\n---\n',
+  );
+  assert.equal(
+    setMarkerKeys('---\nversion: 0.131.0\ndeviations: []\n---\n', { templates: ['repo-turbo'] }),
+    '---\nversion: 0.131.0\ntemplates: [repo-turbo]\ndeviations: []\n---\n',
+  );
+  assert.equal(
+    setMarkerKeys('\uFEFF---\r\ntenant: acme\r\n---\r\n', { ci_strategy: 'github' }),
+    '\uFEFF---\r\ntenant: acme\r\nci_strategy: github\r\n---\r\n',
+    'a byte order mark and CRLF line endings stay',
+  );
+});
+
+test('setMarkerKeys writes a value in the style of the one it replaces', () => {
+  assert.equal(
+    setMarkerKeys('---\ntemplates:\n- repo-turbo\n---\n', { templates: ['repo-turbo', 'updates'] }),
+    '---\ntemplates:\n- repo-turbo\n- updates\n---\n',
+  );
+  assert.equal(
+    setMarkerKeys('---\ntemplates: [repo-turbo]   # what renders\n---\n', { templates: ['repo-turbo', 'updates'] }),
+    '---\ntemplates: [repo-turbo, updates]   # what renders\n---\n',
+  );
+  assert.equal(setMarkerKeys('---\ntemplates:\n---\n', { templates: ['updates'] }), '---\ntemplates: [updates]\n---\n');
+  assert.equal(setMarkerKeys('---\nname: "web"\n---\n', { name: 'site' }), '---\nname: "site"\n---\n');
+  assert.equal(setMarkerKeys('---\nname: "web"\n---\n', { name: 3 }), '---\nname: 3\n---\n');
+});
+
+test('setMarkerKeys refuses what it cannot write without reformatting', () => {
+  assert.throws(() => setMarkerKeys('# just prose', { tenant: 'acme' }), /no frontmatter/);
+  assert.throws(() => setMarkerKeys('---\n{tenant: acme}\n---\n', { major: 1 }), /block mapping/);
+  assert.throws(() => setMarkerKeys('---\n- a list\n---\n', { major: 1 }), /not a mapping/);
+  assert.throws(() => setMarkerKeys('---\na: [\n---\n', { major: 1 }), /frontmatter/);
+  assert.throws(() => setMarkerKeys('---\n---\n', { major: undefined }), /`major`/);
 });
