@@ -489,3 +489,17 @@ test('a reader whose only fault is a read its owner failed to resolve renders no
     { template: 'orchard', other: undefined, path: undefined, question: 'trees' },
   ]);
 });
+
+test("an empty directory of one template at another template's file is an error naming the first by name in template", () => {
+  const dir = { text: '', mode: DIRECTORY | 0o755 };
+  for (const templates of [
+    [template(basket, { attic: dir }), template(shelf, { '{{ book }}': 'a file' })],
+    [template(shelf, { '{{ book }}': 'a file' }), template(basket, { attic: dir })],
+  ]) {
+    const result = render(templates, { fruit: 'pear', book: 'attic' });
+    assert.deepEqual(where(result.errors), [
+      { template: 'basket', other: 'shelf', path: 'files/attic', question: undefined },
+    ]);
+    assert.equal(result.errors[0]?.message, "basket's attic and shelf's {{ book }} both render to attic");
+  }
+});
