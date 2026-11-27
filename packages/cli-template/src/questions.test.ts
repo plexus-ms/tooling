@@ -595,3 +595,231 @@ test('the unused answers are listed even when the render has errors', () => {
   assert.equal(result.errors.length, 1);
   assert.deepEqual(result.unused, ['colour']);
 });
+
+// Ported from tests/test_copy.py::test_validate_init_data: given answers cast to their type, with
+// the validators and the choices of its plain cases. The Python-only values (bytes, Decimal, Enum,
+// object) have no JSON counterpart. A number carries no `.0` here (1.0 is 1), so a float prints as
+// the shortest number.
+const givens: [string, unknown, unknown][] = [
+  ['type: int', 'no-int', 'ERROR'],
+  ['type: int', '0', 0],
+  ['type: int\nvalidator: "{% if q <= 0 %}must be positive{% endif %}"', '0', 'ERROR'],
+  ['type: int\nvalidator: "{% if q <= 0 %}must be positive{% endif %}"', '1', 1],
+  ['type: str', 'string', 'string'],
+  ['type: str', 1, '1'],
+  ['type: str', 1.1, '1.1'],
+  ['type: str', true, 'True'],
+  ['type: str', false, 'False'],
+  ['type: str', {}, 'ERROR'],
+  ['type: str', [], 'ERROR'],
+  ['type: str', ['a'], 'ERROR'],
+  ['type: str', { a: 1 }, 'ERROR'],
+  ['type: str\nvalidator: "{% if q|length < 3 %}too short{% endif %}"', 'ab', 'ERROR'],
+  ['type: str\nvalidator: "{% if q|length < 3 %}too short{% endif %}"', 'abc', 'abc'],
+  ['type: bool', 'true', true],
+  ['type: bool', 'false', false],
+  ['type: int\nchoices: [1, 2, 3]', '1', 1],
+  ['type: int\nchoices: [1, 2, 3]', '4', 'ERROR'],
+];
+for (const [spec, given, expected] of givens) {
+  test(`${JSON.stringify(spec)} given ${JSON.stringify(given)} is ${expected === 'ERROR' ? 'an error' : JSON.stringify(expected)}`, () => {
+    const result = basket(`q:\n${spec.replace(/^/gm, '  ')}`, { q: given });
+    if (expected === 'ERROR')
+      assert.deepEqual(
+        result.errors.map(({ question }) => question),
+        ['q'],
+      );
+    else assert.deepEqual([result.errors, result.answers], [[], { q: expected }]);
+  });
+}
+
+// Ported from tests/test_copy.py::test_validate_default_value, the cases the first table leaves out.
+// Deliberate differences from copier, each stated in the header of questions.ts: a number carries no
+// `.0`, so a `str` of 1.0 is "1".
+const moreCasts: [string, string, unknown][] = [
+  ['str', '1.0', '1'],
+  ['str', 'true', 'True'],
+  ['str', '{}', 'ERROR'],
+  ['str', '[]', 'ERROR'],
+  ['float', '1.0', 1],
+  ['json', '"1"', 1],
+  ['json', '"false"', false],
+  ['json', 'true', true],
+  ['json', '1.1', 1.1],
+  ['yaml', '1', 1],
+  ['yaml', '"1.1"', 1.1],
+  ['yaml', 'true', true],
+  ['yaml', '"false"', false],
+  ['yaml', '{}', {}],
+  ['yaml', '[]', []],
+  ['yaml', '"{}"', {}],
+];
+for (const [type, source, expected] of moreCasts) {
+  test(`a ${type} default of ${source} is ${expected === 'ERROR' ? 'an error' : `the answer ${JSON.stringify(expected)}`} (more)`, () => {
+    const result = basket(`q:\n  type: ${type}\n  default: ${source}`, {});
+    if (expected === 'ERROR')
+      assert.deepEqual(
+        result.errors.map(({ question }) => question),
+        ['q'],
+      );
+    else assert.deepEqual([result.errors, result.answers], [[], { q: expected }]);
+  });
+}
+
+// Deliberate difference from copier, which truncates 1.5 and takes a bool as 1.
+test('an int from a fraction or a bool is an error', () => {
+  for (const given of [1.5, '1.5', true, false, '1e3', '', ' ', '--1', '1_000']) {
+    assert.equal(basket('q:\n  type: int', { q: given }).errors.length, 1, JSON.stringify(given));
+  }
+});
+
+// Deliberate difference from copier, which takes Python's `float` syntax: no underscores, no nan, no inf.
+test('a float from nan, inf, an underscore, a bool or nothing is an error', () => {
+  for (const given of ['nan', 'inf', '-Infinity', '1_000', '1_0.5', true, '', ' ', '.', '1e', 'e5']) {
+    assert.equal(basket('q:\n  type: float', { q: given }).errors.length, 1, JSON.stringify(given));
+  }
+});
+
+// Deliberate difference from copier, whose int has no limit: JavaScript's integers are exact up to 2^53 - 1.
+test('an int beyond the safe integers is an error, and the last safe one is not', () => {
+  assert.deepEqual(basket('q:\n  type: int', { q: '9007199254740991' }).answers, { q: 9007199254740991 });
+  assert.deepEqual(basket('q:\n  type: int', { q: '-9007199254740991' }).answers, { q: -9007199254740991 });
+  for (const given of ['9007199254740992', '9007199254740993', '-9007199254740993']) {
+    assert.equal(basket('q:\n  type: int', { q: given }).errors.length, 1, given);
+  }
+});
+
+test('an int and a float read a sign, surrounding whitespace, an exponent and a leading or trailing dot as Python does', () => {
+  for (const [given, expected] of [
+    [' 7 ', 7],
+    ['+5', 5],
+    ['-5', -5],
+    ['\n12\t', 12],
+    ['007', 7],
+  ] as const) {
+    assert.deepEqual(basket('q:\n  type: int', { q: given }).answers, { q: expected }, given);
+  }
+  for (const [given, expected] of [
+    [' 1.5 ', 1.5],
+    ['+2', 2],
+    ['-.5', -0.5],
+    ['.5', 0.5],
+    ['5.', 5],
+    ['1e3', 1000],
+    ['1.5E-2', 0.015],
+    ['2e+2', 200],
+  ] as const) {
+    assert.deepEqual(basket('q:\n  type: float', { q: given }).answers, { q: expected }, given);
+  }
+});
+
+// Deliberate difference from copier: JavaScript has one number type, so a whole number written 1.0
+// is the number 1, and an untyped default written that way is inferred as int.
+test('a float prints without .0, and an untyped default written 1.0 is an int', () => {
+  const printed = basket('q:\n  type: float\n  default: 1.0', {}, '{{ q }}');
+  assert.deepEqual(printed.answers, { q: 1 });
+  assert.equal(printed.out, '1');
+  assert.deepEqual(basket('q:\n  default: 1.0', { q: '7' }).answers, { q: 7 });
+  assert.equal(basket('q:\n  default: 1.0', { q: '7.5' }).errors.length, 1);
+});
+
+test('an untyped default infers int for a whole number and float for a fraction', () => {
+  const whole = 'q:\n  default: 2';
+  assert.deepEqual(basket(whole, { q: '3' }).answers, { q: 3 });
+  assert.equal(basket(whole, { q: '3.5' }).errors.length, 1);
+  assert.equal(basket(whole, { q: 'x' }).errors.length, 1);
+  const fraction = 'q:\n  default: 2.5';
+  assert.deepEqual(basket(fraction, { q: '3' }).answers, { q: 3 });
+  assert.deepEqual(basket(fraction, { q: '3.5' }).answers, { q: 3.5 });
+  assert.deepEqual(basket(fraction, {}).answers, { q: 2.5 });
+});
+
+// Ported from tests/test_tools.py::test_cast_to_bool_*, completed after copier's function: a string
+// that Python's float() reads is a number, by its value, and nothing else is, so `0x0` is true.
+for (const [given, expected] of [
+  [0, false],
+  [1, true],
+  [-2, true],
+  [[], false],
+  [{}, false],
+  [[0], true],
+  [{ a: 0 }, true],
+  ['0', false],
+  [' 0 ', false],
+  ['0.0', false],
+  ['-0', false],
+  ['.0', false],
+  ['0e5', false],
+  ['0_0', false],
+  ['1e0', true],
+  ['0x0', true],
+  ['0b0', true],
+  ['0o0', true],
+  ['nan', true],
+  ['inf', true],
+  ['y', true],
+  ['yes', true],
+  ['t', true],
+  ['TRUE', true],
+  ['on', true],
+  ['n', false],
+  ['no', false],
+  ['f', false],
+  ['False', false],
+  ['OFF', false],
+  ['~', false],
+  ['null', false],
+  ['None', false],
+  ['maybe', true],
+] as const) {
+  test(`a bool answer of ${JSON.stringify(given)} is ${expected}`, () => {
+    assert.deepEqual(basket('q:\n  type: bool', { q: given }).answers, { q: expected });
+  });
+}
+
+test('a bool from null is an error', () => {
+  assert.equal(basket('q:\n  type: bool', { q: null }).errors.length, 1);
+});
+
+test('a json answer is parsed as JSON, not as YAML', () => {
+  assert.deepEqual(basket('q:\n  type: json', { q: '{"a": [1, null]}' }).answers, { q: { a: [1, null] } });
+  for (const given of ['{a: 1}', 'yes', '010', "'x'", '[1, 2', '']) {
+    assert.equal(basket('q:\n  type: json', { q: given }).errors.length, 1, given);
+  }
+  assert.deepEqual(basket('q:\n  type: json', { q: { a: 1 } }).answers, { q: { a: 1 } });
+});
+
+// Copier reads YAML 1.1.
+test('a yaml answer is read as YAML 1.1', () => {
+  for (const [given, expected] of [
+    ['yes', true],
+    ['on', true],
+    ['No', false],
+    ['010', 8],
+    ['1:30', 90],
+    ['{a: 1}', { a: 1 }],
+    ['- 1\n- b', [1, 'b']],
+    ['', null],
+  ] as const) {
+    assert.deepEqual(basket('q:\n  type: yaml', { q: given }).answers, { q: expected }, given);
+  }
+  assert.equal(basket('q:\n  type: yaml', { q: '[1, 2' }).errors.length, 1);
+});
+
+test('a question named like an inherited property has no answer until one is given', () => {
+  for (const name of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+    const missing = basket(`${name}:`, {});
+    assert.deepEqual(
+      missing.errors.map(({ question }) => question),
+      [name],
+    );
+    const given = basket(`${name}:\n  type: str`, JSON.parse(`{"${name}": "x"}`));
+    assert.deepEqual(given.errors, []);
+    assert.equal(Object.getOwnPropertyDescriptor(given.answers, name)?.value, 'x');
+  }
+});
+
+test('a default that is a list renders each item, and the other items stay as they are', () => {
+  const questions = 'a:\n  default: x\nq:\n  type: yaml\n  default: ["{{ a }}-1", 2, true, "plain"]';
+  assert.deepEqual(basket(questions, {}).answers, { a: 'x', q: ['x-1', 2, true, 'plain'] });
+});
