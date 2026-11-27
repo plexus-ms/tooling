@@ -303,3 +303,11 @@ test('a file with another rendered below it is an error naming both sources', ()
   assert.equal(result.errors[0]?.message, 'x renders to x, a file, and {{ target }}/y renders to x/y below it');
   assert.deepEqual(listing(result.tree), {});
 });
+
+// No original: copier's `.jinja` file renders to an empty name and is skipped.
+test('a file named only .jinja is an error naming its path', () => {
+  const result = render([template(ripe, { 'shelf/.jinja': 'x' })], { ripe: true });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.path, 'files/shelf/.jinja');
+  assert.deepEqual(listing(result.tree), {});
+});
