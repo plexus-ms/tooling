@@ -1115,6 +1115,31 @@ test('doctor reads the plx pin and the tracked markers, and fails the repo for e
   );
 });
 
+test('a root marker that cannot be read, beside a nested one that can, is one finding', () => {
+  const sites: MarkerSite[] = [
+    { dir: '.', problem: 'marker: `templates` must be a list of template names' },
+    site('apps/a'),
+  ];
+  assert.deepEqual(findings(crossed(sites)), [
+    { problem: 'PLEXUS.md: marker: `templates` must be a list of template names' },
+  ]);
+});
+
+test('a repo whose root marker lists the operations template, with no answers file, is the operations repo', async () => {
+  const tree = ws();
+  (tree.web as Tree)['PLEXUS.md'] = '---\nversion: 0.131.0\ntemplates: [repo-operations]\n---\n';
+  (tree.web as Tree)['mise.toml'] = '[tools]\n"npm:@plexus-ms/cli" = "0.131.0"\n';
+  const tracked = { '/ws/web': ['PLEXUS.md', 'mise.toml', 'apps/site/docker/compose.yaml'] };
+  const report = await doctorOver(tree, '/ws/web', VERBS, tracked);
+  assert.deepEqual(
+    report.units.map((u) => [u.path, u.kind]),
+    [
+      ['.', 'operations'],
+      ['apps/site', 'app'],
+    ],
+  );
+});
+
 test('a tracked file holding a conflict marker is a finding of the repo, of no requirement, that no deviation silences', () => {
   const marked = repo({ conflicted: ['apps/a/page.tsx', 'mise.toml'] });
   assert.deepEqual(findings(marked), [
