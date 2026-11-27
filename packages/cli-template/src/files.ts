@@ -12,9 +12,7 @@
 // NUL character, or is a file at the output's root is an error.
 //
 // A file whose name ends in `.jinja` is rendered with the context and lands
-// without the suffix; any other is copied as bytes, unless a `.jinja` file of
-// the template stands beside it, by its own name or by the name it renders to:
-// the template wins and the file is not written, as in copier. A `.jinja` file
+// without the suffix; any other is copied as bytes. A `.jinja` file
 // that is not valid text is copied as bytes, under the name without the
 // suffix; its content is otherwise carried as it is, a byte order mark
 // included. The mode is reduced to 0o644 or, where its owner may execute it,
@@ -22,7 +20,9 @@
 // path in the template.
 //
 // Every path is written once: two sources that render to one path are an
-// error naming both, as is a file with another path rendered below it. Two
+// error naming both, a file beside its `.jinja` sibling included, as is a file
+// with another path rendered below it. Copier differs here: the `.jinja` file
+// wins and the other is silently not written. Two
 // directories at one path are one directory. A directory that renders to a
 // path and holds nothing in the result, because the template holds nothing
 // there or because every file below it was skipped, lands as an empty
@@ -32,7 +32,7 @@
 import { messageOf } from './errors.ts';
 import { type Context, renderString } from './jinja.ts';
 import { FILES, type Template } from './manifest.ts';
-import { DIRECTORY, type Entry, MODE_TYPE, REGULAR, type RenderError } from './types.ts';
+import { DIRECTORY, type Entry, fileMode, isExecutable, MODE_TYPE, REGULAR, type RenderError } from './types.ts';
 
 /** A rendered entry, with the path below `files/` it came from. */
 export interface Rendered {
@@ -49,7 +49,7 @@ const encoder = new TextEncoder();
 const EMPTY_DIRECTORY: Entry = { bytes: new Uint8Array(), mode: DIRECTORY | 0o755 };
 
 /** A file's entry as `render` writes it: its bytes, and a mode of 0o644 or 0o755. */
-const written = (bytes: Uint8Array, mode: number): Entry => ({ bytes, mode: REGULAR | (mode & 0o100 ? 0o755 : 0o644) });
+const written = (bytes: Uint8Array, mode: number): Entry => ({ bytes, mode: fileMode(isExecutable(mode)) });
 
 /** The text of `bytes`, or undefined where they are not valid UTF-8. */
 function textOf(bytes: Uint8Array): string | undefined {
@@ -100,11 +100,6 @@ export function renderFiles(template: Template, context: Context, errors: Render
     else fail(value.source, `${first.source} and ${value.source} both render to ${path}`);
   };
 
-  const isTemplateFile = (source: string): boolean => {
-    const entry = template.files.get(source);
-    return entry !== undefined && (entry.mode & MODE_TYPE) === REGULAR;
-  };
-
   // Where the source name `name`, which is the last part of `source`, lands below the rendered directory `parent`.
   const locate = (parent: Location, name: string, source: string): Location => {
     if (typeof parent === 'string') return 'skipped';
@@ -151,9 +146,6 @@ export function renderFiles(template: Template, context: Context, errors: Render
       fail(source, `${source} renders to the output's root, which is no file`);
       continue;
     }
-    // As copier does, a `.jinja` file beside a file wins. A rendered path is
-    // looked up among the source paths, as copier does.
-    if (!isTemplate && (isTemplateFile(source + SUFFIX) || isTemplateFile(path + SUFFIX))) continue;
     const text = isTemplate ? textOf(entry.bytes) : undefined;
     if (text === undefined) {
       put(path, { entry: written(entry.bytes, entry.mode), source });

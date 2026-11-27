@@ -183,25 +183,50 @@ test('a .jinja file that is not valid text is copied as bytes, without the suffi
   assert.deepEqual(listing(result.tree), { 'logo.png': { bytes, mode: REGULAR | 0o644 } });
 });
 
-// No test of its own in copier; the rule is `_render_path` and `_render_parts`
-// in copier/_main.py: a file whose `.jinja` sibling exists is not written, by
-// its source name or by the name it renders to, so the template wins.
-test('a file beside its .jinja sibling is not written, and the sibling is', () => {
+// Differs from copier (copier/_main.py `_render_path` and `_render_parts`),
+// where the `.jinja` file wins and the file beside it is silently not written:
+// two sources at one path are an error, however they are named.
+test('a file beside its .jinja sibling is an error naming both sources, in either order', () => {
   const result = render(
     [
       template(ripe, {
-        'a.txt.jinja': 'rendered {{ ripe }}',
+        'a.txt.jinja': 'rendered',
         'a.txt': 'plain',
-        'b.md.jinja': 'rendered',
         '{{ target }}.md': 'plain',
-        'dir/c.txt.jinja': 'rendered',
+        'b.md.jinja': 'rendered',
         'dir/c.txt': 'plain',
+        'dir/c.txt.jinja': 'rendered',
+        '{{ target }}.txt.jinja': 'rendered',
+        '{{ target }}.txt': 'plain',
       }),
     ],
     { ripe: true, target: 'b' },
   );
-  assert.deepEqual(result.errors, []);
-  assert.deepEqual(listing(result.tree), { 'a.txt': 'rendered True', 'b.md': 'rendered', 'dir/c.txt': 'rendered' });
+  assert.deepEqual(
+    result.errors.map(({ path, message }) => ({ path, message })),
+    [
+      { path: 'files/a.txt', message: 'a.txt.jinja and a.txt both render to a.txt' },
+      { path: 'files/b.md.jinja', message: '{{ target }}.md and b.md.jinja both render to b.md' },
+      { path: 'files/dir/c.txt.jinja', message: 'dir/c.txt and dir/c.txt.jinja both render to dir/c.txt' },
+      { path: 'files/{{ target }}.txt', message: '{{ target }}.txt.jinja and {{ target }}.txt both render to b.txt' },
+    ],
+  );
+  assert.deepEqual(listing(result.tree), {});
+});
+
+// No original: where a path is skipped or fails, the sibling adds no error.
+test('a file beside its .jinja sibling adds no error where their path is skipped or fails', () => {
+  const skipped = render(
+    [template(ripe, { '{% if ripe %}x.txt{% endif %}.jinja': 'a', '{% if ripe %}x.txt{% endif %}': 'b' })],
+    { ripe: false },
+  );
+  assert.deepEqual(skipped.errors, []);
+  assert.deepEqual(listing(skipped.tree), {});
+  const failing = render([template(ripe, { '{{ nope }}.txt.jinja': 'a', '{{ nope }}.txt': 'b' })], { ripe: true });
+  assert.deepEqual(
+    failing.errors.map(({ path }) => path),
+    ['files/{{ nope }}.txt.jinja', 'files/{{ nope }}.txt'],
+  );
 });
 
 // Decided in the design (§ 2.6): copier copies or keeps a symlink, a template
@@ -353,21 +378,10 @@ test('a symlink anywhere in a template is an error naming its path', () => {
 });
 
 // No original: in copier a directory beside a file is no template of it either.
-test('only a regular .jinja file beside a file wins, not a directory of that name', () => {
+test('a directory named like a template of a file beside it is no template of it', () => {
   const result = render([template(ripe, { 'a.txt': 'plain', 'a.txt.jinja': dir })], { ripe: true });
   assert.deepEqual(result.errors, []);
   assert.deepEqual(listing(result.tree), { 'a.txt': 'plain', 'a.txt.jinja': dir });
-});
-
-// No original: the source name of a plain file is looked up beside its
-// template too, not only the name it renders to.
-test('a file whose own name holds Jinja is not written beside its .jinja sibling', () => {
-  const result = render([template(ripe, { '{{ target }}.txt.jinja': 'rendered', '{{ target }}.txt': 'plain' })], {
-    ripe: true,
-    target: 'b',
-  });
-  assert.deepEqual(result.errors, []);
-  assert.deepEqual(listing(result.tree), { 'b.txt': 'rendered' });
 });
 
 // No original.
