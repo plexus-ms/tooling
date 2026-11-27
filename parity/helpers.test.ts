@@ -9,15 +9,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { REGULAR, type Tree } from '../packages/cli-template/src/index.ts';
-import { cloneTemplateRepos } from './harness.ts';
+import { cloneTemplateRepos, GIT_CONFIG, isolatedEnv, run } from './harness.ts';
 import {
   consumerEdits,
   copierAnswersAsEngine,
   copierJob,
+  copierManifest,
   diffTrees,
   normaliseCopierTree,
+  portedPath,
   stripCopierMarker,
   unifyConflictLabels,
+  unifyTree,
 } from './helpers.ts';
 
 const enc = (text: string) => new TextEncoder().encode(text);
@@ -225,4 +228,108 @@ test('cloning the template repos from a base gives each repo with its tags', asy
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('bytes are compared exactly: a missing final newline is a difference', () => {
+  assert.deepEqual(diffTrees(tree({ 'a.txt': 'x' }), tree({ 'a.txt': 'x\n' })), [
+    'a.txt: bytes differ, at the end: copier 1 bytes, the engine 2 bytes',
+  ]);
+  assert.deepEqual(diffTrees(tree({ 'a.txt': 'x\r\n' }), tree({ 'a.txt': 'x\n' })), [
+    'a.txt: bytes differ, first at line 1: copier "x\r", the engine "x"',
+  ]);
+});
+
+test('a copier template file named .gitignore is carried as .gitignore.jinja, and no other', () => {
+  assert.equal(portedPath('.gitignore'), '.gitignore.jinja');
+  assert.equal(portedPath('apps/web/.gitignore'), 'apps/web/.gitignore.jinja');
+  assert.equal(portedPath('foo.gitignore'), 'foo.gitignore');
+  assert.equal(portedPath('.gitignore.jinja'), '.gitignore.jinja');
+});
+
+test("a tree's text files lose their side's conflict labels, and other files are as they were", () => {
+  const binary = { bytes: Uint8Array.of(0xff, 0xfe), mode: REGULAR | 0o644 };
+  const unified = unifyTree(
+    new Map([...tree({ 'a.txt': '<<<<<<< current\n', 'b.txt': '<<<<<<< before updating\n' }), ['bin', binary]]),
+    'engine',
+  );
+  assert.equal(dec(unified.get('a.txt')?.bytes ?? new Uint8Array()), '<<<<<<<\n');
+  assert.equal(dec(unified.get('b.txt')?.bytes ?? new Uint8Array()), '<<<<<<< before updating\n');
+  assert.equal(unified.get('bin'), binary);
+});
+
+test("the ring's git sees no setting of the machine's own, however the machine sets it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'parity-env-'));
+  const keys = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_DIR'];
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    const ring = join(dir, 'ring');
+    const user = join(dir, 'user');
+    writeFileSync(ring, GIT_CONFIG);
+    writeFileSync(user, '[merge]\n\tconflictStyle = zdiff3\n[core]\n\texcludesFile = /nonexistent\n');
+    Object.assign(process.env, {
+      GIT_CONFIG_GLOBAL: user,
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'merge.conflictStyle',
+      GIT_CONFIG_VALUE_0: 'diff3',
+      GIT_DIR: join(dir, 'nowhere'),
+    });
+    const env = isolatedEnv(ring);
+    assert.deepEqual(
+      Object.keys(env)
+        .filter((name) => name.startsWith('GIT_'))
+        .sort(),
+      ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_TERMINAL_PROMPT'],
+    );
+    const get = (key: string) => run('git', ['config', '--get', key], env, dir).catch(() => '');
+    assert.equal(await get('merge.conflictStyle'), '');
+    assert.equal((await get('core.excludesFile')).trim(), '/dev/null');
+    assert.equal((await get('core.attributesFile')).trim(), '/dev/null');
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const manifest = `_exclude:
+  - "{% if _copier_operation == 'update' %}PLEXUS.md{% endif %}"
+  - "{% if _copier_operation == 'update' %}src/a.ts{% endif %}"
+_skip_if_exists:
+  - src/a.ts
+  - PLEXUS.md
+_tasks:
+  - command: "git init"
+    when: "{{ _copier_operation == 'copy' }}"
+  - "mise install"
+  - command: "only on update"
+    when: "{{ _copier_operation == 'update' }}"
+  - command: "mise exec -- npx corepack use pnpm@12"
+    when: "{{ _copier_operation == 'copy' }}"
+other: x
+`;
+
+test("copier's manifest gives what a copy runs, and the files it skips or leaves out on an update", () => {
+  assert.deepEqual(copierManifest(manifest), {
+    skipIfExists: ['PLEXUS.md', 'src/a.ts'],
+    excludedOnUpdate: ['PLEXUS.md', 'src/a.ts'],
+    birth: [
+      ['git', 'init'],
+      ['mise', 'install'],
+      ['mise', 'exec', '--', 'npx', 'corepack', 'use', 'pnpm@12'],
+    ],
+  });
+});
+
+test("copier's manifest without those keys has none of them", () => {
+  assert.deepEqual(copierManifest('other: x\n'), { skipIfExists: [], excludedOnUpdate: [], birth: [] });
+});
+
+test("copier's manifest in a form the mapping does not know is an error, not a guess", () => {
+  const tasks = (task: string) => `_tasks:\n  - ${task}\n`;
+  assert.throws(() => copierManifest(`_exclude:\n  - "docs"\n`), /_exclude/);
+  assert.throws(() => copierManifest(tasks('{command: "a", when: "{{ x }}"}')), /when/);
+  assert.throws(() => copierManifest(tasks('"echo \'a b\'"')), /quot/);
+  assert.throws(() => copierManifest('- a\n'), /mapping/);
 });
