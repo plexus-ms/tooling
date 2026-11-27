@@ -25,8 +25,9 @@
 //
 // git runs with no configuration but its built-in defaults: none of the
 // caller's, so that `merge.conflictStyle` and the like cannot change the
-// result, and none from the environment of a git process that may have started
-// this one, a hook's for one. Bytes are carried as they are: git merges lines
+// result; none from the environment of a git process that may have started
+// this one, a hook's for one; and none of a repository the temporary directory
+// may lie in, which git would otherwise find by walking up from it. Bytes are carried as they are: git merges lines
 // whatever their ending and leaves the bytes of each line alone. A binary side
 // never reaches it, since the core decides what is binary (merge.ts); git
 // would fail on one.
@@ -37,7 +38,7 @@
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { devNull, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { FileSides, MergedFile } from './types.ts';
 
 /** The labels of the three sides, in the order git merge-file takes them. */
@@ -75,7 +76,8 @@ function conflicted(bytes: Uint8Array): boolean {
 /** What git prints for `args` in `cwd`, with no configuration but its defaults; a failure names `path`. */
 function git(args: readonly string[], cwd: string, path: string): Promise<Uint8Array> {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
-  Object.assign(env, { GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1' });
+  // No global or system configuration, and no repository above `cwd` whose own would apply.
+  Object.assign(env, { GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1', GIT_CEILING_DIRECTORIES: dirname(cwd) });
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     const stdout: Buffer[] = [];
