@@ -345,3 +345,95 @@ list:
     list: ['x', 'y'],
   });
 });
+
+// Ported from tests/test_copy.py::test_validate_init_data, the plain choices cases.
+test('choices restrict the value of a given answer and of a default', () => {
+  const valid = basket('q:\n  choices: [one, two]', { q: 'two' });
+  assert.deepEqual(valid.errors, []);
+  assert.deepEqual(valid.answers, { q: 'two' });
+  const given = basket('q:\n  type: str\n  choices: [one, two]', { q: 'three' });
+  assert.equal(given.errors.length, 1);
+  assert.equal(given.errors[0]?.question, 'q');
+  assert.match(given.errors[0]?.message ?? '', /"three" is not one of one, two/);
+  const byDefault = basket('q:\n  type: str\n  default: three\n  choices: [one, two]', {});
+  assert.match(byDefault.errors[0]?.message ?? '', /"three" is not one of one, two/);
+});
+
+test('choices are cast to the question type, as the answer is, and a choice that cannot be is an error', () => {
+  const ok = basket('q:\n  type: int\n  choices: [1, 2, 3]', { q: '2' });
+  assert.deepEqual(ok.answers, { q: 2 });
+  const bad = basket('q:\n  type: int\n  choices: [1, two]', { q: 1 });
+  assert.equal(bad.errors.length, 1);
+  assert.match(bad.errors[0]?.message ?? '', /two/);
+});
+
+test('choices given as a map of label to value restrict the value, not the label', () => {
+  const questions = 'q:\n  type: int\n  choices:\n    one: 1\n    two: 2';
+  assert.deepEqual(basket(questions, { q: 2 }).answers, { q: 2 });
+  assert.equal(basket(questions, { q: 'two' }).errors.length, 1);
+});
+
+// Ported from tests/test_copy.py::test_multiselect_choices_preserve_order, the order part only:
+// the issue's rules have no multiselect, so what is kept is that choices stay in the manifest's
+// order, which a plain object would break for integer-like labels.
+test('choices keep the order the manifest writes them in', () => {
+  const result = basket('q:\n  type: int\n  choices:\n    "3": 3\n    "1": 1\n    "2": 2', { q: 4 });
+  assert.match(result.errors[0]?.message ?? '', /is not one of 3, 1, 2/);
+});
+
+// Ported from tests/test_copy.py::test_templated_choices, the list and map forms: the pair and
+// {value, validator} forms of copier's extended syntax are not part of the engine.
+const templated = [
+  ['a string holding a list', 'choices: \'["one", "two", "three"]\''],
+  [
+    'a string of Jinja that renders a list',
+    'choices: \'[{% for c in ["one", "two", "three"] %}{{ c }}{% if not loop.last %},{% endif %}{% endfor %}]\'',
+  ],
+  [
+    'a block of Jinja that renders a YAML list',
+    "choices: |\n  {%- for c in ['one', 'two', 'three'] %}\n  - {{ c }}\n  {%- endfor %}",
+  ],
+  [
+    'a block of Jinja that renders a map of label to value',
+    "choices: |\n  {%- for c in ['one', 'two', 'three'] %}\n  {{ c | upper }}: {{ c }}\n  {%- endfor %}",
+  ],
+  ['a list of Jinja items', 'choices: ["{{ \'one\' }}", "{{ \'two\' | lower }}", three]'],
+] as const;
+for (const [what, spec] of templated) {
+  test(`choices may be ${what}`, () => {
+    const result = basket(`q:\n  type: str\n${spec.replace(/^/gm, '  ')}`, { q: 'two' }, '{{ q }}');
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.out, 'two');
+    assert.equal(basket(`q:\n  type: str\n${spec.replace(/^/gm, '  ')}`, { q: 'four' }).errors.length, 1);
+  });
+}
+
+test('choices may use the answers before their question', () => {
+  const questions = 'kind:\n  default: fruit\nq:\n  choices: "{{ [kind, kind ~ \'s\'] | tojson }}"';
+  assert.deepEqual(basket(questions, { q: 'fruits' }).errors, []);
+  assert.equal(basket(questions, { q: 'nuts' }).errors.length, 1);
+});
+
+// Ported from tests/test_complex_questions.py::test_selection_type_cast, as given answers, with
+// the pair syntax written as a map; the choices' values are cast as the answer is.
+test('yaml choices compare the cast values, so null, numbers and lists can be choices', () => {
+  const questions = `postgres:
+  type: yaml
+  default: 10
+  choices:
+    I will use an external PostgreSQL server: null
+    "9.6": 9.6
+    "10": 10
+nulls:
+  type: yaml
+  choices:
+    same as key: same as key
+    yaml-casted to a real null: "null"
+    becomes array: "[one, 2, -3.0]"`;
+  const none = basket(questions, { nulls: 'null' });
+  assert.deepEqual(none.errors, []);
+  assert.deepEqual(none.answers, { postgres: 10, nulls: null });
+  const picked = basket(questions, { postgres: null, nulls: '[one, 2, -3.0]' });
+  assert.deepEqual(picked.answers, { postgres: null, nulls: ['one', 2, -3] });
+  assert.equal(basket(questions, { postgres: 11, nulls: 'null' }).errors.length, 1);
+});
