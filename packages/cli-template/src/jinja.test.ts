@@ -39,3 +39,18 @@ test('render offers the Python string methods templates call', () => {
   );
   assert.equal(renderString("{{ s.startswith('ab') }} {{ s.startswith('b') }}", { s: 'abc' }), 'True False');
 });
+
+test('render keeps a raw block verbatim, with whitespace control on either tag', () => {
+  assert.equal(renderString('{% raw %}${{ x }}{% endraw %}', {}), '${{ x }}');
+  assert.equal(renderString('a\n{% raw %}${{ x }}\n{%- endraw %}\nb', {}), 'a\n${{ x }}\nb');
+  assert.equal(renderString('a {%- raw -%}  ${{ x }}  {%- endraw -%}  b', {}), 'a${{ x }}b');
+  assert.equal(
+    renderString("{% raw %}${{ vars.S || '{% endraw %}{{ s }}{% raw %}' }}{% endraw %}", { s: 'github' }),
+    "${{ vars.S || 'github' }}",
+  );
+});
+
+test('render carries line endings as they are', () => {
+  assert.equal(renderString('a\r\n{{ x }}\r\n', { x: 1 }), 'a\r\n1\r\n');
+  assert.equal(renderString('a\rb\r', {}), 'a\rb\r');
+});
