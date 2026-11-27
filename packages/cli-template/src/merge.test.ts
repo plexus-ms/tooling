@@ -283,9 +283,11 @@ test('merge leaves absent a path the user deleted, even where the template chang
   });
 });
 
-// Ported from tests/test_updatediff.py, test_skip_update_deleted: a born-once
-// file the user deleted is written again, with every name of copier's parameters.
-test('merge writes a born-once path the current tree lacks, changed or not, and reports it as added', async () => {
+// Ported from tests/test_updatediff.py, test_skip_update_deleted, where our
+// rule differs: copier writes a skipped file the user deleted again on an
+// update; merge leaves it absent, like any file the user deleted, since the old
+// render holding it means it was born.
+test('merge leaves absent a born-once path the old render holds and the current tree lacks, changed or not, and reports it as kept where the template changed it', async () => {
   const names = [
     'skip_normal_file',
     'skip_unicode_âñ',
@@ -306,8 +308,29 @@ test('merge writes a born-once path the current tree lacks, changed or not, and 
     bornOnce: [...names, 'apple.txt'],
   });
   assert.deepEqual(result, {
-    tree: { ...Object.fromEntries(names.map((name) => [name, '1'])), 'apple.txt': 'green\n', another_file: 'foobar' },
-    report: [...names, 'apple.txt'].sort().map((name) => `${name}: added`),
+    tree: { another_file: 'foobar' },
+    report: ['apple.txt: kept'],
+    calls: [],
+  });
+});
+
+test('merge writes a born-once path at birth, where neither the old render nor the current tree holds it, and reports it as added', async () => {
+  // A template the old render lacks altogether, as when a directory takes it
+  // on, and one that adds a born-once file in a later version.
+  const result = await run({
+    old: { 'basket.txt': 'apples\n' },
+    new: { 'basket.txt': 'apples\n', 'shelf/label.txt': 'oak\n', 'notes.md': 'notes\n' },
+    current: { 'basket.txt': 'apples\n', 'shelf/index.txt': 'mine\n' },
+    bornOnce: ['shelf/label.txt', 'notes.md'],
+  });
+  assert.deepEqual(result, {
+    tree: {
+      'basket.txt': 'apples\n',
+      'shelf/index.txt': 'mine\n',
+      'shelf/label.txt': 'oak\n',
+      'notes.md': 'notes\n',
+    },
+    report: ['notes.md: added', 'shelf/label.txt: added'],
     calls: [],
   });
 });
@@ -570,6 +593,48 @@ test('merge leaves absent a path the user deleted where the template turns a fil
     new: { fig: directory(), date: 'brown\n' },
   });
   assert.deepEqual(result, { tree: {}, report: ['date: kept', 'fig: kept'], calls: [] });
+});
+
+test('merge leaves absent a born-once path the old render holds in any form or policy, also where a directory it lies in is a file or a symlink, and reports it as kept where the template changed it', async () => {
+  const link = { text: 'elsewhere', mode: SYMLINK | 0o777 };
+  const result = await run({
+    old: {
+      'apple.txt': 'red\n',
+      'pear.txt': 'green\n',
+      plum: directory(),
+      'crate/cherry.txt': 'red\n',
+      'tray/fig.txt': 'purple\n',
+      'box/date.txt': 'brown\n',
+    },
+    new: {
+      'apple.txt': 'green\n',
+      'pear.txt': 'green\n',
+      plum: 'blue\n',
+      'crate/cherry.txt': 'dark red\n',
+      'tray/fig.txt': 'violet\n',
+      'box/date.txt': 'brown\n',
+    },
+    current: { crate: 'wooden\n', tray: link, box: 'cardboard\n' },
+    // Merge in the old render, born-once in the new one; plum an empty directory before.
+    bornOnce: {
+      old: ['crate/cherry.txt', 'tray/fig.txt', 'box/date.txt'],
+      new: ['apple.txt', 'pear.txt', 'plum', 'crate/cherry.txt', 'tray/fig.txt', 'box/date.txt'],
+    },
+  });
+  assert.deepEqual(result, {
+    tree: { crate: 'wooden\n', tray: link, box: 'cardboard\n' },
+    report: ['apple.txt: kept', 'crate/cherry.txt: kept', 'plum: kept', 'tray/fig.txt: kept'],
+    calls: [],
+  });
+});
+
+test('merge leaves absent a path born-once in the old render that the new render merges, and the user deleted', async () => {
+  const result = await run({
+    old: { 'apple.txt': 'red\n', 'pear.txt': 'green\n' },
+    new: { 'apple.txt': 'green\n', 'pear.txt': 'green\n' },
+    bornOnce: { old: ['apple.txt', 'pear.txt'], new: [] },
+  });
+  assert.deepEqual(result, { tree: {}, report: ['apple.txt: kept'], calls: [] });
 });
 
 test('merge never reports a conflict for an empty directory the template drops or turns into the file the user already has', async () => {
