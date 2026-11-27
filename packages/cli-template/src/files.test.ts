@@ -292,3 +292,14 @@ test('two source directories at one path that end up empty are one directory', (
   assert.deepEqual(listing(result.tree), { docs: dir });
   assert.deepEqual([...result.files.keys()], ['docs']);
 });
+
+// No original: copier fails writing the second file. Here the tree could not
+// be written, so it is an error naming both sources, like two at one path.
+test('a file with another rendered below it is an error naming both sources', () => {
+  const result = render([template(where, { x: 'file', '{{ target }}/y': 'below' })], { target: 'x' });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.template, 'basket');
+  assert.equal(result.errors[0]?.path, 'files/{{ target }}/y');
+  assert.equal(result.errors[0]?.message, 'x renders to x, a file, and {{ target }}/y renders to x/y below it');
+  assert.deepEqual(listing(result.tree), {});
+});
