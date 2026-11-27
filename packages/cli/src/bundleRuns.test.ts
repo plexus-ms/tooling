@@ -1,17 +1,36 @@
 // The built plx, run as a process: the bundle has to start and has to apply, so
 // that a dependency left out of it (the engine loads a wasm file by a path of
-// its own) is found by `verify` and not by the first user. Needs `pnpm build`,
-// which turbo runs before the tests.
+// its own) is found by `verify` and not by the first user. The bundle is built
+// into a scratch directory, never into the package's own dist, which another
+// build may be writing at the same time; the scratch directory sees the
+// package's node_modules, where the bundle finds the engine as an installed
+// plx does.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, before, test } from 'node:test';
 import { version } from './program.ts';
 
-const PLX = join(import.meta.dirname, '..', 'dist', 'plx.js');
+const PACKAGE = join(import.meta.dirname, '..');
 const dir = realpathSync(mkdtempSync(join(tmpdir(), 'plx-bundle-')));
+const PLX = join(dir, 'built', 'dist', 'plx.js');
+before(() => {
+  mkdirSync(join(dir, 'built'));
+  copyFileSync(join(PACKAGE, 'package.json'), join(dir, 'built', 'package.json'));
+  symlinkSync(join(PACKAGE, 'node_modules'), join(dir, 'built', 'node_modules'));
+  execFileSync(process.execPath, ['build.js', join(dir, 'built', 'dist')], { cwd: PACKAGE });
+});
 after(() => rmSync(dir, { recursive: true, force: true }));
 
 test('the built plx starts', () => {
