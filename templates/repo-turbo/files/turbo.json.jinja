@@ -1,0 +1,35 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!**/{README,AGENTS,PLEXUS}.md",
+        "!.copier-answers.yml",
+        "!docs/**",
+        "!docker/compose*.yaml"
+      ],
+      "outputs": [{% if not publishes_packages %}".next/**", "!.next/cache/**", {% endif %}"dist/**"]
+    },
+    "check": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!**/{README,AGENTS,PLEXUS}.md",
+        "!.copier-answers.yml",
+        "!docs/**",
+        "!docker/compose*.yaml"
+      ]
+    },
+    "test": {
+      "dependsOn": ["build"],
+      "inputs": ["$TURBO_DEFAULT$", "!**/{README,AGENTS,PLEXUS}.md", "!.copier-answers.yml", "!docs/**"],
+      "passThroughEnv": ["CI", "DATABASE_URL", "E2E_*", "PLAYWRIGHT_*", "PW_TEST_*"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

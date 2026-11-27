@@ -1,0 +1,9 @@
+**/node_modules
+**/.next
+**/dist
+**/*.tsbuildinfo
+.git
+.github
+.turbo
+**/.DS_Store
+*.log

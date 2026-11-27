@@ -1,0 +1,109 @@
+{% if publishes_packages %}{% raw %}name: on_push
+
+# Generated from plexus-ms/template-repo-turbo: edit the template, never this file.
+# A package repo's trunk mount, check then publish; started by hand on a branch, snapshot versions of it (§ 5 PLX-Delivery).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      snapshot:
+        description: The dist-tag the snapshot versions are published under, as in my-change
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write{% endraw %}
+{%- if package_registry == 'github' %}
+  packages: write
+{%- else %}
+  id-token: write
+{%- if private_packages_scope %}
+  packages: read
+{%- endif %}
+{%- endif %}{% raw %}
+
+jobs:
+  check:
+    uses: plexus-ms/tooling/.github/workflows/_check.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      tasks: verify{% endraw %}{% if private_packages_scope %}
+      private-packages: true{% endif %}{% raw %}
+
+  publish:
+    needs: check
+    uses: plexus-ms/tooling/.github/workflows/_publish-package.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      registry: {% endraw %}{{ package_registry }}{% raw %}
+      snapshot: ${{ inputs.snapshot }}
+{% endraw %}{% else %}{% raw %}name: on_push
+
+# Generated from plexus-ms/template-repo-turbo: edit the template, never this file.
+# An app repo's environment-branch mount, check, verify, release (§§ 2 and 3 PLX-Delivery).
+
+on:
+  # No paths filter: a branch created at a known commit pushes no files and would start nothing.
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  actions: read
+
+jobs:
+  check:
+    concurrency:
+      group: on_push-verify-${{ github.ref }}
+      cancel-in-progress: true
+    uses: plexus-ms/tooling/.github/workflows/_check.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      turbo-cache: {% endraw %}{{ 'true' if ci_registry == 'own' else 'false' }}{% if private_packages_scope %}
+      private-packages: true{% endif %}{% raw %}
+    secrets:
+      op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+
+  verify:
+    needs: check
+    concurrency:
+      group: on_push-verify-${{ github.ref }}
+      cancel-in-progress: true
+    uses: plexus-ms/tooling/.github/workflows/_verify.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      registry: {% endraw %}{{ ci_registry }}{% raw %}
+      deploy: true
+      alerts-email: '{% endraw %}{{ alerts_email }}{% raw %}'{% endraw %}{% if private_packages_scope %}
+      private-packages: true{% endif %}{% raw %}
+    secrets:
+      op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+
+  release:
+    needs: verify{% endraw %}{% if display_versions %}{% raw %}
+    # Display versions (PLX-Releases): serialized per branch and never cancelled, so that two pushes to main
+    # never take the same number, and allowed to write the tag and the GitHub Release of the version it cuts.
+    concurrency:
+      group: on_push-release-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      packages: write
+      actions: read{% endraw %}{% endif %}{% raw %}
+    uses: plexus-ms/tooling/.github/workflows/_release.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      registry: {% endraw %}{{ ci_registry }}{% raw %}
+      overlay: {% endraw %}{{ ci_overlay }}{% raw %}
+      apps: ${{ needs.verify.outputs.apps }}
+      deploys: ${{ needs.verify.outputs.deploys }}
+      environment: ${{ needs.verify.outputs.environment }}{% endraw %}{% if display_versions %}
+      display-versions: true{% endif %}{% raw %}
+    secrets:
+      op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+{% endraw %}{% endif %}

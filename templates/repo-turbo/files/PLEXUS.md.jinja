@@ -1,0 +1,11 @@
+{% if publishes_packages -%}
+- A package repo of `{{ tenant }}`: it publishes the workspace packages under `packages/` to {{ "the forge's package registry, private to the tenant," if package_registry == 'github' else 'npm' }} from its trunk.
+{% else -%}
+- An app repo of `{{ tenant }}`: its apps under `apps/`, each with a marker of its own, and the workspace packages they share under `packages/`.
+{% endif -%}
+- The verbs answer at the root, `mise :dev`, `mise :build` and `mise :verify`, and hand over to Turborepo, which runs each project's `package.json` scripts in the order of the workspace graph.
+{% if not publishes_packages and display_versions -%}
+- Display versions (PLX-Releases): a production release that changes an app cuts the version tag `<major>.<minor>` with a GitHub Release, and the apps show their display version.
+  `major` above is the major the next version takes; raise it in the pull request that warrants it, and the minor counts up by itself.
+{% endif -%}
+- The Plexus version the repo is on is its `plx` pin in `mise.toml`; `plx update` takes in the template's changes.

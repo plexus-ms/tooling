@@ -89,7 +89,7 @@ test('a private packages scope is empty or like @acme', async () => {
     const { errors } = await render({ private_packages_scope: scope });
     assert.equal(errors.length, 1, scope);
     assert.equal(errors[0]?.question, 'private_packages_scope', scope);
-    assert.match(errors[0]?.message ?? '', /A scope, as in @acme, or empty/);
+    assert.match(errors[0]?.message ?? '', /A scope, as in @acme-corp, or empty/);
   }
 });
 

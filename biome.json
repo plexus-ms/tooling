@@ -1,4 +1,5 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
-  "extends": ["@plexus-ms/config/biome"]
+  "extends": ["@plexus-ms/config/biome"],
+  "files": { "includes": ["**", "!templates"] }
 }

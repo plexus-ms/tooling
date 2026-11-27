@@ -1,0 +1,18 @@
+packages:
+{%- if not publishes_packages %}
+  - "apps/*"
+{%- endif %}
+  - "packages/*"
+catalog:
+  typescript: ^6
+minimumReleaseAge: 4320
+minimumReleaseAgeExclude:
+  - "@plexus-ms/*"
+{%- if private_packages_scope %}
+  - "{{ private_packages_scope }}/*"
+registries:
+  "{{ private_packages_scope }}": https://npm.pkg.github.com/
+{%- endif %}
+catalogs:
+  plexus:
+    "@plexus-ms/config": ^0.120.0
