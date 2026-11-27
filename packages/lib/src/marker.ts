@@ -222,7 +222,12 @@ function replaceValue(yaml: string, doc: Document, pair: Pair, key: string, valu
     throw new Error(`marker: \`${key}\` has no value plx can replace`);
   if (isDeepStrictEqual(old.toJSON(), value)) return yaml;
   const [from, to] = old.range;
-  const colonEnd = yaml.indexOf(':', pair.key.range[1]) + 1;
+  // The key starts its line, and its colon follows it there: not an explicit key (`? a` above `: value`).
+  const [keyStart, keyEnd] = pair.key.range;
+  const colon = /^[ \t]*:/.exec(yaml.slice(keyEnd))?.[0];
+  if (colon === undefined || yaml.slice(lineStart(yaml, keyStart), keyStart).trim() !== '')
+    throw new Error(`marker: \`${key}\` is not written as \`${key}: value\` on a line of its own; set it by hand`);
+  const colonEnd = keyEnd + colon.length;
   const node = doc.createNode(value);
 
   if (isCollection(old) && !old.flow) {
