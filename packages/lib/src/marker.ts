@@ -201,7 +201,7 @@ const nameOf = (pair: Pair): string | undefined => (isScalar(pair.key) ? String(
  * comment lines directly over that key, which are about it; an answer last.
  */
 function insertKey(yaml: string, pairs: readonly Pair[], key: string, node: Node, eol: string): string {
-  if (isCollection(node)) node.flow = true;
+  forOneLine(node);
   const rank = RESERVED_KEYS.indexOf(key as (typeof RESERVED_KEYS)[number]);
   const next =
     rank === -1
@@ -292,18 +292,19 @@ function refuseShared(doc: Document, value: Node, key: string): void {
 /** Quotings a new string can take over from the one it replaces; a block scalar spans lines. */
 const ONE_LINE_STRINGS = ['PLAIN', 'QUOTE_SINGLE', 'QUOTE_DOUBLE'];
 
-/**
- * A value as text on one line: lists and mappings in flow style, a string
- * with a line break double-quoted, a string replacing a string quoted as
- * that one was.
- */
-function oneLine(node: Node, old: Node, key: string): string {
+/** A new value made to render on one line: lists and mappings in flow style, a string with a line break double-quoted. */
+function forOneLine(node: Node): void {
   if (isCollection(node)) node.flow = true;
   visit(node, {
     Scalar: (_, scalar) => {
       if (typeof scalar.value === 'string' && scalar.value.includes('\n')) scalar.type = 'QUOTE_DOUBLE';
     },
   });
+}
+
+/** A value as text on one line (`forOneLine`), a string replacing a string quoted as that one was. */
+function oneLine(node: Node, old: Node, key: string): string {
+  forOneLine(node);
   if (isScalar(node) && isScalar(old) && typeof node.value === 'string' && typeof old.value === 'string')
     if (!node.value.includes('\n') && ONE_LINE_STRINGS.includes(old.type ?? '')) node.type = old.type;
   // Rendered as the value of a stand-in key, not as a document of its own, where `---` is no plain string.
