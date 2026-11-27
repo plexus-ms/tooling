@@ -48,8 +48,10 @@ function fixture(name: string, list: string) {
 /** Runs `plx` with `args`, returning what it printed and the exit code it asked for. */
 async function plx(...args: string[]) {
   let stdout = '';
+  // The test runner reports through this stream in bytes; only the verb's text is taken.
   const write = process.stdout.write;
-  process.stdout.write = ((chunk: string) => {
+  process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+    if (typeof chunk !== 'string') return (write as (...a: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
     stdout += chunk;
     return true;
   }) as typeof process.stdout.write;
