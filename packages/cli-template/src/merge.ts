@@ -113,8 +113,9 @@ async function mergePath(
     return 'added';
   }
   if (same(old, next)) return undefined; // 2
+  if (kind(old) === DIRECTORY && next === undefined) return undefined;
   if (kind(current) === SYMLINK) return 'kept'; // 3
-  if (bornOnce) return 'kept';
+  if (bornOnce || current === undefined) return 'kept';
   const kinds = [old, next, current].map(kind);
   if (kinds.includes(REGULAR) && kinds.includes(DIRECTORY)) return 'conflicted'; // 4
   if (kinds.includes(DIRECTORY)) return undefined; // 5
