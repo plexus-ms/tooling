@@ -1168,6 +1168,26 @@ test('a repo whose root marker lists the operations template, with no answers fi
   );
 });
 
+test('a tracked marker that cannot be read is a finding of its repo and stops no other repo, and only where the checks run', async () => {
+  const broken = () => {
+    const tree = ws();
+    ((tree.web as Tree).apps as Tree).x = { 'PLEXUS.md': {} };
+    return tree;
+  };
+  const tracked = { '/ws/web': ['PLEXUS.md', 'apps/x/PLEXUS.md', 'apps/site/docker/compose.yaml'] };
+  const report = await doctorOver(broken(), '/ws', VERBS, tracked);
+  assert.deepEqual(
+    report.units.filter((u) => u.kind !== 'app').map((u) => [u.path, u.findings.map((f) => f.problem)]),
+    [
+      ['ops', []],
+      ['web', ['the tracked PLEXUS.md files could not be read: EISDIR: /ws/web/apps/x/PLEXUS.md']],
+    ],
+  );
+  const onCopier = { '/ws/web': [...(tracked['/ws/web'] ?? []), '.copier-answers.yml'] };
+  const skipped = await doctorOver(broken(), '/ws/web', VERBS, onCopier);
+  assert.deepEqual(skipped.units[0]?.findings, []);
+});
+
 test('a tracked file holding a conflict marker is a finding of the repo, of no requirement, that no deviation silences', () => {
   const marked = repo({ conflicted: ['apps/a/page.tsx', 'mise.toml'] });
   assert.deepEqual(findings(marked), [
