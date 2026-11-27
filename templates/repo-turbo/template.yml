@@ -1,0 +1,96 @@
+# Until the version that cuts over from copier is out, this template and
+# template-repo-turbo are one: a change to either is made in both.
+name: repo-turbo
+
+questions:
+  tenant:
+    type: str
+    help: "Tenant slug (URL-friendly)"
+
+  publishes_packages:
+    type: bool
+    help: "Does this repo publish npm packages from its trunk (changesets, § 5 PLX-Delivery) instead of deploying apps from environment branches?"
+    default: false
+
+  package_registry:
+    type: str
+    help: "Where the packages are published (§ 5 PLX-Delivery): npm, the public registry, through OIDC trusted publishing; github, the forge's package registry, private to the tenant, with the workflow's own token"
+    choices:
+      - npm
+      - github
+    default: npm
+    when: "{{ publishes_packages }}"
+
+  private_packages_scope:
+    type: str
+    help: "The npm scope of the tenant's private packages this repo installs from the forge's package registry (§ 5 PLX-Delivery), as in @acme-corp; empty when it installs none"
+    default: ""
+    # copier's regex_search is not in the engine: this is ^@[a-z0-9][a-z0-9._-]*$ as string tests.
+    validator: >-
+      {% if private_packages_scope %}{% set bad %}{% for c in private_packages_scope[1:] %}{% if c not in
+      'abcdefghijklmnopqrstuvwxyz0123456789._-' %}x{% endif %}{% endfor %}{% endset %}{% if not
+      private_packages_scope.startswith('@') or private_packages_scope | length < 2 or
+      private_packages_scope[1] in '._-' or bad %}A scope, as in @acme-corp, or empty{% endif %}{% endif %}
+
+  ci_strategy:
+    type: str
+    help: "Where the CI jobs run (§ 8 PLX-Delivery): github, the forge's runners; on-prem, container slots on runner hosts of the tenant's own for every job; hybrid, slots for the small and medium jobs and a throwaway cloud instance for each build and test"
+    default: github
+    choices:
+      - github
+      - on-prem
+      - hybrid
+
+  ci_registry:
+    type: str
+    help: "Where the images a run builds and tests live before they are published (§ 8 PLX-Delivery): ghcr, the forge's registry; own, a registry on the tenant's object storage, which also holds Turbo's remote cache"
+    choices:
+      - ghcr
+      - own
+    default: "{{ 'ghcr' if ci_strategy == 'github' else 'own' }}"
+    when: "{{ not publishes_packages }}"
+
+  ci_overlay:
+    type: str
+    help: "How a deploy reaches the app hosts (§ 8 PLX-Delivery): none, as the inventory names them; netbird, over the tenant's overlay, which a job on the forge's runners joins for its length"
+    choices:
+      - none
+      - netbird
+    default: none
+    when: "{{ not publishes_packages }}"
+
+  alerts_email:
+    type: str
+    help: "Hybrid strategy: the address mailed when an instance misses its boot and is kept (empty: no mail); a fact, so an answer here and never a vault item"
+    default: ""
+    when: "{{ not publishes_packages and ci_strategy == 'hybrid' }}"
+
+  display_versions:
+    type: bool
+    help: "Do the apps show a display version (PLX-Releases)? A production release that changes an app then cuts a version tag, MAJOR.MINOR, with a GitHub Release, and every deploy hands the app its display version; the repo's PLEXUS.md states the major"
+    default: false
+    when: "{{ not publishes_packages }}"
+
+  pr_reviewers:
+    type: str
+    help: "GitHub logins asked to review the pull requests that wait for a human, the update bot's and plx update's alike, comma-separated (empty: none); a pull request the bot merges itself asks nobody unless its checks fail"
+    default: ""
+
+  update_max_age:
+    type: int
+    help: "How old, in days, the oldest Plexus version this repo has not taken must be before it takes a minor one (§ 3 PLX-Updates): a patch is taken at once, a major only when asked; 0 takes every version, and more than 30 is discouraged"
+    default: 7
+    validator: "{% if update_max_age < 0 %}A number of days, zero or more{% endif %}"
+
+policies:
+  # The marker is born once: its body is the repo's own prose, which an update would conflict with, and
+  # its frontmatter is plx's.
+  PLEXUS.md.jinja: born-once
+
+birth:
+  - [git, init]
+  - [mise, trust]
+  - [mise, install]
+  # The two pins the toolchain needs exact, written at birth only (§ 3 PLX-Updates).
+  - [mise, exec, --, npx, corepack, use, pnpm@12]
+  - [mise, exec, --, pnpm, add, --workspace-root, --save-dev, --save-exact, "@biomejs/biome"]

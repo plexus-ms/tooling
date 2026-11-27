@@ -1,0 +1,15 @@
+# Generated from plexus-ms/template-repo-operations.
+# The plexus.* collections at the Plexus version (§ 1.5 PLX), moved only by the pull request that takes a version.
+collections:
+  - name: https://github.com/plexus-ms/tooling.git#/ansible/host/
+    type: git
+    version: 0.130.0
+  - name: https://github.com/plexus-ms/tooling.git#/ansible/platform/
+    type: git
+    version: 0.130.0
+  - name: https://github.com/plexus-ms/tooling.git#/ansible/infrastructure/
+    type: git
+    version: 0.130.0
+  - name: https://github.com/plexus-ms/tooling.git#/ansible/ci/
+    type: git
+    version: 0.130.0

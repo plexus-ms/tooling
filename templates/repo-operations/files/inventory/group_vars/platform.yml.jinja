@@ -1,0 +1,13 @@
+# Generated from plexus-ms/template-repo-operations.
+# What the hosts that run this tenant's apps get; their apps are per host, in host_vars (§ 3 PLX-Platform).
+
+plexus_deploy_user: plexus
+plexus_deploy_root: /opt/stacks
+
+plexus_up: true
+
+plexus_apps: []
+
+plexus_deploy_pubkey: "{% raw %}{{ lookup('env', 'DEPLOY_PUBKEY') | default('', true) }}{% endraw %}"
+plexus_ghcr_user: "{% raw %}{{ lookup('env', 'GHCR_USER') | default('', true) }}{% endraw %}"
+plexus_ghcr_token: "{% raw %}{{ lookup('env', 'GHCR_TOKEN') | default('', true) }}{% endraw %}"

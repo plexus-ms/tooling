@@ -1,0 +1,21 @@
+# Generated from plexus-ms/template-repo-operations.
+# The groups the shipped playbooks target (§ 1 PLX-Platform); a host's own facts go to host_vars/<host>.yml.
+platform:
+  hosts:
+    host01.{{ tenant }}.example:
+{%- if ci_strategy != 'github' %}
+
+ci:
+  hosts: {}
+{%- endif %}
+{%- if infrastructure %}
+
+proxmox:
+  hosts: {}
+pbs:
+  hosts: {}
+haproxy:
+  hosts: {}
+guests:
+  hosts: {}
+{%- endif %}
