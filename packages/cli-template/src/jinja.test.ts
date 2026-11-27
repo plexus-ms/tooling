@@ -18,3 +18,14 @@ test('render prints booleans, none, lists and maps as Jinja does', () => {
     "True False None [1, 'a'] {'a': 1}",
   );
 });
+
+test('render fails on a variable the context lacks, naming the line', () => {
+  assert.throws(() => renderString('a\n{{ missing }}', {}), /undefined value.*:2\)/);
+  assert.throws(() => renderString('{% if missing %}x{% endif %}', {}), /undefined value/);
+});
+
+test('render lets a template ask whether a variable is defined, or give it a default', () => {
+  assert.equal(renderString("{{ 'y' if missing is defined else 'n' }}", {}), 'n');
+  assert.equal(renderString("[{{ missing | default('') }}] {{ missing | default('d') }}", {}), '[] d');
+  assert.equal(renderString("{{ empty | default('d') }} {{ empty | default('d', true) }}", { empty: '' }), ' d');
+});
