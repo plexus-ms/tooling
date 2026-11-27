@@ -1329,3 +1329,98 @@ test('a template that this plx does not bundle owns no key', () => {
     { problem: 'apps/a/PLEXUS.md: `profile` is neither reserved nor a question or read of a template it lists' },
   ]);
 });
+
+// --- the answers against their questions ------------------------------------------------
+
+const TYPED = bundle({
+  'repo-turbo': `questions:
+  port: {type: int, default: 3000}
+  size: {choices: [s, m], default: s}
+  word: {default: ok, validator: "{% if word == 'bad' %}no bad words{% endif %}"}
+  need: {help: Say who it is}
+`,
+  'app-nextjs': 'reads:\n  need:\n  region:\n',
+});
+const answering = (answers: Record<string, unknown>, nested?: MarkerSite) =>
+  findings(
+    crossed(
+      [
+        site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { need: 'me', ...answers } }),
+        ...(nested ? [nested] : []),
+      ],
+      {
+        templates: TYPED,
+      },
+    ),
+  );
+
+test('answers that are valid for their questions pass, a number in a string cast as the engine casts it', () => {
+  assert.deepEqual(answering({ port: '220', size: 'm', word: 'fine' }), []);
+});
+
+test('an answer of the wrong type, outside the choices or refused by the validator is a finding naming the marker and the question', () => {
+  assert.deepEqual(answering({ port: 'abc', size: 'xl', word: 'bad' }), [
+    { problem: 'PLEXUS.md: `port` of repo-turbo: "abc" is no int' },
+    { problem: 'PLEXUS.md: `size` of repo-turbo: "xl" is not one of s, m' },
+    { problem: 'PLEXUS.md: `word` of repo-turbo: no bad words' },
+  ]);
+});
+
+test('a question without a default that the marker does not answer is a finding with its help', () => {
+  const root = site('.', { version: '0.131.0', templates: ['repo-turbo'] });
+  assert.deepEqual(findings(crossed([root], { templates: TYPED })), [
+    { problem: 'PLEXUS.md: `need` of repo-turbo: no answer and no default: Say who it is' },
+  ]);
+});
+
+test("a nested marker is validated with the root marker's answers and its own, and a read nobody answers is a finding", () => {
+  const nested = site('apps/a', { templates: ['app-nextjs'], answers: {} });
+  assert.deepEqual(answering({}, nested), [
+    {
+      problem:
+        'apps/a/PLEXUS.md: `region` of app-nextjs: app-nextjs reads region, which no template of the render owns and no answer gives',
+    },
+  ]);
+  assert.deepEqual(answering({ region: 'eu' }, nested), []);
+});
+
+test('an answer the root marker gives is validated once, not again for each nested site', () => {
+  const nested = (dir: string) => site(dir, { templates: ['app-nextjs'] });
+  assert.deepEqual(answering({ region: 'eu', port: 'abc' }, nested('apps/a')).length, 1);
+  const two = findings(
+    crossed(
+      [
+        site('.', {
+          version: '0.131.0',
+          templates: ['repo-turbo'],
+          answers: { need: 'me', region: 'eu', port: 'abc' },
+        }),
+        nested('apps/a'),
+        nested('apps/b'),
+      ],
+      { templates: TYPED },
+    ),
+  );
+  assert.equal(two.length, 1);
+});
+
+test('a template of the bundle that cannot be read is no finding of the marker', () => {
+  const broken = bundle({ 'repo-turbo': 'questions: 3\n' });
+  const root = site('.', { version: '0.131.0', templates: ['repo-turbo'] });
+  assert.deepEqual(findings(crossed([root], { templates: broken })), []);
+});
+
+test('answers are not validated where no templates are given, or for a marker with a doubled key', () => {
+  const root = site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { port: 'abc' } });
+  assert.deepEqual(findings(crossed([root])), []);
+  const doubled = findings(
+    crossed(
+      [
+        site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { need: 'me', region: 'a' } }),
+        site('apps/a', { templates: ['app-nextjs'], answers: { region: 'b' } }),
+      ],
+      { templates: TYPED },
+    ),
+  );
+  assert.deepEqual(doubled.length, 1, 'the doubled key alone');
+});
