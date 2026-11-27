@@ -41,12 +41,12 @@ test('render offers the Python string methods templates call', () => {
 });
 
 test('render keeps a raw block verbatim, with whitespace control on either tag', () => {
-  assert.equal(renderString('{% raw %}${{ x }}{% endraw %}', {}), '${{ x }}');
-  assert.equal(renderString('a\n{% raw %}${{ x }}\n{%- endraw %}\nb', {}), 'a\n${{ x }}\nb');
-  assert.equal(renderString('a {%- raw -%}  ${{ x }}  {%- endraw -%}  b', {}), 'a${{ x }}b');
+  assert.equal(renderString('{% raw %}{{ x }}{% endraw %}', {}), '{{ x }}');
+  assert.equal(renderString('a\n{% raw %}{{ x }}\n{%- endraw %}\nb', {}), 'a\n{{ x }}\nb');
+  assert.equal(renderString('a {%- raw -%}  {{ x }}  {%- endraw -%}  b', {}), 'a{{ x }}b');
   assert.equal(
-    renderString("{% raw %}${{ vars.S || '{% endraw %}{{ s }}{% raw %}' }}{% endraw %}", { s: 'github' }),
-    "${{ vars.S || 'github' }}",
+    renderString("{% raw %}{{ vars.S || '{% endraw %}{{ s }}{% raw %}' }}{% endraw %}", { s: 'github' }),
+    "{{ vars.S || 'github' }}",
   );
 });
 
