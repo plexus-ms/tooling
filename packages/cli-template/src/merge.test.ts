@@ -510,3 +510,22 @@ test('merge never deletes a directory, and reports none it does not add', async 
     calls: [],
   });
 });
+
+test('merge keeps a path that is a file on one side and a directory on another as the current tree has it, and reports it as conflicted', async () => {
+  const result = await run({
+    old: { apple: 'red\n', fig: 'purple\n' },
+    new: { apple: directory(), fig: directory(), pear: 'green\n', plum: directory(), 'cherry/stone.txt': 'hard\n' },
+    current: { apple: 'red\n', 'pear/seed.txt': 'small\n', plum: 'blue\n', cherry: 'dark red\n' },
+  });
+  assert.deepEqual(result, {
+    tree: { apple: 'red\n', 'pear/seed.txt': 'small\n', plum: 'blue\n', cherry: 'dark red\n' },
+    report: [
+      'apple: conflicted',
+      'cherry/stone.txt: conflicted',
+      'fig: conflicted',
+      'pear: conflicted',
+      'plum: conflicted',
+    ],
+    calls: [],
+  });
+});
