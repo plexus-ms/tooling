@@ -14,9 +14,11 @@
 // A string default is Jinja, in the scope and the answers before it: one `{{ }}`
 // holding a whole expression is evaluated to a native value, any other string is
 // rendered to text (`value`). Nothing else of a manifest value is touched.
+
+import { parse as parseYaml } from 'yaml';
 import { messageOf } from './errors.ts';
 import { type Context, evaluate, renderString } from './jinja.ts';
-import type { Answers, Manifest, RenderError } from './types.ts';
+import type { Answers, Manifest, Question, QuestionType, RenderError } from './types.ts';
 
 /** One template's questions, resolved. */
 export interface Resolution {
@@ -26,14 +28,51 @@ export interface Resolution {
   readonly context: Context;
 }
 
-/** A string that is one `{{ expression }}` and nothing else, as the expression. */
-const EXPRESSION = /^\s*\{\{((?:(?!\{\{|\}\}).)*)\}\}\s*$/s;
-
-/** What a manifest value is in `context`: a string is Jinja, a whole `{{ expression }}` its native value and any other its text; other values are as they are. */
+/** What a manifest value is in `context`: a string is Jinja rendered to text, a list is rendered item by item; other values are as they are. */
 function value(source: unknown, context: Context): unknown {
-  if (typeof source !== 'string') return source;
-  const expression = EXPRESSION.exec(source)?.[1];
-  return expression === undefined ? renderString(source, context) : evaluate(expression, context);
+  if (typeof source === 'string') return renderString(source, context);
+  if (Array.isArray(source)) return source.map((item: unknown) => value(item, context));
+  return source;
+}
+
+/** The type of a question: its own, else its raw default's, else `yaml`. */
+function typeOf(question: Question): QuestionType {
+  if (question.type !== undefined) return question.type;
+  const raw = question.default;
+  if (typeof raw === 'string') return 'str';
+  if (typeof raw === 'boolean') return 'bool';
+  if (typeof raw === 'number') return Number.isInteger(raw) ? 'int' : 'float';
+  return 'yaml';
+}
+
+const INTEGER = /^\s*[+-]?\d+\s*$/;
+const NUMBER = /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/;
+
+/** `answer` as a value of `type`; throws where it is none. */
+function cast(type: QuestionType, answer: unknown): unknown {
+  const fail = () => new Error(`${JSON.stringify(answer)} is no ${type}`);
+  if (answer === null && type !== 'json' && type !== 'yaml') throw fail();
+  switch (type) {
+    case 'str':
+      if (typeof answer === 'string') return answer;
+      if (typeof answer === 'number') return String(answer);
+      if (typeof answer === 'boolean') return answer ? 'True' : 'False';
+      throw fail();
+    case 'int':
+      if (typeof answer === 'number' && Number.isInteger(answer)) return answer;
+      if (typeof answer === 'string' && INTEGER.test(answer)) return Number.parseInt(answer, 10);
+      throw fail();
+    case 'float':
+      if (typeof answer === 'number') return answer;
+      if (typeof answer === 'string' && NUMBER.test(answer)) return Number(answer);
+      throw fail();
+    case 'bool':
+      return toBool(answer);
+    case 'json':
+      return typeof answer === 'string' ? JSON.parse(answer) : answer;
+    case 'yaml':
+      return typeof answer === 'string' ? parseYaml(answer) : answer;
+  }
 }
 
 /** A value as a boolean the way copier reads one: a number by its truth, a string by its YAML boolean words, anything else by its truthiness. */
@@ -70,8 +109,9 @@ export function resolveAnswers(manifest: Manifest, given: Answers, scope: Contex
       const seen = { ...scope, ...context };
       const applies = question.when === undefined || toBool(field('when', question.when, seen));
       let answer: unknown;
-      if (Object.hasOwn(given, question.name)) answer = given[question.name];
-      else if (Object.hasOwn(question, 'default')) answer = field('default', question.default, seen);
+      if (Object.hasOwn(given, question.name)) answer = cast(typeOf(question), given[question.name]);
+      else if (Object.hasOwn(question, 'default'))
+        answer = cast(typeOf(question), field('default', question.default, seen));
       else {
         if (applies) {
           const help = question.help === undefined ? '' : `: ${question.help}`;
