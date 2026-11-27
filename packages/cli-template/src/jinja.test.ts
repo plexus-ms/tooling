@@ -66,3 +66,9 @@ test('evaluate returns the native value of an expression', () => {
   assert.deepEqual(evaluate("{'a': [1]}", {}), { a: [1] });
   assert.equal(evaluate("reviewers | default('')", {}), '');
 });
+
+test('evaluate fails on a variable the context lacks, also when it is the whole expression', () => {
+  assert.throws(() => evaluate("missing == 'a'", {}), /undefined value/);
+  assert.throws(() => evaluate('missing', {}), /undefined value/);
+  assert.throws(() => evaluate('m.missing', { m: {} }), /undefined value/);
+});
