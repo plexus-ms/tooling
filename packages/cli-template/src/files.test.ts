@@ -280,3 +280,15 @@ test('a directory part that renders to . or x/.. puts its files at the parent', 
     assert.deepEqual(listing(result.tree), { 'f.txt': 'f', 'keep/g.txt': 'g' });
   }
 });
+
+// No original: copier creates a directory twice without complaint.
+test('two source directories at one path that end up empty are one directory', () => {
+  const both = 'name: basket\nquestions:\n  on:\n    type: bool\n  t:\n    type: str\n';
+  const result = render(
+    [template(both, { 'docs/{% if on %}a.md{% endif %}': 'a', '{{ t }}/{% if on %}b.md{% endif %}': 'b' })],
+    { on: false, t: 'docs' },
+  );
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(listing(result.tree), { docs: dir });
+  assert.deepEqual([...result.files.keys()], ['docs']);
+});
