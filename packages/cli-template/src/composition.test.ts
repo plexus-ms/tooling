@@ -427,3 +427,12 @@ test('a question two templates declare is owned, for reads, by the template whos
     ]);
   }
 });
+
+test('a reader whose only fault is a read its owner failed to resolve renders no files', () => {
+  const owner = 'name: orchard\nquestions:\n  trees:\n    type: int\n';
+  const box = 'name: box\nreads:\n  trees:\n';
+  const result = render([template(box, { 'box.txt.jinja': '{{ trees }}' }), template(owner)], {});
+  assert.deepEqual(where(result.errors), [
+    { template: 'orchard', other: undefined, path: undefined, question: 'trees' },
+  ]);
+});
