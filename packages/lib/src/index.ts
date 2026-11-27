@@ -189,6 +189,7 @@ export {
   type Scan,
   scanPage,
 } from './requirements.ts';
+export { findSites, type MarkerSite } from './sites.ts';
 export {
   bundledIndex,
   parseStandardIndex,

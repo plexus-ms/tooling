@@ -138,7 +138,7 @@ export const whyUnreadable = (error: unknown): string =>
   (error as NodeJS.ErrnoException).code ?? (error instanceof Error ? error.message : String(error));
 
 /** A read that failed because nothing is there, as opposed to something that cannot be read. */
-const isMissing = (error: unknown): boolean =>
+export const isMissing = (error: unknown): boolean =>
   ['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '');
 
 /** What `appsOf` found in a repo's `apps/`. */
