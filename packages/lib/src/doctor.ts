@@ -22,10 +22,23 @@
 // one per file, whatever the marker lists; it names no requirement, and
 // nothing excludes a file from it.
 //
+// Also of no requirement, and no deviation silences them: the checks of the
+// markers as configuration (sites.ts, `markerConfig` below). The root marker's
+// `version` equals the repo's `plx` pin (and is set where any marker lists
+// `templates`), no nested marker carries `version`, no key is answered in two
+// markers, and a marker that cannot be read as configuration is named. They
+// bind a repo that has crossed over from copier: one in which git tracks no
+// `.copier-answers.yml` at any depth (`crossedOver`), as the crossover deletes
+// every answers file. Until then they are skipped: a repo still on copier
+// keeps its answers in the answers files, so its markers are not yet its
+// configuration; its markers are not read for them either. A tracked marker
+// that cannot be read as a file is a finding of its repo, not a failed run.
+// A repo that lists no `templates` needs no `version`.
+//
 //   plx doctor          # this repo and its apps, from anywhere inside it
 //   plx doctor ~/dev    # every Plexus repo beneath, and its apps
 import { realpath } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import {
   APP_SERVICE,
   type Compose,
@@ -40,11 +53,13 @@ import {
 } from './compose.ts';
 import { filesWithConflictMarkers } from './conflicts.ts';
 import type { Context } from './context.ts';
+import { ANSWERS_FILE } from './copier.ts';
 import { ExecError } from './io.ts';
 import { REQUIREMENT_NAME } from './lints.ts';
 import { type Declaration, MARKER_FILE, reasonGiven } from './marker.ts';
 import { type Directory, hasMarker, isOperations, type Kind } from './model.ts';
 import { appsOf, directoryAt, overview } from './overview.ts';
+import { findSites, type MarkerSite, siteAnswers } from './sites.ts';
 import { bundledIndex } from './standardIndex.ts';
 
 export type Profile = 'stateless' | 'stateful';
@@ -70,6 +85,12 @@ export interface RepoFacts {
   conflicted?: string[];
   /** Its apps' directories, relative to the repo (`apps/<name>`). */
   apps: string[];
+  /** The `plx` pin of its `mise.toml`: the Plexus version it is on. */
+  pin?: string;
+  /** Every tracked marker read as configuration, the root first; undefined outside a git checkout. */
+  sites?: MarkerSite[];
+  /** Why the sites could not be listed or read, when they could not. */
+  sitesProblem?: string;
 }
 
 /** What doctor read of an app. */
@@ -331,6 +352,60 @@ export const CHECKS: Readonly<Record<string, RepoCheck | AppCheck | UnitCheck>> 
   'PLX-App/Stateful/Seed': { binds: 'app', profile: 'stateful', check: seed },
 };
 
+/** Whether a repo has left copier behind: git tracks no answers file in it, at any depth. */
+const crossedOver = (tracked: readonly string[] = []): boolean =>
+  !tracked.some((path) => basename(path) === ANSWERS_FILE);
+
+/**
+ * What the markers as configuration must meet (sites.ts): the root's `version`
+ * is the `plx` pin's, no other marker has one, and no key is answered in two
+ * markers. A marker that cannot be read as configuration is named, except the
+ * root one when PLX-Repo/Marker reports it already. Each line is a finding of
+ * no requirement.
+ */
+function markerConfig(repo: RepoFacts): string[] {
+  if (!crossedOver(repo.tracked)) return [];
+  if (repo.sitesProblem) return [`the tracked ${MARKER_FILE} files could not be read: ${repo.sitesProblem}`];
+  const sites = repo.sites ?? [];
+  // A root marker PLX-Repo/Marker reports (the repo's marker read as a declaration) is not named a second time.
+  const problems = sites
+    .filter((s) => s.problem !== undefined && !(s.dir === '.' && repo.marker?.problem))
+    .map((s) => `${join(s.dir, MARKER_FILE)}: ${s.problem}`);
+  // A nested marker's answers are the root's plus its own, so they can only be compared when the root reads.
+  const rootRead = sites.some((s) => s.dir === '.' && s.config);
+  for (const { dir, config } of sites)
+    if (rootRead && dir !== '.' && config)
+      try {
+        siteAnswers(sites, dir);
+      } catch (error) {
+        problems.push((error as Error).message);
+      }
+  return [...versionOfRoot(repo), ...problems];
+}
+
+function versionOfRoot(repo: RepoFacts): string[] {
+  const sites = repo.sites ?? [];
+  const root = sites.find((s) => s.dir === '.')?.config;
+  if (!root) return [];
+  if (root.version === undefined) {
+    const listing = sites.filter((s) => s.config?.templates !== undefined).map((s) => join(s.dir, MARKER_FILE));
+    if (listing.length === 0) return [];
+    const where =
+      listing.length === 1 && listing[0] === MARKER_FILE
+        ? 'it lists'
+        : `${listing.join(', ')} ${listing.length === 1 ? 'lists' : 'list'}`;
+    const set = repo.pin
+      ? `set \`version: ${repo.pin}\` in the root marker, the version mise.toml pins plx at`
+      : 'set `version` in the root marker to the Plexus version the repo is on, and pin plx at it in mise.toml';
+    return [`${MARKER_FILE} sets no \`version\`, though ${where} \`templates\`; ${set}`];
+  }
+  const at = `\`version\` in ${MARKER_FILE} is ${root.version}, but mise.toml pins`;
+  if (repo.pin === undefined) return [`${at} no plx; pin plx at ${root.version}, as \`plx update\` does`];
+  return repo.pin === root.version
+    ? []
+    : [`${at} plx ${repo.pin}; \`plx update\` moves both together, so undo whichever was edited by hand`];
+}
+
 // --- the diagnosis --------------------------------------------------------------
 
 export interface Finding {
@@ -387,8 +462,10 @@ function diagnoseUnit(unit: Facts, known: Set<string>): UnitReport {
     if (deviations.includes(name)) continue;
     for (const problem of run(c, unit, profile)) findings.push({ requirement: name, problem });
   }
-  if (unit.kind !== 'app')
+  if (unit.kind !== 'app') {
     for (const file of unit.conflicted ?? []) findings.push({ problem: `\`${file}\` holds a conflict marker` });
+    for (const problem of markerConfig(unit)) findings.push({ problem });
+  }
   const obsolete = (declaration?.obsolete ?? []).map((k) => `\`${k}\``).join(' and ');
   const hints: string[] = [];
   if (obsolete)
@@ -528,7 +605,18 @@ async function readRepo(ctx: Context, dir: Directory, path: string, kind: RepoFa
     tracked,
     ...(conflicted?.length ? { conflicted } : {}),
     apps: [],
+    ...(dir.pin ? { pin: dir.pin } : {}),
+    ...(tracked !== undefined && crossedOver(tracked) ? await readSites(ctx, dir.path) : {}),
   };
+}
+
+/** The repo's sites, or why they cannot be read: a marker git tracks that is not a readable file is a finding, never a failed run. */
+async function readSites(ctx: Context, repo: string): Promise<Pick<RepoFacts, 'sites' | 'sitesProblem'>> {
+  try {
+    return { sites: await findSites(ctx, repo) };
+  } catch (error) {
+    return { sitesProblem: (error as Error).message };
+  }
 }
 
 /**

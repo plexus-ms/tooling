@@ -6,8 +6,10 @@ import { type Compose, type Mapping, parseCompose } from './compose.ts';
 import { Context } from './context.ts';
 import { type AppFacts, CHECKS, diagnose, examine, type Facts, type RepoFacts } from './doctor.ts';
 import { REQUIREMENT_NAME } from './lints.ts';
+import type { MarkerConfig } from './marker.ts';
 import { unitsOf } from './model.ts';
 import { overview } from './overview.ts';
+import type { MarkerSite } from './sites.ts';
 import { type FakeExec, fakeIo, link, type Tree, UNREADABLE } from './testing/fakeIo.ts';
 import { UsageError } from './version.ts';
 
@@ -991,6 +993,199 @@ test('PLX-App/NoCommittedValues: a tracked .env is one finding, on the app that 
     ],
   );
   assert.deepEqual(findings(repo({ tracked: ['.env'], apps: [] })), [], 'a repo with no app is no source repo');
+});
+
+// --- the marker as configuration -----------------------------------------------------------
+
+const config = (over: Partial<MarkerConfig> = {}): MarkerConfig => ({ deviations: [], answers: {}, ...over });
+const site = (dir: string, over: Partial<MarkerConfig> = {}): MarkerSite => ({ dir, config: config(over) });
+
+/** A repo that has crossed over: its root marker lists `templates` and states the version, the pin names it. */
+const crossed = (sites: MarkerSite[], over: Partial<RepoFacts> = {}): RepoFacts =>
+  repo({ pin: '0.131.0', sites, ...over });
+
+const VERSION_NESTED = "`version` belongs in the repo's root marker only; remove it";
+const ROOT = site('.', { version: '0.131.0', templates: ['repo-turbo'] });
+
+test('a repo whose root marker states the version its plx pin names passes', () => {
+  assert.deepEqual(findings(crossed([ROOT])), []);
+});
+
+test('the root marker names a version other than the plx pin: a finding of no requirement, no deviation silences', () => {
+  const stale = crossed([site('.', { version: '0.130.0', templates: ['repo-turbo'] })]);
+  const expected = [
+    {
+      problem:
+        '`version` in PLEXUS.md is 0.130.0, but mise.toml pins plx 0.131.0; `plx update` moves both together, so undo whichever was edited by hand',
+    },
+  ];
+  assert.deepEqual(findings(stale), expected);
+  const deviating = {
+    ...stale,
+    marker: { declaration: { deviations: ['PLX-Repo/Verbs'], body: reasoned(['PLX-Repo/Verbs']) } },
+  };
+  assert.deepEqual(findings(deviating), expected);
+  assert.equal(diagnose([stale]).failed, 1);
+  assert.deepEqual(findings(app('stateless', { repo: stale })), [], 'reported once, on the repo');
+});
+
+test('a repo with a version but no plx pin, or with templates but no version, fails', () => {
+  assert.deepEqual(findings(crossed([ROOT], { pin: undefined })), [
+    {
+      problem: '`version` in PLEXUS.md is 0.131.0, but mise.toml pins no plx; pin plx at 0.131.0, as `plx update` does',
+    },
+  ]);
+  const tail = 'set `version: 0.131.0` in the root marker, the version mise.toml pins plx at';
+  assert.deepEqual(findings(crossed([site('.', { templates: ['repo-turbo'] })])), [
+    { problem: `PLEXUS.md sets no \`version\`, though it lists \`templates\`; ${tail}` },
+  ]);
+  assert.deepEqual(findings(crossed([site('.', { templates: [] })])), [
+    { problem: `PLEXUS.md sets no \`version\`, though it lists \`templates\`; ${tail}` },
+  ]);
+  assert.deepEqual(findings(crossed([site('.'), site('apps/a', { templates: ['app-nextjs'] })])), [
+    { problem: `PLEXUS.md sets no \`version\`, though apps/a/PLEXUS.md lists \`templates\`; ${tail}` },
+  ]);
+  assert.deepEqual(
+    findings(crossed([site('.'), site('apps/a', { templates: [] }), site('apps/b', { templates: [] })])),
+    [
+      {
+        problem: `PLEXUS.md sets no \`version\`, though apps/a/PLEXUS.md, apps/b/PLEXUS.md list \`templates\`; ${tail}`,
+      },
+    ],
+  );
+  assert.deepEqual(findings(crossed([site('.', { templates: [] })], { pin: undefined })), [
+    {
+      problem:
+        'PLEXUS.md sets no `version`, though it lists `templates`; set `version` in the root marker to the Plexus version the repo is on, and pin plx at it in mise.toml',
+    },
+  ]);
+});
+
+test('a repo whose markers list no templates needs no version', () => {
+  assert.deepEqual(findings(crossed([site('.')], { pin: undefined })), []);
+  assert.deepEqual(findings(crossed([site('.'), site('apps/a')], { pin: '0.131.0' })), []);
+});
+
+test('a nested marker that carries `version` is a finding of the repo, once per marker', () => {
+  const nested = (dir: string): MarkerSite => ({ dir, problem: VERSION_NESTED });
+  assert.deepEqual(findings(crossed([ROOT, nested('apps/a'), nested('packages/x')])), [
+    { problem: `apps/a/PLEXUS.md: ${VERSION_NESTED}` },
+    { problem: `packages/x/PLEXUS.md: ${VERSION_NESTED}` },
+  ]);
+});
+
+test('a marker that cannot be read as configuration is named, unless the repo contract reports it already', () => {
+  const broken: MarkerSite[] = [
+    { dir: '.', problem: 'marker: `templates` must be a list of template names' },
+    { dir: 'apps/a', problem: 'marker: `templates` must be a list of template names' },
+  ];
+  assert.deepEqual(findings(crossed(broken)), [
+    { problem: 'PLEXUS.md: marker: `templates` must be a list of template names' },
+    { problem: 'apps/a/PLEXUS.md: marker: `templates` must be a list of template names' },
+  ]);
+  const reported = crossed(broken, { marker: { problem: 'PLEXUS.md: no frontmatter' } });
+  assert.deepEqual(
+    findings(reported).filter((f) => f.requirement === undefined),
+    [{ problem: 'apps/a/PLEXUS.md: marker: `templates` must be a list of template names' }],
+  );
+});
+
+test('a key set in both the root marker and a nested one is a finding naming the keys', () => {
+  const sites = [
+    site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { tenant: 'plexus', ci: 'github' } }),
+    site('apps/a', { templates: ['app-nextjs'], answers: { tenant: 'other', ci: 'x', profile: 'stateless' } }),
+    site('apps/b', { answers: { profile: 'stateless' } }),
+  ];
+  assert.deepEqual(findings(crossed(sites)), [
+    {
+      problem:
+        'apps/a/PLEXUS.md: `tenant`, `ci` are answered in the root marker as well; remove each from one of the two',
+    },
+  ]);
+});
+
+test('the marker checks are skipped in a repo that still tracks a copier answers file, at any depth', () => {
+  const failing = [
+    site('.', { version: '0.130.0', templates: ['repo-turbo'], answers: { tenant: 'a' } }),
+    { dir: 'apps/a', problem: VERSION_NESTED },
+    site('apps/b', { answers: { tenant: 'b' } }),
+  ];
+  assert.equal(findings(crossed(failing)).length, 3, 'the same sites fail once the repo has crossed over');
+  for (const answers of ['.copier-answers.yml', 'apps/a/.copier-answers.yml'])
+    assert.deepEqual(findings(crossed(failing, { tracked: ['mise.toml', answers] })), [], answers);
+  assert.equal(findings(crossed(failing, { tracked: ['docs/.copier-answers.yml.md'] })).length, 3);
+});
+
+test('doctor reads the plx pin and the tracked markers, and fails the repo for each marker finding', async () => {
+  const tree = ws();
+  const web = tree.web as Tree;
+  web['PLEXUS.md'] = '---\nversion: 0.130.0\ntemplates: [repo-turbo]\n---\n';
+  web['mise.toml'] = '[tools]\n"npm:@plexus-ms/cli" = "0.131.0"\n';
+  const site = (web.apps as Tree).site as Tree;
+  site['PLEXUS.md'] = '---\nprofile: stateless\nversion: 0.131.0\n---\n';
+  const tracked = { '/ws/web': ['PLEXUS.md', 'mise.toml', 'apps/site/PLEXUS.md', 'apps/site/docker/compose.yaml'] };
+  const report = await doctorOver(tree, '/ws/web', VERBS, tracked);
+  assert.deepEqual(
+    report.units.map((u) => [u.path, u.findings]),
+    [
+      [
+        '.',
+        [
+          {
+            problem:
+              '`version` in PLEXUS.md is 0.130.0, but mise.toml pins plx 0.131.0; `plx update` moves both together, so undo whichever was edited by hand',
+          },
+          { problem: `apps/site/PLEXUS.md: ${VERSION_NESTED}` },
+        ],
+      ],
+      ['apps/site', []],
+    ],
+  );
+});
+
+test('a root marker that cannot be read, beside a nested one that can, is one finding', () => {
+  const sites: MarkerSite[] = [
+    { dir: '.', problem: 'marker: `templates` must be a list of template names' },
+    site('apps/a'),
+  ];
+  assert.deepEqual(findings(crossed(sites)), [
+    { problem: 'PLEXUS.md: marker: `templates` must be a list of template names' },
+  ]);
+});
+
+test('a repo whose root marker lists the operations template, with no answers file, is the operations repo', async () => {
+  const tree = ws();
+  (tree.web as Tree)['PLEXUS.md'] = '---\nversion: 0.131.0\ntemplates: [repo-operations]\n---\n';
+  (tree.web as Tree)['mise.toml'] = '[tools]\n"npm:@plexus-ms/cli" = "0.131.0"\n';
+  const tracked = { '/ws/web': ['PLEXUS.md', 'mise.toml', 'apps/site/docker/compose.yaml'] };
+  const report = await doctorOver(tree, '/ws/web', VERBS, tracked);
+  assert.deepEqual(
+    report.units.map((u) => [u.path, u.kind]),
+    [
+      ['.', 'operations'],
+      ['apps/site', 'app'],
+    ],
+  );
+});
+
+test('a tracked marker that cannot be read is a finding of its repo and stops no other repo, and only where the checks run', async () => {
+  const broken = () => {
+    const tree = ws();
+    ((tree.web as Tree).apps as Tree).x = { 'PLEXUS.md': {} };
+    return tree;
+  };
+  const tracked = { '/ws/web': ['PLEXUS.md', 'apps/x/PLEXUS.md', 'apps/site/docker/compose.yaml'] };
+  const report = await doctorOver(broken(), '/ws', VERBS, tracked);
+  assert.deepEqual(
+    report.units.filter((u) => u.kind !== 'app').map((u) => [u.path, u.findings.map((f) => f.problem)]),
+    [
+      ['ops', []],
+      ['web', ['the tracked PLEXUS.md files could not be read: EISDIR: /ws/web/apps/x/PLEXUS.md']],
+    ],
+  );
+  const onCopier = { '/ws/web': [...(tracked['/ws/web'] ?? []), '.copier-answers.yml'] };
+  const skipped = await doctorOver(broken(), '/ws/web', VERBS, onCopier);
+  assert.deepEqual(skipped.units[0]?.findings, []);
 });
 
 test('a tracked file holding a conflict marker is a finding of the repo, of no requirement, that no deviation silences', () => {

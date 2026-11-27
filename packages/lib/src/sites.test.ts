@@ -126,7 +126,7 @@ test('findSites gives a nested marker with a version, or one that does not parse
     assert.match(api?.problem ?? '', /./);
     assert.match(docs?.problem ?? '', /no frontmatter/);
     assert.equal(web?.config, undefined);
-    assert.match(web?.problem ?? '', /`version` belongs in the repo's root marker only/);
+    assert.match(web?.problem ?? '', /`version` belongs in the repo's root marker only; remove it/);
   }
 });
 
@@ -154,7 +154,11 @@ test('siteAnswers refuses a key in both markers, a marker with a problem, and a 
   const root = site('.', { tenant: 'plexus', major: 1 });
   assert.throws(
     () => siteAnswers([root, site('apps/web', { tenant: 'acme', major: 2, port: 3000 })], 'apps/web'),
-    /apps\/web\/PLEXUS\.md: `tenant`, `major` are answered in the root marker already/,
+    /apps\/web\/PLEXUS\.md: `tenant`, `major` are answered in the root marker as well; remove each from one of the two/,
+  );
+  assert.throws(
+    () => siteAnswers([root, site('apps/web', { tenant: 'acme' })], 'apps/web'),
+    /apps\/web\/PLEXUS\.md: `tenant` is answered in the root marker as well; remove it from one of the two$/,
   );
   const broken: MarkerSite = { dir: 'apps/web', problem: 'no frontmatter: expected a `---` block at the top' };
   assert.throws(() => siteAnswers([root, broken], 'apps/web'), /apps\/web\/PLEXUS\.md: no frontmatter/);
