@@ -65,7 +65,8 @@ const KEYS = ['name', 'questions', 'reads', 'policies', 'birth'];
 const FIELDS = ['type', 'default', 'help', 'when', 'validator', 'choices'];
 const TYPES: readonly string[] = ['str', 'int', 'float', 'bool', 'yaml', 'json'] satisfies QuestionType[];
 const POLICIES: readonly string[] = ['merge', 'born-once'] satisfies Policy[];
-const NAME = /^[a-z][a-z0-9-]*$/;
+/** What a template is called: lowercase letters, digits and hyphens, from a letter. */
+export const TEMPLATE_NAME = /^[a-z][a-z0-9-]*$/;
 const VARIABLE = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 const utf8 = new TextDecoder('utf-8', { fatal: true });
@@ -87,7 +88,7 @@ export function readTemplate(tree: Tree, position: number, errors: RenderError[]
   const parsed = parseManifest(tree, problem);
   if (parsed === undefined) return undefined;
   const { data, doc } = parsed;
-  if (typeof data.name === 'string' && NAME.test(data.name)) template = data.name;
+  if (typeof data.name === 'string' && TEMPLATE_NAME.test(data.name)) template = data.name;
   else problem('the name is lowercase letters, digits and hyphens, starting with a letter');
   for (const [path, { mode }] of tree) {
     if ((mode & MODE_TYPE) === SYMLINK)

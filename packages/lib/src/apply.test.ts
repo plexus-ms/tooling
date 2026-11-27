@@ -138,7 +138,7 @@ test('apply commits nothing and stages nothing', async () => {
 test('apply says it changed nothing when no marker differs from HEAD', async () => {
   const { repo, templates } = fixture();
   const applied = await apply(quietContext(), options(repo, templates));
-  assert.deepEqual(applied, { sites: [], conflicted: 0, applied: false });
+  assert.deepEqual(applied, { sites: [], conflicted: 0, applied: false, declined: false });
 });
 
 const CRATE = marker('templates: [crate]\n', '\n- A crate.\n');

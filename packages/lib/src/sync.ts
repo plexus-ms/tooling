@@ -16,7 +16,10 @@
 // together, so that a failure costs nothing. Each site's merge is then
 // planned by the engine (`planMerge`) against the site's directory in the
 // working tree; a site's old and new tree are relative to that directory.
-// A site is planned in the order given, which is the root first.
+// The root is rendered first, whatever the order given, and what it resolved,
+// its defaults included, is a root answer: a nested site's answers are the
+// root marker's plus its own (§ 5), so the nested renders are given the
+// root's resolved answers on each side.
 //
 // A default is written to a site's marker when the question is applicable on
 // the new side and was not on the old one (a template added, a `when` that
@@ -28,9 +31,13 @@
 // A conflicted path is left in the file between the engine's markers, or kept
 // as it is where the template removed a file the user edited; either way the
 // report says `conflicted` and the caller makes the verb fail on it.
+// A key that the root's marker would receive as a default and that a nested
+// site's template declares, or that a nested marker already answers, is refused
+// before anything is written: it would stand in two markers, which no marker may
+// do. A render error is listed once, with the sides it came from.
 import { join } from 'node:path';
-import type { Answers, MergeEntry, MergePlan, RenderError, RenderedSide, Tree } from '@plexus-ms/cli-template';
-import { templateDirectory } from './bundled.ts';
+import type { Answers, MergeEntry, MergePlan, RenderError, RenderedSide } from '@plexus-ms/cli-template';
+import { loadTemplate, templateDirectory } from './bundled.ts';
 import type { Context } from './context.ts';
 import { type Plan, write } from './effects.ts';
 import { engine } from './engine.ts';
@@ -52,6 +59,15 @@ export interface SiteSides {
   readonly dir: string;
   readonly old: Source | Rendered;
   readonly new: Source;
+  /** Render the site for what it gives the nested sites, and merge nothing into it. */
+  readonly contextOnly?: boolean;
+}
+
+export interface SyncOptions {
+  /** What the old and the new side are called in an error. */
+  labels?: { old: string; new: string };
+  /** The own answers of every nested marker of the repo, the sites not planned included. */
+  siblings?: readonly { dir: string; answers: Answers }[];
 }
 
 /** What planning decided for one site. */
@@ -70,9 +86,14 @@ export interface SyncPlan {
   perform(): Promise<void>;
 }
 
+/** A render, with the questions each of its templates declares. */
+interface Side extends Rendered {
+  readonly declared: ReadonlyMap<string, readonly string[]>;
+}
+
 const isRendered = (side: Source | Rendered): side is Rendered => 'tree' in side;
 
-/** Every error as a line naming the site and what it concerns. */
+/** An error as a line naming the site and what it concerns. */
 const describeError = (dir: string, e: RenderError): string => {
   const about = [e.template && `template ${e.template}`, e.path, e.question && `question ${e.question}`].filter(
     Boolean,
@@ -80,27 +101,48 @@ const describeError = (dir: string, e: RenderError): string => {
   return `${dir}: ${e.message}${about.length > 0 ? ` (${about.join(', ')})` : ''}`;
 };
 
+/** Errors by line, each with the sides it came from, so that one found on both is listed once. */
+class Errors {
+  readonly lines = new Map<string, Set<string>>();
+  add(line: string, label: string): void {
+    this.lines.set(line, (this.lines.get(line) ?? new Set()).add(label));
+  }
+  get any(): boolean {
+    return this.lines.size > 0;
+  }
+  toString(): string {
+    return [...this.lines].map(([line, labels]) => `${line} [${[...labels].join(' and ')}]`).join('\n');
+  }
+}
+
 /** The render of a source with the templates below `root`; its problems go to `errors`. */
 async function renderSource(
   root: string,
   dir: string,
   source: Source,
-  errors: string[],
-): Promise<Rendered | undefined> {
-  if (source.templates.length === 0) return { tree: new Map(), policies: new Map(), answers: {} };
+  label: string,
+  errors: Errors,
+): Promise<Side | undefined> {
   const { readTree, render } = await engine();
-  const trees: Tree[] = [];
+  const trees = [];
+  const declared = new Map<string, readonly string[]>();
   for (const name of source.templates) {
     try {
+      const manifest = await loadTemplate(root, name);
       trees.push(await readTree(await templateDirectory(root, name)));
+      declared.set(
+        name,
+        manifest.questions.map((q) => q.name),
+      );
     } catch (error) {
-      errors.push(`${dir}: ${(error as Error).message}`);
+      errors.add(`${dir}: ${(error as Error).message}`, label);
     }
   }
   if (trees.length < source.templates.length) return undefined;
   const result = render(trees, source.answers);
-  errors.push(...result.errors.map((e) => describeError(dir, e)));
-  return result.errors.length > 0 ? undefined : { tree: result.tree, policies: result.files, answers: result.answers };
+  for (const e of result.errors) errors.add(describeError(dir, e), label);
+  if (result.errors.length > 0) return undefined;
+  return { tree: result.tree, policies: result.files, answers: result.answers, declared };
 }
 
 /** The merge of each of `sites` into the repo at `repo`, as the header says; the templates are below `root`. */
@@ -109,26 +151,50 @@ export async function planSync(
   repo: string,
   root: string,
   sites: readonly SiteSides[],
+  options: SyncOptions = {},
 ): Promise<SyncPlan> {
   const { planMerge } = await engine();
-  const errors: string[] = [];
-  const rendered: { dir: string; old: Rendered; new: Rendered; given: Answers }[] = [];
-  for (const site of sites) {
-    const old = isRendered(site.old) ? site.old : await renderSource(root, site.dir, site.old, errors);
-    const next = await renderSource(root, site.dir, site.new, errors);
-    if (old && next) rendered.push({ dir: site.dir, old, new: next, given: site.new.answers });
+  const labels = options.labels ?? { old: 'old side', new: 'new side' };
+  const errors = new Errors();
+  const rendered: { site: SiteSides; old: Side; new: Side; given: Answers }[] = [];
+  let rootSides: { old: Side; new: Side } | undefined;
+  for (const site of [...sites].sort((a, b) => Number(b.dir === '.') - Number(a.dir === '.'))) {
+    const nested = site.dir !== '.';
+    // A nested site's answers are the root's, resolved defaults included, plus its own.
+    const old = isRendered(site.old)
+      ? { ...site.old, declared: new Map<string, readonly string[]>() }
+      : await renderSource(
+          root,
+          site.dir,
+          { ...site.old, answers: { ...(nested ? rootSides?.old.answers : {}), ...site.old.answers } },
+          labels.old,
+          errors,
+        );
+    const given = { ...(nested ? rootSides?.new.answers : {}), ...site.new.answers };
+    const next = await renderSource(root, site.dir, { ...site.new, answers: given }, labels.new, errors);
+    if (!old || !next) continue;
+    if (!nested) rootSides = { old, new: next };
+    rendered.push({ site, old, new: next, given });
   }
-  if (errors.length > 0) throw new Error(errors.join('\n'));
+  if (errors.any) throw new Error(errors.toString());
+
+  const defaultsOf = ({ old, new: next, given }: (typeof rendered)[number]): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(next.answers).filter(([key]) => !(key in given) && !(key in old.answers)));
+  const doubled = doubledKeys(
+    rendered.map((r) => ({ ...r, defaults: defaultsOf(r) })),
+    options.siblings ?? [],
+  );
+  if (doubled.length > 0) throw new Error(doubled.join('\n'));
 
   const merges: { dir: string; plan: MergePlan }[] = [];
   const markers: Plan = [];
   const planned: SiteMerge[] = [];
-  for (const { dir, old, new: next, given } of rendered) {
-    const plan = await planMerge(join(repo, dir), old, next);
+  for (const entry of rendered) {
+    if (entry.site.contextOnly) continue;
+    const { dir } = entry.site;
+    const plan = await planMerge(join(repo, dir), entry.old, entry.new);
     merges.push({ dir, plan });
-    const defaults = Object.fromEntries(
-      Object.entries(next.answers).filter(([key]) => !(key in given) && !(key in old.answers)),
-    );
+    const defaults = defaultsOf(entry);
     if (Object.keys(defaults).length > 0) {
       const path = join(repo, dir, MARKER_FILE);
       markers.push(write(path, setMarkerKeys(await ctx.readFile(path), defaults)));
@@ -147,4 +213,30 @@ export async function planSync(
       await ctx.apply(markers);
     },
   };
+}
+
+/** The refusals for a root default that would stand in two markers: the nested site declares it, or answers it. */
+function doubledKeys(
+  sites: readonly { site: SiteSides; new: Side; defaults: Record<string, unknown> }[],
+  siblings: NonNullable<SyncOptions['siblings']>,
+): string[] {
+  const rootSite = sites.find((s) => s.site.dir === '.');
+  if (!rootSite || rootSite.site.contextOnly) return [];
+  const lines: string[] = [];
+  const rootMarker = MARKER_FILE;
+  for (const key of Object.keys(rootSite.defaults)) {
+    const rootTemplate = [...rootSite.new.declared].find(([, questions]) => questions.includes(key))?.[0];
+    const where = `${rootMarker} would get \`${key}\` as the default of template ${rootTemplate}`;
+    const fix = 'a key is answered in one marker only: answer it in the root marker and remove it from the nested one';
+    for (const { site, new: next } of sites) {
+      const nestedTemplate = [...next.declared].find(([, questions]) => questions.includes(key))?.[0];
+      if (site.dir !== '.' && nestedTemplate !== undefined)
+        lines.push(
+          `${where}, and template ${nestedTemplate} of ${join(site.dir, MARKER_FILE)} declares it too: ${fix}`,
+        );
+    }
+    for (const { dir, answers } of siblings)
+      if (key in answers) lines.push(`${where}, and ${join(dir, MARKER_FILE)} answers it already: ${fix}`);
+  }
+  return lines;
 }

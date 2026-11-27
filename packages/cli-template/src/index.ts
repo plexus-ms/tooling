@@ -12,6 +12,7 @@
 // `readManifest` and `planMerge` (directory.ts).
 export { type MergePlan, planMerge, type RenderedSide, readManifest, readTree } from './directory.ts';
 export { gitMergeFile } from './git-merge-file.ts';
+export { TEMPLATE_NAME } from './manifest.ts';
 export { merge } from './merge.ts';
 export { render } from './render.ts';
 export {

@@ -37,7 +37,8 @@
 
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { bundledTemplatesRoot } from './bundled.ts';
+import type { Answers } from '@plexus-ms/cli-template';
+import { bundledTemplatesRoot, loadTemplate } from './bundled.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE } from './copier.ts';
 import { crossedOver } from './doctor.ts';
@@ -57,7 +58,10 @@ export interface ApplyOptions {
 export interface Applied {
   sites: SiteMerge[];
   conflicted: number;
+  /** The changes were written: false for a dry run, a no, and a run with nothing to write. */
   applied: boolean;
+  /** The answer to the prompt was no. */
+  declined: boolean;
 }
 
 /** Where a repo that still has copier answers is pointed; the cutover writes the runbook's address here, once. */
@@ -113,6 +117,59 @@ function versionRefusal(
   return undefined;
 }
 
+/** The keys whose answer differs between two maps: present in one only, or different. */
+const changedKeys = (a: Answers, b: Answers): string[] =>
+  [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((key) => !isDeepStrictEqual(a[key], b[key]));
+
+/** Whether a template of `names` owns or reads one of `keys`; a template that cannot be loaded counts, so that the error shows. */
+async function relatesTo(root: string, names: readonly string[], keys: readonly string[]): Promise<boolean> {
+  for (const name of names) {
+    try {
+      const manifest = await loadTemplate(root, name);
+      const mine = [...manifest.questions.map((q) => q.name), ...manifest.reads.map((r) => r.name)];
+      if (keys.some((key) => mine.includes(key))) return true;
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The sites to render, each with its two sides: those whose own marker changed
+ * (its templates or its own answers, or the marker is new or gone), and the
+ * nested sites that list a template which owns or reads a root answer that
+ * changed. A site with no templates on either side renders nothing. When a
+ * nested site is taken, the root is rendered with it for the answers it gives,
+ * and merged only if it changed itself.
+ */
+async function sitesToTake(
+  now: readonly MarkerSite[],
+  before: readonly MarkerSite[],
+  templates: string | undefined,
+): Promise<SiteSides[]> {
+  const configOf = (sites: readonly MarkerSite[], dir: string) => sites.find((s) => s.dir === dir)?.config;
+  const rootChanged = changedKeys(configOf(before, '.')?.answers ?? {}, configOf(now, '.')?.answers ?? {});
+  const sides: SiteSides[] = [];
+  for (const dir of new Set([...now, ...before].map((s) => s.dir))) {
+    const [old, next] = [sourceAt(before, dir), sourceAt(now, dir)];
+    if (next.templates.length + old.templates.length === 0) continue;
+    const [was, is] = [configOf(before, dir), configOf(now, dir)];
+    const own =
+      !isDeepStrictEqual(was?.templates ?? [], is?.templates ?? []) ||
+      !isDeepStrictEqual(was?.answers ?? {}, is?.answers ?? {});
+    const read =
+      dir !== '.' &&
+      rootChanged.length > 0 &&
+      (await relatesTo(templates ?? bundledTemplatesRoot(), [...old.templates, ...next.templates], rootChanged));
+    if (own || read) sides.push({ dir, old, new: next });
+  }
+  const rootSource = sourceAt(now, '.');
+  if (sides.length > 0 && !sides.some((s) => s.dir === '.') && rootSource.templates.length > 0)
+    sides.unshift({ dir: '.', old: sourceAt(before, '.'), new: rootSource, contextOnly: true });
+  return sides;
+}
+
 export async function apply(ctx: Context, options: ApplyOptions): Promise<Applied> {
   const { plxVersion } = options;
   const repo = await topOf(ctx, options.repo);
@@ -139,20 +196,19 @@ export async function apply(ctx: Context, options: ApplyOptions): Promise<Applie
     const refusal = versionRefusal(now, before, plxVersion);
     if (refusal !== undefined) throw new Error(refusal);
   }
-  const sides: SiteSides[] = [];
-  for (const dir of new Set([...now, ...before].map((s) => s.dir))) {
-    const [old, next] = [sourceAt(before, dir), sourceAt(now, dir)];
-    if (next.templates.length + old.templates.length === 0) continue;
-    if (isDeepStrictEqual(old, next)) continue;
-    sides.push({ dir, old, new: next });
-  }
-  if (sides.length === 0) return { sites: [], conflicted: 0, applied: false };
-  const plan = await planSync(ctx, repo, options.templates ?? bundledTemplatesRoot(), sides);
+  const sides = await sitesToTake(now, before, options.templates);
+  if (sides.length === 0) return { sites: [], conflicted: 0, applied: false, declined: false };
+  const siblings = now.filter((s) => s.dir !== '.').map((s) => ({ dir: s.dir, answers: s.config?.answers ?? {} }));
+  const plan = await planSync(ctx, repo, options.templates ?? bundledTemplatesRoot(), sides, {
+    labels: { old: 'the markers at HEAD', new: 'the markers in the working tree' },
+    siblings,
+  });
   const changes = plan.sites.reduce((n, s) => n + s.report.length + Object.keys(s.defaults).length, 0);
   const result = { sites: plan.sites, conflicted: plan.conflicted };
-  if (changes === 0) return { ...result, applied: false };
+  if (changes === 0) return { ...result, applied: false, declined: false };
   const where = plan.sites.length === 1 ? 'one site' : `${plan.sites.length} sites`;
-  if (!(await ctx.confirm(`apply ${changes} changes in ${where} to ${repo}?`))) return { ...result, applied: false };
+  if (!(await ctx.confirm(`apply ${changes} changes in ${where} to ${repo}?`)))
+    return { ...result, applied: false, declined: true };
   await plan.perform();
-  return { ...result, applied: !ctx.dryRun };
+  return { ...result, applied: !ctx.dryRun, declined: false };
 }
