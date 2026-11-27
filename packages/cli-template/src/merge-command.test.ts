@@ -239,3 +239,17 @@ test('a deletion that empties the target leaves the target itself', () => {
     assert.deepEqual(read(s.path('target')), {});
   });
 });
+
+test('a file whose content changes and whose executable bit does not keeps its permissions exactly', () => {
+  const old = { 'a.sh': { text: 'one\n', mode: 0o755 }, 'b.txt': 'one\n' };
+  const next = { 'a.sh': { text: 'two\n', mode: 0o755 }, 'b.txt': 'two\n' };
+  withDirectories(old, next, old, (s) => {
+    chmodSync(s.path('target/a.sh'), 0o744);
+    chmodSync(s.path('target/b.txt'), 0o640);
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 0, run.stderr);
+    assert.equal(readFileSync(s.path('target/a.sh'), 'utf8'), 'two\n');
+    assert.equal(permissions(s, 'target/a.sh'), 0o744, 'not widened to 0o755');
+    assert.equal(permissions(s, 'target/b.txt'), 0o640);
+  });
+});
