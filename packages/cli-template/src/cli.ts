@@ -5,10 +5,19 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { text as readAll } from 'node:stream/consumers';
 import { parseArgs } from 'node:util';
-import { applyChanges, readTree, requireEmpty } from './directory.ts';
+import { applyChanges, readCurrent, readTree, requireEmpty } from './directory.ts';
 import { InputError, messageOf } from './errors.ts';
-import { render } from './index.ts';
-import type { Answers, RenderError, RenderResult, Tree } from './types.ts';
+import { gitMergeFile, merge, render } from './index.ts';
+import {
+  type Answers,
+  DIRECTORY,
+  type Entry,
+  MODE_TYPE,
+  type Policies,
+  type RenderError,
+  type RenderResult,
+  type Tree,
+} from './types.ts';
 
 /** The exit codes. */
 export const EXIT = { ok: 0, failed: 1, usage: 2, input: 3 } as const;
@@ -115,6 +124,14 @@ async function readAnswers(source: string | undefined): Promise<Answers> {
   return answers as Answers;
 }
 
+/** The policies `render` wrote beside the render in `dir`. */
+async function readPolicies(dir: string): Promise<Policies> {
+  const { files } = JSON.parse(await readFile(policiesOf(dir), 'utf8')) as {
+    files: Record<string, { policy: 'merge' | 'born-once' }>;
+  };
+  return new Map(Object.entries(files));
+}
+
 /** The JSON a render prints: the core's result, but for its tree. */
 function renderJson(result: RenderResult | undefined, errors: readonly RenderError[]) {
   return {
@@ -124,6 +141,23 @@ function renderJson(result: RenderResult | undefined, errors: readonly RenderErr
     birth: result?.birth ?? [],
     errors,
   };
+}
+
+async function mergeCommand(oldDir: string, newDir: string, target: string): Promise<number> {
+  const old = await readTree(oldDir);
+  const next = await readTree(newDir);
+  const files = { old: await readPolicies(oldDir), new: await readPolicies(newDir) };
+  const current = await readCurrent(target, new Set([...old.keys(), ...next.keys()]));
+  const { tree, report } = await merge({ old, new: next, current, files }, gitMergeFile);
+  const changes = new Map<string, Entry | undefined>();
+  for (const { path, outcome } of report) {
+    if (outcome === 'deleted') changes.set(path, undefined);
+    else if (outcome !== 'kept' && tree.has(path)) changes.set(path, tree.get(path));
+  }
+  const directories = new Set([...next].filter(([, e]) => (e.mode & MODE_TYPE) === DIRECTORY).map(([path]) => path));
+  await applyChanges(target, changes, directories);
+  print({ report });
+  return EXIT.ok;
 }
 
 async function renderCommand(
@@ -189,8 +223,10 @@ export async function main(argv: readonly string[]): Promise<number> {
           throw new UsageError('render takes an output directory and a template');
         return await renderCommand(values.answers as string | undefined, out, templates);
       }
-      if (positionals.length !== 3) throw new UsageError('merge takes three directories');
-      throw new Error('merge is not implemented');
+      const [oldDir, newDir, target, ...extra] = positionals;
+      if (oldDir === undefined || newDir === undefined || target === undefined || extra.length > 0)
+        throw new UsageError('merge takes three directories');
+      return await mergeCommand(oldDir, newDir, target);
     }
     throw new UsageError(`unknown command ${command}`);
   } catch (error) {
