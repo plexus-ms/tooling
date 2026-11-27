@@ -27,6 +27,7 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   ownersOf(read, errors);
   const resolved = read.map((template) => ({
     template,
+    reads: readsOf(template, given, errors),
     resolution: resolveAnswers(template.manifest, given, scopeOf(template), errors),
   }));
 
@@ -87,6 +88,20 @@ function ownersOf(read: readonly Template[], errors: RenderError[]): Map<string,
     }
   }
   return owners;
+}
+
+/** The value of each answer `template` reads; a read without a default that nothing supplies is an error. */
+function readsOf(template: Template, given: Answers, errors: RenderError[]): Context {
+  const reads: Context = {};
+  for (const read of template.manifest.reads) {
+    if (Object.hasOwn(given, read.name)) reads[read.name] = given[read.name];
+    else if (Object.hasOwn(read, 'default')) continue;
+    else {
+      const message = `${template.manifest.name} reads ${read.name}, which no template of the render owns and no answer gives`;
+      errors.push({ template: template.manifest.name, path: MANIFEST, question: read.name, message });
+    }
+  }
+  return reads;
 }
 
 /** What a template's questions see besides its own earlier answers. */
