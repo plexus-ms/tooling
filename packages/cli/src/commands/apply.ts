@@ -5,7 +5,8 @@
 // The result is one block per site that changed, `<outcome> <path>` per file
 // the merge touched and `+ <answer>: <value>` per default written into the
 // marker; `--json` prints the same as data. Exit code 1 when a file is
-// conflicted: a conflict stays in the file between `<<<<<<< current` and
+// conflicted or the answer to the prompt was no; a dry run writes nothing and
+// exits 0, saying how many files would be conflicted. A conflict is: a conflict stays in the file between `<<<<<<< current` and
 // `>>>>>>> new render`, or the file is kept as the user edited it where the
 // template dropped it. Nothing is committed.
 //
@@ -36,20 +37,44 @@ export function register(program: Command): void {
         ...(opts.templates ? { templates: resolve(opts.templates) } : {}),
       });
       ctx.result(applied, renderApplied);
-      if (applied.conflicted > 0) {
-        ctx.done(`${applied.conflicted} conflicted: resolve them, then commit`, false);
-        process.exitCode = 1;
-      } else if (applied.applied) ctx.done('applied; review the diff, then commit');
-      else if (applied.sites.length === 0) ctx.done('nothing to apply: no marker differs from HEAD');
+      const { line, ok, code } = outcomeOf(applied, ctx.dryRun);
+      ctx.done(line, ok);
+      if (code !== 0) process.exitCode = code;
     });
+}
+
+/**
+ * The last line and the exit code, true to what happened. A conflict fails
+ * the run that wrote it. A dry run wrote nothing, did what it promised and
+ * exits 0, naming the conflicts it foresees. An answer of no wrote nothing
+ * that was asked for and exits 1, so that a script does not go on as if it had.
+ */
+export function outcomeOf(applied: Applied, dryRun: boolean): { line: string; ok: boolean; code: 0 | 1 } {
+  if (applied.declined) return { line: 'nothing written: the answer was no', ok: false, code: 1 };
+  if (applied.sites.length === 0) return { line: 'nothing to apply: no marker differs from HEAD', ok: true, code: 0 };
+  if (dryRun) {
+    const would =
+      applied.conflicted > 0
+        ? `, ${applied.conflicted} file${applied.conflicted === 1 ? '' : 's'} would be conflicted`
+        : '';
+    return { line: `dry run: nothing written${would}`, ok: true, code: 0 };
+  }
+  if (applied.conflicted > 0)
+    return { line: `${applied.conflicted} conflicted: resolve them, then commit`, ok: false, code: 1 };
+  if (applied.applied) return { line: 'applied; review the diff, then commit', ok: true, code: 0 };
+  return { line: 'the markers changed nothing in the files', ok: true, code: 0 };
 }
 
 export function renderApplied(applied: Applied): string {
   return applied.sites
-    .flatMap((s) => [
-      s.dir,
-      ...s.report.map((e) => `  ${e.outcome} ${e.path}`),
-      ...Object.entries(s.defaults).map(([key, value]) => `  + ${key}: ${JSON.stringify(value)}`),
-    ])
+    .flatMap((s) =>
+      s.report.length + Object.keys(s.defaults).length === 0
+        ? [`${s.dir}: re-rendered, no file changed`]
+        : [
+            s.dir,
+            ...s.report.map((e) => `  ${e.outcome} ${e.path}`),
+            ...Object.entries(s.defaults).map(([key, value]) => `  + ${key}: ${JSON.stringify(value)}`),
+          ],
+    )
     .join('\n');
 }
