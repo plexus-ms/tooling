@@ -81,3 +81,40 @@ test('a directory whose part renders empty is skipped with its files, and one th
   assert.deepEqual(listing(off.tree), { 'two.txt': 'two', five: dir, void: dir });
   assert.deepEqual([...off.files.keys()], ['two.txt', 'five', 'void']);
 });
+
+const where = 'name: basket\nquestions:\n  target:\n    type: str\n';
+
+// tests/test_copy.py::test_value_with_forward_slash. A source path is split at
+// its slashes before anything renders, so the slash is an answer here, where
+// copier writes `_copier_conf.sep`.
+test('a part that renders with slashes lands in nested directories', () => {
+  const result = render([template(where, { '{{ target }}.txt': 'This is template.' })], { target: 'a/b/c' });
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(listing(result.tree), { 'a/b/c.txt': 'This is template.' });
+});
+
+// tests/test_copy.py::test_relative_render_path_outside_destination_raises_error,
+// with the path an answer for want of copier's `pathjoin`.
+test('a rendered path that leaves the output through .. is an error naming the path and the source', () => {
+  const result = render([template(where, { '{{ target }}': 'bar' })], { target: '../forbidden.txt' });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.template, 'basket');
+  assert.equal(result.errors[0]?.path, 'files/{{ target }}');
+  assert.match(result.errors[0]?.message ?? '', /"\.\.\/forbidden\.txt" is forbidden/);
+  assert.deepEqual(listing(result.tree), {});
+});
+
+// tests/test_copy.py::test_absolute_render_path_outside_destination_raises_error_on_posix
+test('a rendered absolute path is an error naming the path', () => {
+  const result = render([template(where, { '{{ target }}': 'bar' })], { target: '/other/forbidden.txt' });
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0]?.message ?? '', /"\/other\/forbidden\.txt" is forbidden/);
+  assert.deepEqual(listing(result.tree), {});
+});
+
+// No original: copier resolves the path, so a `..` that stays inside is fine.
+test('a rendered path with .. that stays inside the output is normalised', () => {
+  const result = render([template(where, { '{{ target }}': 'x' })], { target: 'shelf/../apple.txt' });
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(Object.keys(listing(result.tree)), ['apple.txt']);
+});
