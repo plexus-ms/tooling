@@ -22,10 +22,21 @@
 // one per file, whatever the marker lists; it names no requirement, and
 // nothing excludes a file from it.
 //
+// Also of no requirement, and no deviation silences them: the checks of the
+// markers as configuration (sites.ts, `markerConfig` below). The root marker's
+// `version` equals the repo's `plx` pin (and is set where any marker lists
+// `templates`), no nested marker carries `version`, no key is answered in two
+// markers, and a marker that cannot be read as configuration is named. They
+// bind a repo that has crossed over from copier: one in which git tracks no
+// `.copier-answers.yml` at any depth (`crossedOver`; § 7 of the template
+// composition decisions: the crossover deletes every answers file). Until then
+// they are skipped, so that this can ship before the cutover. A repo that
+// lists no `templates` needs no `version`.
+//
 //   plx doctor          # this repo and its apps, from anywhere inside it
 //   plx doctor ~/dev    # every Plexus repo beneath, and its apps
 import { realpath } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import {
   APP_SERVICE,
   type Compose,
@@ -40,6 +51,7 @@ import {
 } from './compose.ts';
 import { filesWithConflictMarkers } from './conflicts.ts';
 import type { Context } from './context.ts';
+import { ANSWERS_FILE } from './copier.ts';
 import { ExecError } from './io.ts';
 import { REQUIREMENT_NAME } from './lints.ts';
 import { type Declaration, MARKER_FILE, reasonGiven } from './marker.ts';
@@ -336,6 +348,9 @@ export const CHECKS: Readonly<Record<string, RepoCheck | AppCheck | UnitCheck>> 
   'PLX-App/Stateful/Seed': { binds: 'app', profile: 'stateful', check: seed },
 };
 
+/** Whether a repo has left copier behind: git tracks no answers file in it, at any depth. */
+const crossedOver = (repo: RepoFacts): boolean => !(repo.tracked ?? []).some((path) => basename(path) === ANSWERS_FILE);
+
 /**
  * What the markers as configuration must meet (sites.ts): the root's `version`
  * is the `plx` pin's, no other marker has one, and no key is answered in two
@@ -344,6 +359,7 @@ export const CHECKS: Readonly<Record<string, RepoCheck | AppCheck | UnitCheck>> 
  * no requirement.
  */
 function markerConfig(repo: RepoFacts): string[] {
+  if (!crossedOver(repo)) return [];
   const sites = repo.sites ?? [];
   const problems = sites
     .filter((s) => s.problem !== undefined && !(s.dir === '.' && repo.marker?.problem))
