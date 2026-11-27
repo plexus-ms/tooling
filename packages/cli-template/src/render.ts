@@ -22,9 +22,9 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
     const { name } = template.manifest;
     const own = resolveAnswers(template.manifest, given, errors);
     Object.assign(answers, own);
-    for (const [path, { entry }] of renderFiles(template, own, errors)) {
+    for (const [path, { entry, source }] of renderFiles(template, own, errors)) {
       tree.set(path, entry);
-      files.set(path, { template: name, policy: 'merge' });
+      files.set(path, { template: name, policy: template.manifest.policies.get(source) ?? 'merge' });
     }
   });
   if (errors.length > 0) return { tree: new Map(), answers, unused: [], files: new Map(), birth: [], errors };

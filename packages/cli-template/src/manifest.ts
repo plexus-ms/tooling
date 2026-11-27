@@ -8,7 +8,7 @@
 //     fruit:
 //       type: str
 import { parse } from 'yaml';
-import type { Manifest, Question, RenderError, Tree } from './types.ts';
+import type { Manifest, Policy, Question, RenderError, Tree } from './types.ts';
 
 /** A template read: its manifest, and its files by their path below `files/`. */
 export interface Template {
@@ -31,7 +31,8 @@ export function readTemplate(tree: Tree, _position: number, _errors: RenderError
     name,
     ...(fields as object),
   }));
-  const manifest: Manifest = { name: data.name, questions, reads: [], policies: new Map(), birth: [] };
+  const policies = new Map(Object.entries(data.policies ?? {}) as [string, Policy][]);
+  const manifest: Manifest = { name: data.name, questions, reads: [], policies, birth: [] };
   const files = new Map(
     [...tree].filter(([path]) => path.startsWith(FILES)).map(([path, e]) => [path.slice(FILES.length), e]),
   );
