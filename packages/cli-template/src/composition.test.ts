@@ -5,7 +5,7 @@
 // shelf, which owns `book`, and the templates that read from them.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { type RenderError, render } from './index.ts';
+import { DIRECTORY, type RenderError, render } from './index.ts';
 import { listing, template } from './testing/trees.ts';
 
 const basket = 'name: basket\nquestions:\n  fruit:\n    type: str\n';
@@ -252,4 +252,57 @@ questions:
   const alone = render([crated], {});
   assert.deepEqual(alone.answers, { label: 'crate' });
   assert.deepEqual(listing(alone.tree), { 'names.txt': 'crate crate' });
+});
+
+test('two templates rendering the same path is an error naming both, and the render writes nothing', () => {
+  const result = render(
+    [
+      template(basket, { 'label.txt': 'plain', 'basket.txt': 'b' }),
+      template(shelf, { '{{ book }}.txt.jinja': '{{ book }}', 'shelf.txt': 's' }),
+    ],
+    { fruit: 'pear', book: 'label' },
+  );
+  assert.deepEqual(where(result.errors), [
+    { template: 'basket', other: 'shelf', path: 'files/label.txt', question: undefined },
+  ]);
+  assert.equal(
+    result.errors[0]?.message,
+    "basket's label.txt and shelf's {{ book }}.txt.jinja both render to label.txt",
+  );
+  assert.deepEqual(listing(result.tree), {});
+  assert.deepEqual([...result.files], []);
+});
+
+test("a file of one template with another template's path below it is an error naming both", () => {
+  const result = render([template(shelf, { '{{ book }}/page.txt': 'p' }), template(basket, { atlas: 'a file' })], {
+    fruit: 'pear',
+    book: 'atlas',
+  });
+  assert.deepEqual(where(result.errors), [
+    { template: 'basket', other: 'shelf', path: 'files/atlas', question: undefined },
+  ]);
+  assert.equal(
+    result.errors[0]?.message,
+    "basket's atlas renders to atlas, a file, and shelf's {{ book }}/page.txt renders to atlas/page.txt below it",
+  );
+  assert.deepEqual(listing(result.tree), {});
+});
+
+test("an empty directory is written by one template: two leaving it empty is an error naming both, and one is implied by the other's files below it", () => {
+  const dir = { text: '', mode: DIRECTORY | 0o755 };
+  const both = render([template(basket, { attic: dir }), template(shelf, { '{{ book }}': dir })], {
+    fruit: 'pear',
+    book: 'attic',
+  });
+  assert.deepEqual(where(both.errors), [
+    { template: 'basket', other: 'shelf', path: 'files/attic', question: undefined },
+  ]);
+  assert.equal(both.errors[0]?.message, "basket's attic and shelf's {{ book }} both render to attic");
+  const below = render([template(basket, { attic: dir }), template(shelf, { '{{ book }}/old.txt': 'o' })], {
+    fruit: 'pear',
+    book: 'attic',
+  });
+  assert.deepEqual(below.errors, []);
+  assert.deepEqual(listing(below.tree), { 'attic/old.txt': 'o' });
+  assert.deepEqual(new Map(below.files), new Map([['attic/old.txt', { template: 'shelf', policy: 'merge' }]]));
 });
