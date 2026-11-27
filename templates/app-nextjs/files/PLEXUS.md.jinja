@@ -1,0 +1,5 @@
+- `{{ name }}`, a Next.js app: `docker/Dockerfile` builds its image and `docker/compose.yaml` runs it on its host.
+- Its verbs are the repo root's: `mise :dev <app>`, `mise :build <app>` and `mise :verify <app>`, `<app>` being this directory's name.
+{%- if profile == 'stateful' %}
+- The `migrate` and `seed` scripts in `package.json` fail until they are written: the deploy verb runs `migrate` in the image, through the compose file's `migrate` service, and `seed` loads development data and never runs on a host.
+{%- endif %}

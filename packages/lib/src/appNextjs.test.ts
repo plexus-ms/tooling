@@ -32,7 +32,7 @@ test('the app’s name is in its package.json, its page and its marker', async (
 });
 
 test('the tenant is a read: the label of the compose file carries it, and nothing owns it here', async () => {
-  const result = await render({ tenant: 'initech' });
+  const result = await render({ tenant: 'initech', profile: 'stateful' });
   assert.equal(textOf(result, 'docker/compose.yaml').match(/plexus\.tenant: initech/g)?.length, 2);
   assert.ok(!('tenant' in result.answers));
   assert.deepEqual(result.unused, []);
