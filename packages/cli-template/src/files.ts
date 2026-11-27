@@ -65,7 +65,16 @@ export function renderFiles(template: Template, context: Context, errors: Render
     source: string,
     isDirectory: boolean,
   ): string | undefined => {
-    const part = parent === undefined ? '' : renderString(name, context);
+    let part = '';
+    try {
+      if (parent !== undefined) part = renderString(name, context);
+    } catch (error) {
+      errors.push({
+        template: template.manifest.name,
+        path: `${FILES}${source}`,
+        message: `error rendering template path ${source}: ${messageOf(error)}`,
+      });
+    }
     if (part === '') return undefined;
     const path = join(parent ?? '', part);
     if (path === undefined || (path === '' && !isDirectory)) {
