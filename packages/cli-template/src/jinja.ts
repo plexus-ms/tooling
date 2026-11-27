@@ -5,8 +5,9 @@
 //
 // A file's trailing newlines are kept, as copier's Jinja environment keeps
 // them, and nothing is escaped: templates render config files and source code,
-// never HTML for a browser. Line endings are carried as they are; Python's
-// Jinja would turn every CRLF into LF.
+// never HTML for a browser. The library escapes only by a template name's
+// suffix, such as `.html`, and a string is rendered here without a name. Line
+// endings are carried as they are; Python's Jinja would turn every CRLF into LF.
 //
 // A variable the context lacks is an error wherever it is used, except under
 // `is defined` and the `default` filter: a typo in a template fails the render
@@ -25,7 +26,6 @@ const env = new Environment();
 env.keepTrailingNewline = true;
 env.undefinedBehavior = 'strict';
 env.pycompat = true;
-env.setAutoEscapeCallback(() => false);
 
 /** The text a Jinja template source renders to in the context. */
 export function renderString(source: string, context: Context): string {
