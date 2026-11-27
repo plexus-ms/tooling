@@ -24,3 +24,8 @@ env.setAutoEscapeCallback(() => false);
 export function renderString(source: string, context: Context): string {
   return env.renderStr(source, context);
 }
+
+/** The value of a Jinja expression in the context, as a JavaScript value: string, number, boolean, null, array or object. */
+export function evaluate(expression: string, context: Context): unknown {
+  return env.evalExpr(expression, context);
+}
