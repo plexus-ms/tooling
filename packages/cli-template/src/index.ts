@@ -7,6 +7,7 @@
 // Two functions over in-memory trees, whose types and their meaning are in
 // types.ts: `render` and `merge`.
 export { merge } from './merge.ts';
+export { render } from './render.ts';
 export {
   type Answers,
   type BirthCommand,
