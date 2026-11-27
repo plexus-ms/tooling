@@ -270,3 +270,13 @@ test('a rendered file keeps its trailing newline', () => {
   const result = render([template(data, { 'data.txt.jinja': 'This is {{ data }}.\n' })], { data: 'foo' });
   assert.deepEqual(listing(result.tree), { 'data.txt': 'This is foo.\n' });
 });
+
+// No original: copier writes a file below a directory that renders to `.` at
+// the directory's parent, and so do we.
+test('a directory part that renders to . or x/.. puts its files at the parent', () => {
+  for (const target of ['.', 'x/..']) {
+    const result = render([template(where, { '{{ target }}/f.txt': 'f', 'keep/{{ target }}/g.txt': 'g' })], { target });
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(listing(result.tree), { 'f.txt': 'f', 'keep/g.txt': 'g' });
+  }
+});
