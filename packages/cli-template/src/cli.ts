@@ -1,6 +1,94 @@
 // plx-template, the command line around the core: the shell that reads
 // directories and JSON, calls `render` or `merge`, and writes the results. It
-// holds no decision of its own.
+// holds no decision of its own; every one is the core's (types.ts, render.ts,
+// merge.ts). `plx-template --help` says how to call it; this says what it does.
+//
+// An update by hand, in three commands. A directory `project` was rendered
+// from version 1 of the templates, and its owner has edited it since. Version
+// 1 of the templates is in `v1/`, version 2 in `v2/`, and `answers.json`
+// holds the answers the project was rendered with:
+//
+//   plx-template render --answers answers.json old v1/basket v1/shelf
+//   plx-template render --answers answers.json new v2/basket v2/shelf
+//   plx-template merge old new project
+//
+// The first two write the two renders, `old` and `new`, which must not exist
+// yet or be empty; the third changes `project` and prints what it did to each
+// path. Look at `diff -r old new` to see what the template changed, and at the
+// markers the third left (below) to see what is yours to decide. Nothing else
+// is needed: no state is kept, no command is run, git is run only to merge the
+// text of a file that both sides changed, `git merge-file`, and its results are
+// the ones `git merge-file -p -L current -L "old render" -L "new render"` gives.
+//
+// What `render` does. It reads each template directory into a tree (its
+// manifest `template.yml` and its `files/`, manifest.ts), reads the answers,
+// gives both to the core, and, where the core reports no error, writes the
+// rendered tree to the output directory, creating it where it is missing, and
+// the policies file beside it. It refuses an output directory that is not
+// empty, and a template or an answers file it cannot read, as errors in the
+// inputs; it writes nothing at all when there is any. It runs no birth
+// command: they are in the JSON, for the caller.
+//
+// How the policies travel from `render` to `merge`. `merge` needs the policy
+// of every path of both renders (`merge` or `born-once`, types.ts). `render`
+// writes them to `<output-dir>.plx-template.json` beside the rendered
+// directory, `{ "files": { "<path>": { "template": ..., "policy": ... } } }`,
+// the `files` of its own JSON; `merge` reads the file beside each of its two
+// directories. It is beside the render and not in it so that the directory
+// holds exactly the files the templates rendered: a file inside would be taken
+// for one of them by `merge` and by a person comparing two renders with
+// `diff -r`. A render moved or copied needs its policies file moved with it;
+// `merge` fails, naming the file it expected, where one is missing or is not
+// what `render` writes. Output directory `old/` or `old` give the same file.
+//
+// What `merge` reads of the target directory. Not all of it: for each path of
+// either render, the entry at the path (a file with its bytes and mode, a
+// symlink with its target), the first leaf below it where it is a directory,
+// and each directory above it that is a symlink or a file, where the walk
+// stops. That answers every rule of merge.ts, which looks at the path and at
+// "entries below it" and at the directories the path lies in, and it leaves
+// `.git`, `node_modules` and everything the templates do not name unread.
+// Nothing is read through a symlink.
+//
+// How `merge` writes. It applies the report of the core to the target:
+// `added`, `clean` and `conflicted` paths are written where the merged entry
+// differs from what is on disk, `deleted` ones are removed, `kept` ones are
+// left alone, and a path the report does not name is never touched (directory.ts
+// has the details). A conflict stays in the file between the markers
+// `<<<<<<< current` and `>>>>>>> new render`, the user's lines first, so that
+// it can be found with `grep -rn '^<<<<<<< current'`. Nothing is written
+// through a symlink or deleted through one. An existing file keeps its
+// permissions but for its executable bits, and is never given more than
+// execute where it may already read: 0o600 becomes 0o700 and 0o644 becomes
+// 0o755. A deletion that leaves a directory empty removes it, upward to the
+// target and no further, as copier does, unless the new render holds it as an
+// empty directory; `merge` itself never deletes a directory, and an empty
+// directory that was there already stays.
+//
+// Standard output carries only JSON, messages for people go to standard error.
+//   render prints { answers, unused, files, birth, errors }: the core's result
+//          without the tree, `files` and `answers` by name. `files` maps each
+//          path, an empty directory too, to { template, policy }; `birth` lists
+//          { template, command } as the templates declare them. `errors` is
+//          empty on success.
+//   merge  prints { report: [{ path, outcome }] } in path order, `outcome` one
+//          of clean, added, deleted, conflicted or kept (types.ts).
+//   an error in the inputs prints, for merge, { errors }, and for render its
+//          usual object with `errors` filled; each error is { message,
+//          template?, path?, question?, other? }, every one found is listed,
+//          and each is repeated on standard error with what it concerns.
+//
+// The exit codes (`EXIT`): 0 done, a merge that left conflicts too; 1 failed:
+// something other than the inputs went wrong, a file that cannot be written or
+// git that cannot be run; 2 a usage error, with nothing on standard output;
+// 3 an error in the inputs: a missing answer, paths two templates write, a bad
+// manifest, a directory or policies file that is missing, an output directory
+// that is not empty.
+//
+// Answers arrive as JSON, a file or `-` for standard input, and are never
+// asked for. The command is the only code of the package, with directory.ts and
+// git-merge-file.ts, that touches the filesystem or runs a command
+// (boundary.test.ts).
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { text as readAll } from 'node:stream/consumers';
