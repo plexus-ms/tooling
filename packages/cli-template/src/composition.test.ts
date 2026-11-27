@@ -103,3 +103,14 @@ test('two templates declaring the same question is an error naming both, and the
   assert.match(result.errors[0]?.message ?? '', /crate/);
   assert.deepEqual(listing(result.tree), {});
 });
+
+test('two templates of one name is an error naming both by their position', () => {
+  const result = render([template(basket, { 'a.txt': 'a' }), template('name: basket\n', { 'b.txt': 'b' })], {
+    fruit: 'pear',
+  });
+  assert.deepEqual(where(result.errors), [
+    { template: 'basket', other: 'basket', path: 'template.yml', question: undefined },
+  ]);
+  assert.equal(result.errors[0]?.message, 'templates 1 and 2 are both named basket');
+  assert.deepEqual(listing(result.tree), {});
+});
