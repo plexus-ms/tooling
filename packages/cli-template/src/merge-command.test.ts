@@ -2,6 +2,7 @@
 // edits, in a scratch directory. The renders are written by hand, with the
 // policies file beside each that `render` writes (render-command.test.ts).
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { plxTemplate, put, read, type Scratch, scratch } from './testing/run.ts';
@@ -251,5 +252,18 @@ test('a file whose content changes and whose executable bit does not keeps its p
     assert.equal(readFileSync(s.path('target/a.sh'), 'utf8'), 'two\n');
     assert.equal(permissions(s, 'target/a.sh'), 0o744, 'not widened to 0o755');
     assert.equal(permissions(s, 'target/b.txt'), 0o640);
+  });
+});
+
+test('a render directory that holds a pipe is an error in the inputs, code 3, naming the path', () => {
+  withDirectories({ 'a.txt': 'one\n' }, { 'a.txt': 'two\n' }, { 'a.txt': 'one\n' }, (s) => {
+    execFileSync('mkfifo', [s.path('new/pipe')]);
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 3, run.stderr);
+    assert.deepEqual(
+      JSON.parse(run.stdout).errors.map((e: { path: string }) => e.path),
+      [s.path('new/pipe')],
+    );
+    assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'one\n');
   });
 });
