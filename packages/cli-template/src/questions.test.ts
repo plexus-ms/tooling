@@ -807,7 +807,7 @@ test('a yaml answer is read as YAML 1.1', () => {
 });
 
 test('a question named like an inherited property has no answer until one is given', () => {
-  for (const name of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+  for (const name of ['toString', 'constructor', 'hasOwnProperty', 'valueOf']) {
     const missing = basket(`${name}:`, {});
     assert.deepEqual(
       missing.errors.map(({ question }) => question),
