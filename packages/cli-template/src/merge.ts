@@ -4,7 +4,7 @@
 import type { Entry, MergeEntry, MergeFile, MergeInput, MergeResult } from './types.ts';
 
 /** The current tree with the changes from the old render to the new one merged in, and a report per touched path. */
-export async function merge(input: MergeInput, _mergeFile: MergeFile): Promise<MergeResult> {
+export async function merge(input: MergeInput, mergeFile: MergeFile): Promise<MergeResult> {
   const { old, new: next, current } = input;
   const tree = new Map(current);
   const report: MergeEntry[] = [];
@@ -16,6 +16,12 @@ export async function merge(input: MergeInput, _mergeFile: MergeFile): Promise<M
     if (n !== undefined && same(c, o)) {
       tree.set(path, n);
       report.push({ path, outcome: 'clean' });
+      continue;
+    }
+    if (o !== undefined && n !== undefined && c !== undefined) {
+      const merged = await mergeFile({ path, old: o.bytes, new: n.bytes, current: c.bytes });
+      tree.set(path, { bytes: merged.bytes, mode: n.mode });
+      report.push({ path, outcome: merged.conflicted ? 'conflicted' : 'clean' });
       continue;
     }
     throw new Error(`merge: ${path} changed, which is not merged yet`);
