@@ -4,7 +4,7 @@
 // fixture templates in scratch directories.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { planMerge, readManifest, readTree, render } from './index.ts';
+import { planMerge, readManifest, readTemplateDirectory, readTree, render } from './index.ts';
 import { put, read, scratch } from './testing/run.ts';
 
 const BASKET = ['name: basket', 'questions:', '  fruit:', '    type: str', '  count:', '    default: 3', ''].join('\n');
@@ -150,6 +150,20 @@ test('planMerge takes the policy of a path only the old render has from the old 
     assert.deepEqual(plan.report, [{ path: 'p.txt', outcome: 'kept' }]);
     await plan.apply();
     assert.deepEqual(read(s.dir), { 'p.txt': 'a\n' });
+  } finally {
+    s.remove();
+  }
+});
+
+test('readTemplateDirectory returns the manifest and the tree of a template directory in one read', async () => {
+  const s = scratch();
+  try {
+    put(s.dir, { 'template.yml': BASKET, 'files/list.txt': 'apple\n' });
+    const { manifest, tree } = await readTemplateDirectory(s.dir);
+    assert.equal(manifest.name, 'basket');
+    assert.deepEqual([...tree.keys()].sort(), ['files/list.txt', 'template.yml']);
+    put(s.path('bad'), { 'template.yml': 'name: Basket\n' });
+    await assert.rejects(readTemplateDirectory(s.path('bad')), /is no template/);
   } finally {
     s.remove();
   }

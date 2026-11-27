@@ -10,7 +10,15 @@
 // that does: it writes temporary files and runs git. The functions that touch
 // a directory for a caller of the library are exported beside them, `readTree`,
 // `readManifest` and `planMerge` (directory.ts).
-export { type MergePlan, planMerge, type RenderedSide, readManifest, readTree } from './directory.ts';
+export {
+  type MergePlan,
+  planMerge,
+  type RenderedSide,
+  readManifest,
+  readTemplateDirectory,
+  readTree,
+  type TemplateDirectory,
+} from './directory.ts';
 export { gitMergeFile } from './git-merge-file.ts';
 export { TEMPLATE_NAME } from './manifest.ts';
 export { merge } from './merge.ts';

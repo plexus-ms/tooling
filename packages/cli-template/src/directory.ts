@@ -29,10 +29,10 @@
 // paths it is given, an entry to write or nothing to delete, and touches
 // nothing else. It never writes or deletes through a symlink: a path whose
 // directory above it is a symlink or a file, or that is itself a symlink, is
-// skipped. No test reaches these guards, since the core already answers `kept`
-// where a directory above a path is a symlink or the path is one (rules 1 and 4
-// of merge.ts) and never hands this such a path; they are a second line of
-// defence for a caller that hands it something else. A file is written only where its bytes differ from what is there. A
+// skipped. The core already answers `kept` where a directory above a path is a
+// symlink or the path is one (rules 1 and 4 of merge.ts) and never hands this
+// such a path; the guards are a second line of defence for a caller that hands
+// it something else. A file is written only where its bytes differ from what is there. A
 // file that exists keeps its permissions but for its executable bits, which
 // follow the entry's, and never widen beyond that: where the entry is
 // executable, a mode gains the owner's execute bit and the group's and others'
@@ -48,12 +48,13 @@
 // before, or the render still holds as an empty directory (`keep`), stays.
 //
 // What a caller of the library uses, beside `readTree`: `readManifest` reads
-// the manifest of a template directory, throwing one error that lists every
-// problem of it, and `planMerge` reads what `merge` looks at in a directory,
-// merges two renders given as trees with their policies, and returns the
-// report with `apply`, which makes the directory hold the result. Nothing is
-// written before `apply`, so a caller can show the report first; the merge of
-// the command `plx-template merge` is the same plan applied at once.
+// the manifest of a template directory, and `readTemplateDirectory` that
+// manifest with the tree `render` takes, both throwing one error that lists
+// every problem of the manifest. `planMerge` reads what `merge` looks at in a
+// directory, merges two renders given as trees with their policies, and
+// returns the report with `apply`, which makes the directory hold the result.
+// Nothing is written before `apply`, so a caller can show the report first; the
+// merge of the command `plx-template merge` is the same plan applied at once.
 import { chmod, lstat, mkdir, readdir, readFile, readlink, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { InputError, messageOf } from './errors.ts';
@@ -248,15 +249,27 @@ export async function requireEmpty(path: string): Promise<void> {
   if ((await readdir(path)).length > 0) throw new InputError('is not empty', path);
 }
 
-/** The manifest of the template directory `root`; the error lists every problem that keeps it from being read. */
-export async function readManifest(root: string): Promise<Manifest> {
+/** A template directory read: its manifest, and its tree for `render`. */
+export interface TemplateDirectory {
+  readonly manifest: Manifest;
+  readonly tree: Tree;
+}
+
+/** The template directory `root`, read once; the error lists every problem that keeps its manifest from being read. */
+export async function readTemplateDirectory(root: string): Promise<TemplateDirectory> {
   const errors: RenderError[] = [];
-  const template = readTemplate(await readTree(root), 1, errors);
+  const tree = await readTree(root);
+  const template = readTemplate(tree, 1, errors);
   if (template === undefined) {
     const lines = errors.map((e) => `${e.path ?? root}: ${e.message}${e.question ? ` (question ${e.question})` : ''}`);
     throw new Error(`${root} is no template:\n${lines.join('\n')}`);
   }
-  return template.manifest;
+  return { manifest: template.manifest, tree };
+}
+
+/** The manifest of the template directory `root`; the error is `readTemplateDirectory`'s. */
+export async function readManifest(root: string): Promise<Manifest> {
+  return (await readTemplateDirectory(root)).manifest;
 }
 
 /** One side of a merge: a render's tree, and the policies of its paths. */
@@ -282,7 +295,7 @@ export async function planMerge(target: string, old: RenderedSide, next: Rendere
   const changes = new Map<string, Entry | undefined>();
   for (const { path, outcome } of report) {
     if (outcome === 'deleted') changes.set(path, undefined);
-    else if (tree.has(path)) changes.set(path, tree.get(path));
+    else changes.set(path, tree.get(path));
   }
   const directories = new Set(
     [...next.tree].filter(([, e]) => (e.mode & MODE_TYPE) === DIRECTORY).map(([path]) => path),
