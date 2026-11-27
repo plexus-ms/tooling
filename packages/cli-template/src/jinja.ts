@@ -6,7 +6,9 @@
 // render config files and source code, never HTML for a browser. A variable the
 // context lacks is an error wherever it is used, except under `is defined` and
 // the `default` filter: a typo in a template fails the render instead of
-// writing an empty string, as copier's lenient Jinja would.
+// writing an empty string, as copier's lenient Jinja would. Strings, lists and maps
+// offer the Python methods Jinja templates call on them (`split`, `strip`,
+// `startswith`, `items` and the like), as they do in Python's Jinja.
 import { Environment } from 'minijinja-js';
 
 /** The variables a template or expression sees, by name. */
@@ -15,6 +17,7 @@ export type Context = Record<string, unknown>;
 const env = new Environment();
 env.keepTrailingNewline = true;
 env.undefinedBehavior = 'strict';
+env.pycompat = true;
 env.setAutoEscapeCallback(() => false);
 
 /** The text a Jinja template source renders to in the context. */
