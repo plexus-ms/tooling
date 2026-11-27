@@ -2,7 +2,7 @@
 // v9.19.1 (MIT, see LICENSE.copier); each test names its original.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DIRECTORY, render } from './index.ts';
+import { DIRECTORY, REGULAR, render } from './index.ts';
 import { listing, template } from './testing/trees.ts';
 
 const ripe = 'name: basket\nquestions:\n  ripe:\n    type: bool\n    default: false\n';
@@ -142,3 +142,30 @@ test('an error in a directory part names that directory once, not the files belo
   assert.ok(result.errors[0]?.message.includes(`parent/${broken}`));
   assert.ok(!result.errors[0]?.message.includes('child.txt'));
 });
+
+// tests/test_copy.py::test_preserved_permissions, adapted to the engine's rule:
+// copier keeps every permission bit of the source, the engine only whether the
+// owner may execute, and writes 0o644 or 0o755. The original's five modes, and
+// one more with only a group execute bit.
+for (const [mode, written] of [
+  [0o400, 0o644],
+  [0o700, 0o755],
+  [0o770, 0o755],
+  [0o707, 0o755],
+  [0o777, 0o755],
+  [0o010, 0o644],
+] as const) {
+  test(`a file of mode ${mode.toString(8).padStart(3, '0')} is written with mode ${written.toString(8)}`, () => {
+    const result = render(
+      [
+        template(ripe, {
+          the_file: { text: 'content', mode: REGULAR | mode },
+          'the_template.jinja': { text: 'content', mode: REGULAR | mode },
+        }),
+      ],
+      { ripe: true },
+    );
+    const file = written === 0o644 ? 'content' : { text: 'content', mode: REGULAR | written };
+    assert.deepEqual(listing(result.tree), { the_file: file, the_template: file });
+  });
+}
