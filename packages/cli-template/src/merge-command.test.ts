@@ -2,6 +2,7 @@
 // edits, in a scratch directory. The renders are written by hand, with the
 // policies file beside each that `render` writes (render-command.test.ts).
 import assert from 'node:assert/strict';
+import { rmSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { plx, put, read, type Scratch, scratch } from './testing/run.ts';
 import type { Listing } from './testing/trees.ts';
@@ -93,4 +94,29 @@ test('merge applies what the template changed to the directory, and reports each
     },
     ['born.md'],
   );
+});
+
+test('a render without its policies file, a malformed one, or a directory that is missing is code 3, every error listed, nothing written', () => {
+  withDirectories(OLD, NEW, TARGET, (s) => {
+    rmSync(s.path('old.plx-template.json'));
+    writeFileSync(s.path('new.plx-template.json'), '{"files": {"clean.txt": {"policy": "sometimes"}}}');
+    const before = read(s.path('target'));
+    const run = plx(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 3);
+    const { errors } = JSON.parse(run.stdout);
+    assert.deepEqual(
+      errors.map((e: { path: string }) => e.path),
+      [s.path('old.plx-template.json'), s.path('new.plx-template.json')],
+    );
+    assert.match(errors[0].message, /render/);
+    for (const e of errors) assert.ok(run.stderr.includes(e.message), e.message);
+    assert.deepEqual(read(s.path('target')), before);
+
+    const missing = plx(['merge', s.path('no-old'), s.path('new'), s.path('no-target')]);
+    assert.equal(missing.code, 3);
+    assert.deepEqual(
+      JSON.parse(missing.stdout).errors.map((e: { path: string }) => e.path),
+      [s.path('no-old'), s.path('no-target')],
+    );
+  });
 });
