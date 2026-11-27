@@ -220,3 +220,53 @@ test('a symlink below files/ is an error naming its path', () => {
   assert.match(result.errors[0]?.message ?? '', /symlink/);
   assert.deepEqual(listing(result.tree), {});
 });
+
+// No original: copier lets the later file overwrite the earlier. Here every
+// path is written once, and two sources of one template that render to one path
+// are an error naming both, as two templates doing so are (types.ts).
+test('two files of one template that render to one path are an error naming both sources', () => {
+  const result = render([template(ripe, { 'b.txt': 'plain', '{{ target }}.txt': 'other' })], {
+    ripe: true,
+    target: 'b',
+  });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.template, 'basket');
+  assert.equal(result.errors[0]?.path, 'files/{{ target }}.txt');
+  assert.ok(result.errors[0]?.message.includes('b.txt'));
+  assert.ok(result.errors[0]?.message.includes('{{ target }}.txt'));
+  assert.deepEqual(listing(result.tree), {});
+});
+
+// tests/test_normal_jinja2.py::test_normal_jinja2. The original sets copier's
+// `_envops`, which the engine has none of: its delimiters are Jinja's defaults,
+// so `[# GROG #]` stays as text, but blocks are not trimmed, and the lines of
+// the `if` stay as the indent and newline around them. Passes before this
+// issue's code, like the next test.
+test('a template renders with the default Jinja delimiters and no block trimming', () => {
+  const todo = 'name: todo\nquestions:\n  name:\n    type: str\n  todo:\n    type: str\n';
+  const source = [
+    '[[ {{ name }} TODO LIST]]',
+    "{# Let's put an ugly not-comment below #}",
+    '[# GROG #]',
+    "    {% if name == 'Guybrush' %}",
+    '    - {{ todo }}',
+    '    {% endif %}',
+    '',
+  ].join('\n');
+  const result = render([template(todo, { 'TODO.txt.jinja': source })], {
+    name: 'Guybrush',
+    todo: 'Become a pirate',
+  });
+  assert.deepEqual(listing(result.tree), {
+    'TODO.txt': '[[ Guybrush TODO LIST]]\n\n[# GROG #]\n    \n    - Become a pirate\n    \n',
+  });
+});
+
+// tests/test_normal_jinja2.py::test_to_not_keep_trailing_newlines_in_jinja2,
+// inverted: copier can be told to drop the trailing newline, the engine always
+// keeps it.
+test('a rendered file keeps its trailing newline', () => {
+  const data = 'name: data\nquestions:\n  data:\n    type: str\n';
+  const result = render([template(data, { 'data.txt.jinja': 'This is {{ data }}.\n' })], { data: 'foo' });
+  assert.deepEqual(listing(result.tree), { 'data.txt': 'This is foo.\n' });
+});
