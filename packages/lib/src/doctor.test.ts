@@ -1269,3 +1269,63 @@ test('the template names are not checked where no bundled templates are given, o
   const onCopier = crossed(sites, { templates: BUNDLED, tracked: ['.copier-answers.yml'] });
   assert.deepEqual(findings(onCopier), []);
 });
+
+const QUESTIONED = bundle({
+  'repo-turbo': 'questions:\n  tenant: {default: acme}\n  ci: {default: github}\n',
+  'app-nextjs': 'questions:\n  profile: {default: stateless}\nreads:\n  tenant:\n  region: {default: eu}\n',
+});
+const withTemplates = (sites: MarkerSite[]) => findings(crossed(sites, { templates: QUESTIONED }));
+const UNKNOWN_ROOT = (key: string) =>
+  `PLEXUS.md: \`${key}\` is neither reserved nor a question or read of a template that a marker of the repo lists`;
+
+test('a key of the root marker that no listed template owns or reads is a finding', () => {
+  const root = site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { tenant: 'acme', colour: 'red' } });
+  assert.deepEqual(withTemplates([root]), [{ problem: UNKNOWN_ROOT('colour') }]);
+});
+
+test('every key of the markers is checked, each finding naming its marker', () => {
+  const root = site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { tenant: 'acme', shade: 1 } });
+  const nested = site('apps/a', { templates: ['app-nextjs'], answers: { profile: 'stateless', hue: 2 } });
+  assert.deepEqual(withTemplates([root, nested]), [
+    { problem: UNKNOWN_ROOT('shade') },
+    { problem: 'apps/a/PLEXUS.md: `hue` is neither reserved nor a question or read of a template it lists' },
+  ]);
+});
+
+test('the root marker may hold answers that a template of a nested site owns or reads', () => {
+  const root = site('.', {
+    version: '0.131.0',
+    templates: ['repo-turbo'],
+    answers: { tenant: 'acme', profile: 'stateful', region: 'us' },
+  });
+  assert.deepEqual(withTemplates([root, site('apps/a', { templates: ['app-nextjs'] })]), []);
+});
+
+test('a nested marker may answer a read of its templates that no template owns there', () => {
+  const nested = site('apps/a', { templates: ['app-nextjs'], answers: { tenant: 'acme', region: 'us' } });
+  assert.deepEqual(withTemplates([ROOT, nested]), []);
+});
+
+test('a nested marker may not answer what only the root marker templates own', () => {
+  const nested = site('apps/a', { templates: ['app-nextjs'], answers: { tenant: 'acme', ci: 'forgejo' } });
+  assert.deepEqual(withTemplates([ROOT, nested]), [
+    { problem: 'apps/a/PLEXUS.md: `ci` is neither reserved nor a question or read of a template it lists' },
+  ]);
+});
+
+test('a marker that lists no templates is not checked for keys: its keys are what its app states', () => {
+  const root = site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { tenant: 'acme' } });
+  assert.deepEqual(withTemplates([root, site('apps/third', { answers: { profile: 'stateful', anything: 1 } })]), []);
+  assert.deepEqual(withTemplates([site('.', { version: '0.131.0', answers: { whatever: 1 } })]), []);
+});
+
+test('a template that this plx does not bundle owns no key', () => {
+  const nested = site('apps/a', { templates: ['ghost'], answers: { profile: 'stateless' } });
+  assert.deepEqual(withTemplates([ROOT, nested]), [
+    {
+      problem:
+        'apps/a/PLEXUS.md: `templates` names `ghost`, which this plx does not bundle (it bundles `app-nextjs`, `repo-turbo`)',
+    },
+    { problem: 'apps/a/PLEXUS.md: `profile` is neither reserved nor a question or read of a template it lists' },
+  ]);
+});
