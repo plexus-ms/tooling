@@ -5,9 +5,10 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { buildProgram, version } from '../program.ts';
+import { outcomeOf } from './apply.ts';
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), 'plx-apply-cli-')));
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -55,12 +56,16 @@ async function plx(...args: string[]) {
     stdout += chunk;
     return true;
   }) as typeof process.stdout.write;
+  let diagnostics = '';
   const stderr = process.stderr.write;
-  process.stderr.write = (() => true) as typeof process.stderr.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    diagnostics += Buffer.from(chunk).toString();
+    return true;
+  }) as typeof process.stderr.write;
   process.exitCode = undefined;
   try {
     await buildProgram().parseAsync(args, { from: 'user' });
-    return { stdout, code: process.exitCode ?? 0 };
+    return { stdout, stderr: diagnostics, code: process.exitCode ?? 0 };
   } finally {
     process.stdout.write = write;
     process.stderr.write = stderr;
@@ -94,4 +99,70 @@ test('apply is in the help, and names the root of templates as an option', () =>
     .commands.find((c) => c.name() === 'apply')
     ?.helpInformation();
   assert.match(help ?? '', /--templates <dir>/);
+});
+
+test('apply takes the repo and the templates relative to the working directory', async () => {
+  const { repo, templates } = fixture('relative', 'apple\n');
+  const cwd = process.cwd();
+  process.chdir(dir);
+  try {
+    const { code } = await plx('-y', 'apply', '--templates', basename(templates), basename(repo));
+    assert.equal(code, 0);
+  } finally {
+    process.chdir(cwd);
+  }
+  assert.equal(readFileSync(join(repo, 'list.txt'), 'utf8'), 'pear\n');
+});
+
+test('apply prints the defaults it writes into a marker, and says what it did on its last line', async () => {
+  const { repo, templates } = fixture('defaults', 'apple\n');
+  put(join(templates, 'shelf'), {
+    'template.yml': 'name: shelf\nquestions:\n  width:\n    type: int\n    default: 4\n',
+    'files/shelf.txt': 'a shelf\n',
+  });
+  put(repo, { 'PLEXUS.md': `---\nversion: ${version}\ntemplates: [basket, shelf]\nfruit: pear\n---\n` });
+  const { stdout, stderr, code } = await plx('-y', 'apply', '--templates', templates, repo);
+  assert.equal(code, 0);
+  assert.match(stdout, /^ {2}\+ width: 4$/m);
+  assert.match(stderr, /✓ applied; review the diff, then commit\n$/);
+});
+
+test('apply says so on its last line when a conflict is left', async () => {
+  const { repo, templates } = fixture('lastline', 'mine\n');
+  const { stderr } = await plx('-y', 'apply', '--templates', templates, repo);
+  assert.match(stderr, /✗ 1 conflicted: resolve them, then commit\n$/);
+});
+
+test('apply prints a line for a site it re-rendered without a change to any file', async () => {
+  const { repo, templates } = fixture('identical', 'apple\n');
+  put(repo, { 'PLEXUS.md': `---\nversion: ${version}\ntemplates: [basket]\nfruit: apple\nnote: 1\n---\n` });
+  const { stdout, stderr, code } = await plx('-y', 'apply', '--templates', templates, repo);
+  assert.equal(code, 0);
+  assert.match(stdout, /^\.: re-rendered, no file changed$/m);
+  assert.match(stderr, /✓ the markers changed nothing in the files\n$/);
+});
+
+test('a dry run writes nothing and exits 0 even where a file would conflict', async () => {
+  const { repo, templates } = fixture('dry', 'mine\n');
+  const { stderr, code } = await plx('-n', 'apply', '--templates', templates, repo);
+  assert.equal(code, 0);
+  assert.equal(readFileSync(join(repo, 'list.txt'), 'utf8'), 'mine\n');
+  assert.match(stderr, /✓ dry run: nothing written, 1 file would be conflicted\n$/);
+});
+
+test('nothing to apply is said, and exits 0', async () => {
+  const { repo, templates } = fixture('nothing', 'apple\n');
+  put(repo, { 'PLEXUS.md': marker('apple') });
+  const { stderr, code } = await plx('-y', 'apply', '--templates', templates, repo);
+  assert.equal(code, 0);
+  assert.match(stderr, /✓ nothing to apply: no marker differs from HEAD\n$/);
+});
+
+test('an answer of no writes nothing and fails: the outcome says so', () => {
+  const sites = [{ dir: '.', report: [{ path: 'a', outcome: 'clean' as const }], defaults: {} }];
+  assert.deepEqual(outcomeOf({ sites, conflicted: 0, applied: false, declined: true }, false), {
+    line: 'nothing written: the answer was no',
+    ok: false,
+    code: 1,
+  });
 });
