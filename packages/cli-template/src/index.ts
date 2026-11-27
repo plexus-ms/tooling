@@ -23,6 +23,7 @@ export {
   MODE_TYPE,
   type Origin,
   type Outcome,
+  type Policies,
   type Policy,
   type Question,
   type QuestionType,

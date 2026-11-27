@@ -1,5 +1,7 @@
 // The core's types: what `render` and `merge` take and return. Both are plain
 // functions over in-memory trees; nothing here reads or writes a directory.
+// Trees and the per-path maps are `Map`s; converting them to and from JSON or
+// a directory is the shell's, the CLI around the core.
 //
 // A tree maps a relative path to an entry: its bytes and its mode. Paths are
 // POSIX, separated by `/`, with no leading `./`, no leading or trailing `/` and
@@ -7,8 +9,9 @@
 // type bits (`MODE_TYPE`) say what the entry is:
 //
 //   REGULAR    a file; its bytes are its content, carried as they are, line
-//              endings included; of its permission bits only the executable
-//              ones (0o111) mean anything to the engine
+//              endings included; of its permission bits only one means
+//              anything to the engine: executable when its owner may execute
+//              it (0o100), as git decides
 //   SYMLINK    a symbolic link; its bytes are the link's target. A template
 //              holding one is an error, and `merge` never writes or deletes
 //              through one in the current tree
@@ -16,30 +19,43 @@
 //              that holds entries is implied by their paths and need not be
 //              listed
 //
+// Reducing a file's mode to that bit is `render`'s, when it writes an entry
+// (files.ts): a rendered tree holds files of mode 0o100644 or 0o100755 only.
+// `merge` compares a current file, whose mode comes from a directory, with them
+// by the bit alone, and writes the mode of the new render.
+//
 // A template is a tree too: its manifest at `template.yml` and the files it
 // renders below `files/`. The manifest's format is stated in manifest.ts; the
 // reader turns it into a `Manifest`.
 //
 // Answers are one flat namespace of JSON values by name. `render` takes the
-// given answers and returns the resolved ones: the given answers the templates
-// own, and the defaults of the questions nobody answered. A given answer no
-// template owns or reads is listed as unused, and is no error.
+// given answers and returns the resolved ones: the answers to the questions the
+// templates own, given or defaulted, without the questions `when` skipped. A
+// given answer no template owns or reads is listed as unused, and is no error.
 //
 // `render` reports what went wrong as data: every error it found, each a
 // sentence for a person with the template, the path and the question it
-// concerns where there is one. A render with errors writes nothing: its tree,
-// its files and its birth commands are empty.
+// concerns where there is one. An error between two templates, a question both
+// declare or a path both write, names the first in `template` and the second
+// in `other`, and its message names both. A render with errors writes nothing:
+// its tree, its files and its birth commands are empty.
 //
 // Each rendered path has an owner, the template that wrote it, and a policy:
 // `merge` (the default) or `born-once`, written when the path is absent and
-// never touched again. `merge` reads the policies from the new side's render.
+// never touched again. `merge` takes the policies of both renders, the old
+// one's for the paths only it has.
 //
 // `merge` takes three trees, the old render, the new render and the current
 // directory, and returns the current tree with the merge applied, and one
-// report entry per path it touched. The merge of one file whose three sides
-// all differ is the injected `MergeFile`; the real one calls `git merge-file`,
-// a fake stands in for it in tests. It returns the merged bytes and whether
-// they hold a conflict, which it detects by its own label lines.
+// report entry per path it touched. The rules are the core's, the merge of one
+// file's text is the injected `MergeFile`: the real one calls `git merge-file`,
+// a fake stands in for it in tests. The core calls it only for a path that the
+// new render and the current tree both hold as a file, whose bytes differ from
+// each other and from the old render's (empty bytes where the old render lacks
+// the path), and only when none of the three is binary, which the core decides.
+// A side that lacks the file never reaches it, and modes stay with the core.
+// It returns the merged bytes and whether they hold a conflict, which it
+// detects by its own label lines.
 
 /** The bits of a mode that say what an entry is. */
 export const MODE_TYPE = 0o170000;
@@ -77,7 +93,8 @@ export interface Question {
   readonly help?: string;
   readonly when?: boolean | string;
   readonly validator?: string;
-  readonly choices?: string | readonly unknown[] | Readonly<Record<string, unknown>>;
+  /** A list of values, a map of label to value in the manifest's order, or Jinja that renders one. */
+  readonly choices?: string | readonly unknown[] | ReadonlyMap<string, unknown>;
 }
 
 /** An answer a template uses but does not own. Without a default it is required. */
@@ -107,6 +124,8 @@ export interface RenderError {
   /** A path in the template's tree, such as `files/a.txt.jinja` or `template.yml`. */
   readonly path?: string;
   readonly question?: string;
+  /** The second template, where the error is between two. */
+  readonly other?: string;
 }
 
 /** Who wrote a rendered path, and how `merge` treats it. */
@@ -134,12 +153,15 @@ export interface RenderResult {
   readonly errors: readonly RenderError[];
 }
 
-/** What `merge` takes. `new` and `files` come from the new side's render. */
+/** Each rendered path's policy, as a render's `files` gives it. */
+export type Policies = ReadonlyMap<string, { readonly policy: Policy }>;
+
+/** What `merge` takes: two renders' trees and policies, and the current tree. */
 export interface MergeInput {
   readonly old: Tree;
   readonly new: Tree;
   readonly current: Tree;
-  readonly files: ReadonlyMap<string, { readonly policy: Policy }>;
+  readonly files: { readonly old: Policies; readonly new: Policies };
 }
 
 /** What happened to a path. */
