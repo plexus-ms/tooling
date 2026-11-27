@@ -67,3 +67,13 @@ test('render writes the tree beside the policies, and prints the result as JSON'
     });
   });
 });
+
+test('render takes the answers from standard input with -', () => {
+  withBasket((s, basket) => {
+    const out = s.path('out');
+    const run = plx(['render', '--answers', '-', out, basket], '{"fruit": "plum", "count": 5}');
+    assert.equal(run.code, 0, run.stderr);
+    assert.equal(read(out)['README.md'], 'A basket of 5 plums.\n');
+    assert.deepEqual(JSON.parse(run.stdout).answers, { count: 5, fruit: 'plum' });
+  });
+});
