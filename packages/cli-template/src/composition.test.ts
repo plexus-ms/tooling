@@ -358,3 +358,24 @@ test("a read of a question its owner skips sees what the owner's files see: the 
   assert.deepEqual(result.answers, { stocked: false });
   assert.deepEqual(listing(result.tree), { 'box.txt': 'plum' });
 });
+
+test('a read of a question its owner skips without a default takes the read default, and without one is an error naming the owner', () => {
+  const optional = render(
+    [template('name: box\nreads:\n  honey: {default: none}\n', { 'box.txt.jinja': '{{ honey }}' }), template(pantry)],
+    {
+      stocked: false,
+    },
+  );
+  assert.deepEqual(optional.errors, []);
+  assert.deepEqual(listing(optional.tree), { 'box.txt': 'none' });
+  const required = render(
+    [template('name: box\nreads:\n  honey:\n', { 'box.txt.jinja': '{{ honey }}' }), template(pantry)],
+    {
+      stocked: false,
+    },
+  );
+  assert.deepEqual(where(required.errors), [
+    { template: 'box', other: 'pantry', path: 'template.yml', question: 'honey' },
+  ]);
+  assert.equal(required.errors[0]?.message, 'box reads honey, which pantry owns and skips without a default');
+});
