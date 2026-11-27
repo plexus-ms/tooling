@@ -208,6 +208,7 @@ export {
   takeVersion,
 } from './take.ts';
 export { RENAMED_TEMPLATES, TEMPLATES, templateOf, templateSource } from './templates.ts';
+export { templatesRoot } from './templatesRoot.ts';
 export {
   type Link,
   linksOf,
