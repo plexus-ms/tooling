@@ -118,3 +118,27 @@ test('a rendered path with .. that stays inside the output is normalised', () =>
   assert.deepEqual(result.errors, []);
   assert.deepEqual(Object.keys(listing(result.tree)), ['apple.txt']);
 });
+
+// tests/test_copy.py::test_invalid_jinja_in_rendered_path_reports_template_path
+test('an error in the Jinja of a path names the template path it came from', () => {
+  const broken = 'some-{{{{ jinja_error }}}}';
+  const result = render([template(ripe, { [broken]: 'content' })], { ripe: true });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.template, 'basket');
+  assert.equal(result.errors[0]?.path, `files/${broken}`);
+  assert.ok(result.errors[0]?.message.includes(broken));
+  assert.deepEqual(listing(result.tree), {});
+});
+
+// tests/test_copy.py::test_invalid_jinja_in_nested_rendered_path_reports_failing_path_part
+test('an error in a directory part names that directory once, not the files below it', () => {
+  const broken = 'some-{{{{ jinja_error }}}}';
+  const result = render(
+    [template(ripe, { [`parent/${broken}/child.txt`]: 'content', [`parent/${broken}/other.txt`]: 'content' })],
+    { ripe: true },
+  );
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.path, `files/parent/${broken}`);
+  assert.ok(result.errors[0]?.message.includes(`parent/${broken}`));
+  assert.ok(!result.errors[0]?.message.includes('child.txt'));
+});
