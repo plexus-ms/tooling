@@ -1,0 +1,91 @@
+// The spec ring for `merge`: each rule of merge.ts's header, through `merge`
+// alone, with a fake merge of one file that records the sides it was given.
+// The real one, git-merge-file.ts, has tests of its own.
+//
+// Cases ported from copier v9.19.1 name their original, file and test, in a
+// comment; copier is MIT-licensed, see LICENSE.copier.
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { type MergeFile, merge, type Policies, REGULAR } from './index.ts';
+import { type Listing, listing, tree } from './testing/trees.ts';
+
+interface Case {
+  readonly old?: Listing;
+  readonly new?: Listing;
+  readonly current?: Listing;
+  /** The paths whose policy is born-once, in both renders. */
+  readonly bornOnce?: readonly string[];
+  /** What the fake merge of one file reports. */
+  readonly conflicted?: boolean;
+}
+
+/** The text of one side as the fake was given it. */
+type Sides = Readonly<Record<'path' | 'old' | 'new' | 'current', string>>;
+
+const decoder = new TextDecoder();
+
+/** `merge` over the three listings, its tree as a listing, its report as `path: outcome` lines, and the fake's calls. */
+async function run(c: Case) {
+  const calls: Sides[] = [];
+  const mergeFile: MergeFile = async (sides) => {
+    calls.push({
+      path: sides.path,
+      old: decoder.decode(sides.old),
+      new: decoder.decode(sides.new),
+      current: decoder.decode(sides.current),
+    });
+    return { bytes: new TextEncoder().encode('merged\n'), conflicted: c.conflicted ?? false };
+  };
+  const policies = (l: Listing): Policies =>
+    new Map(Object.keys(l).map((path) => [path, { policy: c.bornOnce?.includes(path) ? 'born-once' : 'merge' }]));
+  const old = c.old ?? {};
+  const next = c.new ?? {};
+  const result = await merge(
+    {
+      old: tree(old),
+      new: tree(next),
+      current: tree(c.current ?? {}),
+      files: { old: policies(old), new: policies(next) },
+    },
+    mergeFile,
+  );
+  return {
+    tree: listing(result.tree),
+    report: result.report.map(({ path, outcome }) => `${path}: ${outcome}`),
+    calls,
+  };
+}
+
+test('merge leaves a path alone that both renders hold alike, edited or deleted, and reports nothing for it', async () => {
+  const result = await run({
+    old: { 'apple.txt': 'red\n', 'pear.txt': 'green\n', 'plum.txt': 'blue\n' },
+    new: { 'apple.txt': 'red\n', 'pear.txt': 'green\n', 'plum.txt': 'blue\n' },
+    current: { 'apple.txt': 'crimson\n', 'plum.txt': 'blue\n' },
+  });
+  assert.deepEqual(result, {
+    tree: { 'apple.txt': 'crimson\n', 'plum.txt': 'blue\n' },
+    report: [],
+    calls: [],
+  });
+});
+
+test('merge leaves a path alone that neither render holds: it is the user’s, untouched and unreported', async () => {
+  const result = await run({
+    old: { 'apple.txt': 'red\n' },
+    new: { 'apple.txt': 'red\n' },
+    current: {
+      'apple.txt': 'red\n',
+      'basket/cherry.txt': 'dark red\n',
+      'basket/notes': { text: '#!/bin/sh\n', mode: REGULAR | 0o755 },
+    },
+  });
+  assert.deepEqual(result, {
+    tree: {
+      'apple.txt': 'red\n',
+      'basket/cherry.txt': 'dark red\n',
+      'basket/notes': { text: '#!/bin/sh\n', mode: REGULAR | 0o755 },
+    },
+    report: [],
+    calls: [],
+  });
+});
