@@ -209,3 +209,10 @@ test('setMarkerKeys refuses a value another key refers to, and a value that refe
   assert.equal(setMarkerKeys('---\na: &x 1\n---\n', { a: 2 }), '---\na: &x 2\n---\n', 'an anchor nothing uses');
   assert.equal(setMarkerKeys('---\na: &x 1\nb: [*x, 2]\n---\n', { b: [3] }), '---\na: &x 1\nb: [3]\n---\n');
 });
+
+test('setMarkerKeys refuses a value with a tag of its own, and a frontmatter that ends its YAML early', () => {
+  assert.throws(() => setMarkerKeys('---\na: !!str 1\nb: 2\n---\n', { a: 2 }), /`a` carries the tag `!!str`/);
+  assert.throws(() => setMarkerKeys('---\na: !!seq\n  - 1\n---\n', { a: { k: 1 } }), /`a` carries the tag `!!seq`/);
+  assert.equal(setMarkerKeys('---\na: [!!str 1]\n---\n', { a: [2] }), '---\na: [2]\n---\n', 'a tag inside the value');
+  assert.throws(() => setMarkerKeys('---\na: 1\n...\n---\n', { b: 2 }), /`\.\.\.`/);
+});
