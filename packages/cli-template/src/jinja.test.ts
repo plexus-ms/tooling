@@ -33,9 +33,9 @@ test('render lets a template ask whether a variable is defined, or give it a def
 test('render offers the Python string methods templates call', () => {
   assert.equal(
     renderString(`{% for r in s.split(',') %}"{{ r.strip() }}"{% if not loop.last %}, {% endif %}{% endfor %}`, {
-      s: 'alice, bob ,carol',
+      s: 'apple, pear ,plum',
     }),
-    '"alice", "bob", "carol"',
+    '"apple", "pear", "plum"',
   );
   assert.equal(renderString("{{ s.startswith('ab') }} {{ s.startswith('b') }}", { s: 'abc' }), 'True False');
 });
@@ -45,8 +45,8 @@ test('render keeps a raw block verbatim, with whitespace control on either tag',
   assert.equal(renderString('a\n{% raw %}{{ x }}\n{%- endraw %}\nb', {}), 'a\n{{ x }}\nb');
   assert.equal(renderString('a {%- raw -%}  {{ x }}  {%- endraw -%}  b', {}), 'a{{ x }}b');
   assert.equal(
-    renderString("{% raw %}{{ vars.S || '{% endraw %}{{ s }}{% raw %}' }}{% endraw %}", { s: 'github' }),
-    "{{ vars.S || 'github' }}",
+    renderString("{% raw %}{{ box.lid || '{% endraw %}{{ colour }}{% raw %}' }}{% endraw %}", { colour: 'red' }),
+    "{{ box.lid || 'red' }}",
   );
 });
 
@@ -56,15 +56,15 @@ test('render carries line endings as they are', () => {
 });
 
 test('evaluate returns the native value of an expression', () => {
-  assert.equal(evaluate("'ghcr' if strategy == 'github' else 'own'", { strategy: 'hybrid' }), 'own');
-  assert.equal(evaluate("not publishes and strategy == 'hybrid'", { publishes: false, strategy: 'hybrid' }), true);
-  assert.equal(evaluate('age < 0', { age: 7 }), false);
-  assert.equal(evaluate('age + 1', { age: 7 }), 8);
+  assert.equal(evaluate("'round' if fruit == 'apple' else 'long'", { fruit: 'banana' }), 'long');
+  assert.equal(evaluate("not ripe and fruit == 'banana'", { ripe: false, fruit: 'banana' }), true);
+  assert.equal(evaluate('count < 0', { count: 7 }), false);
+  assert.equal(evaluate('count + 1', { count: 7 }), 8);
   assert.equal(evaluate('1.5', {}), 1.5);
   assert.equal(evaluate('none', {}), null);
   assert.deepEqual(evaluate("[1, 'a', true]", {}), [1, 'a', true]);
   assert.deepEqual(evaluate("{'a': [1]}", {}), { a: [1] });
-  assert.equal(evaluate("reviewers | default('')", {}), '');
+  assert.equal(evaluate("colour | default('')", {}), '');
 });
 
 test('evaluate fails on a variable the context lacks, also when it is the whole expression', () => {
