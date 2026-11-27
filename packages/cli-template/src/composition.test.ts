@@ -1,8 +1,10 @@
 // Several templates rendered into one tree: one namespace of answers, the
 // answers a template reads from another, the names of the templates rendered
 // together, one owner per path, and a tree that does not depend on the order
-// the templates are given in. The fixtures are a basket, which owns `fruit`, a
-// shelf, which owns `book`, and the templates that read from them.
+// the templates are given in. The fixtures are small: a basket, which owns
+// `fruit`, a shelf, which owns `book`, an orchard, which owns `trees` and
+// `rows`, a pantry with questions its `when` skips, and the crates and boxes
+// that read from them.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DIRECTORY, type RenderError, render } from './index.ts';
@@ -116,8 +118,8 @@ test('two templates of one name is an error naming both by their position', () =
 });
 
 test('a declared read that no template of the render owns and no answer gives is an error naming the template and the read', () => {
-  const crate = 'name: crate\nreads:\n  fruit:\n  colour:\n';
-  const result = render([template(crate, { 'crate.txt': 'empty' })], {});
+  const reader = 'name: crate\nreads:\n  fruit:\n  colour:\n';
+  const result = render([template(reader, { 'crate.txt': 'empty' })], {});
   assert.deepEqual(where(result.errors), [
     { template: 'crate', other: undefined, path: 'template.yml', question: 'fruit' },
     { template: 'crate', other: undefined, path: 'template.yml', question: 'colour' },
@@ -127,10 +129,10 @@ test('a declared read that no template of the render owns and no answer gives is
 });
 
 test('a given answer that no template of the render owns satisfies a declared read, as given, in files, paths and questions', () => {
-  const crate =
+  const reader =
     'name: crate\nquestions:\n  label:\n    type: str\n    default: "{{ fruit }} x{{ count }}"\nreads:\n  fruit:\n  count:\n';
   const result = render(
-    [template(crate, { '{{ fruit }}/label.txt.jinja': '{{ label }}, {{ count + 1 }} next time' })],
+    [template(reader, { '{{ fruit }}/label.txt.jinja': '{{ label }}, {{ count + 1 }} next time' })],
     { fruit: 'pear', count: 3 },
   );
   assert.deepEqual(result.errors, []);
