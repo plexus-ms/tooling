@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { after, test } from 'node:test';
-import { Context, findSites, realIo } from './index.ts';
+import { Context, findSites, type MarkerSite, realIo, siteAnswers } from './index.ts';
 
 const TMP = realpathSync(mkdtempSync(join(tmpdir(), 'plx-sites-')));
 after(() => rmSync(TMP, { recursive: true, force: true }));
@@ -126,4 +126,40 @@ test('findSites gives a nested marker with a version, or one that does not parse
     assert.equal(web?.config, undefined);
     assert.match(web?.problem ?? '', /`version` belongs in the repo's root marker only/);
   }
+});
+
+const site = (dir: string, answers: Record<string, unknown>, templates?: string[]): MarkerSite => ({
+  dir,
+  config: { ...(templates ? { templates } : {}), deviations: [], answers },
+});
+
+test("siteAnswers gives the root its own answers, and a nested site the root's and its own", () => {
+  const sites = [
+    site('.', { tenant: 'plexus', ci_strategy: 'github' }, ['repo-turbo']),
+    site('apps/web', { profile: 'stateful' }, ['app-nextjs']),
+    site('apps/vendor', { profile: 'stateless' }),
+  ];
+  assert.deepEqual(siteAnswers(sites, '.'), { tenant: 'plexus', ci_strategy: 'github' });
+  assert.deepEqual(siteAnswers(sites, 'apps/web'), { tenant: 'plexus', ci_strategy: 'github', profile: 'stateful' });
+  assert.deepEqual(
+    siteAnswers([site('apps/web', { profile: 'stateful' })], 'apps/web'),
+    { profile: 'stateful' },
+    'no root marker',
+  );
+});
+
+test('siteAnswers refuses a key in both markers, a marker with a problem, and a directory without a marker', () => {
+  const root = site('.', { tenant: 'plexus', major: 1 });
+  assert.throws(
+    () => siteAnswers([root, site('apps/web', { tenant: 'acme', major: 2, port: 3000 })], 'apps/web'),
+    /apps\/web\/PLEXUS\.md: `tenant`, `major` are answered in the root marker already/,
+  );
+  const broken: MarkerSite = { dir: 'apps/web', problem: 'no frontmatter: expected a `---` block at the top' };
+  assert.throws(() => siteAnswers([root, broken], 'apps/web'), /apps\/web\/PLEXUS\.md: no frontmatter/);
+  const brokenRoot: MarkerSite = { dir: '.', problem: 'frontmatter is not a mapping' };
+  assert.throws(
+    () => siteAnswers([brokenRoot, site('apps/web', {})], 'apps/web'),
+    /^Error: PLEXUS\.md: frontmatter is not a mapping/,
+  );
+  assert.throws(() => siteAnswers([root], 'apps/api'), /no marker in apps\/api/);
 });
