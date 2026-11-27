@@ -5,7 +5,8 @@
 // comment; copier is MIT-licensed, see LICENSE.copier. Copier's labels differ
 // from ours, and so do the expected files.
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -95,22 +96,55 @@ test('gitMergeFile detects a conflict in a file with CRLF line endings, whose la
   });
 });
 
-test('gitMergeFile merges the same whatever git configuration the caller has', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'git-merge-file-test-'));
-  const config = join(dir, 'gitconfig');
-  await writeFile(config, '[merge]\n\tconflictStyle = zdiff3\n');
-  const saved = process.env.GIT_CONFIG_GLOBAL;
-  process.env.GIT_CONFIG_GLOBAL = config;
+/** A conflict as git prints it in its default style, whatever configuration asks for another. */
+const conflict = { text: '<<<<<<< current\nplum\n=======\npear\n>>>>>>> new render\n', conflicted: true };
+
+/** Runs `body` with `vars` in the environment, and puts the environment back. */
+async function withEnv(vars: Readonly<Record<string, string>>, body: () => Promise<void>): Promise<void> {
+  const saved = Object.fromEntries(Object.keys(vars).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, vars);
   try {
-    assert.deepEqual(await mergeTexts('apple\n', 'pear\n', 'plum\n'), {
-      text: '<<<<<<< current\nplum\n=======\npear\n>>>>>>> new render\n',
-      conflicted: true,
-    });
+    await body();
   } finally {
-    if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL;
-    else process.env.GIT_CONFIG_GLOBAL = saved;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+/** Runs `body` with a scratch directory, and removes it. */
+async function withScratch(body: (dir: string) => Promise<void>): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), 'git-merge-file-test-'));
+  try {
+    await body(dir);
+  } finally {
     await rm(dir, { recursive: true });
   }
+}
+
+test('gitMergeFile merges the same whatever global git configuration the caller has', async () => {
+  await withScratch(async (dir) => {
+    const config = join(dir, 'gitconfig');
+    await writeFile(config, '[merge]\n\tconflictStyle = zdiff3\n');
+    await withEnv({ GIT_CONFIG_GLOBAL: config }, async () => {
+      assert.deepEqual(await mergeTexts('apple\n', 'pear\n', 'plum\n'), conflict);
+    });
+  });
+});
+
+test('gitMergeFile merges the same where the temporary directory lies in a git repository with a configuration of its own', async () => {
+  await withScratch(async (dir) => {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+    execFileSync('git', ['init', '-q', dir], { env });
+    execFileSync('git', ['config', 'merge.conflictStyle', 'diff3'], { cwd: dir, env });
+    const temporary = join(dir, 'tmp');
+    await mkdir(temporary);
+    await withEnv({ TMPDIR: temporary }, async () => {
+      assert.equal(tmpdir(), temporary, 'the temporary directory lies in the repository');
+      assert.deepEqual(await mergeTexts('apple\n', 'pear\n', 'plum\n'), conflict);
+    });
+  });
 });
 
 test('gitMergeFile fails where git cannot merge, with what git said', async () => {
