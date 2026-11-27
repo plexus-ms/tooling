@@ -103,6 +103,8 @@ async function mergePath(
   mergeFile: MergeFile,
 ): Promise<Outcome | undefined> {
   const c = at(tree, path);
+  // The rules of the header, by number.
+  // 1
   if (c === undefined && n !== undefined && (bornOnce || o === undefined)) {
     const blocking = ancestors(path)
       .map((a) => tree.get(a))
@@ -111,17 +113,19 @@ async function mergePath(
     tree.set(path, n);
     return 'added';
   }
-  if (same(o, n)) return undefined;
-  if (kind(c) === SYMLINK) return 'kept';
+  if (same(o, n)) return undefined; // 2
+  if (kind(c) === SYMLINK) return 'kept'; // 3
   const kinds = [o, n, c].map(kind);
-  if (kinds.includes(REGULAR) && kinds.includes(DIRECTORY)) return 'conflicted';
-  if (kinds.includes(DIRECTORY)) return undefined;
-  if (bornOnce || c === undefined) return 'kept';
+  if (kinds.includes(REGULAR) && kinds.includes(DIRECTORY)) return 'conflicted'; // 4
+  if (kinds.includes(DIRECTORY)) return undefined; // 5
+  if (bornOnce || c === undefined) return 'kept'; // 6
+  // 7
   if (n === undefined) {
     if (!same(c, o)) return 'conflicted';
     tree.delete(path);
     return 'deleted';
   }
+  // 8
   const base = o ?? EMPTY;
   const merged = await mergeContent(path, base.bytes, n.bytes, c.bytes, mergeFile);
   if (merged === undefined) return 'conflicted';
