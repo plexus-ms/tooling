@@ -216,24 +216,31 @@ function complain(errors: readonly RenderError[]): void {
   }
 }
 
+/** The JSON of `path`, read by `read`; what goes wrong is an input error about `what`, with `hint` after a failed read. */
+async function readJson(read: () => Promise<string>, path: string, what: string, hint = ''): Promise<unknown> {
+  let text: string;
+  try {
+    text = await read();
+  } catch (error) {
+    throw new InputError(`cannot read the ${what}: ${messageOf(error)}${hint}`, path);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new InputError(`the ${what} is no JSON: ${messageOf(error)}`, path);
+  }
+}
+
 /** The answers: a JSON object from `source`, a file or, for `-`, standard input; none without one. */
 async function readAnswers(source: string | undefined): Promise<Answers> {
   if (source === undefined) return {};
-  let text: string;
-  try {
-    text = source === '-' ? await readAll(process.stdin) : await readFile(source, 'utf8');
-  } catch (error) {
-    throw new InputError(`cannot read the answers: ${messageOf(error)}`, source);
-  }
-  let answers: unknown;
-  try {
-    answers = JSON.parse(text);
-  } catch (error) {
-    throw new InputError(`the answers are no JSON: ${messageOf(error)}`, source);
-  }
-  if (typeof answers !== 'object' || answers === null || Array.isArray(answers))
-    throw new InputError('the answers are not a JSON object', source);
-  return answers as Answers;
+  const answers = await readJson(
+    () => (source === '-' ? readAll(process.stdin) : readFile(source, 'utf8')),
+    source,
+    'answers',
+  );
+  if (!isObject(answers)) throw new InputError('the answers are not a JSON object', source);
+  return answers;
 }
 
 /** The version of the policies file `render` writes and `merge` reads. */
@@ -245,18 +252,12 @@ async function readPolicies(dir: string, tree: Tree): Promise<Policies> {
   const fail = (what: string): never => {
     throw new InputError(`the policies file ${what}`, file);
   };
-  let text: string;
-  try {
-    text = await readFile(file, 'utf8');
-  } catch {
-    return fail(`is missing: \`render\` writes one beside the render it writes`);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    return fail(`is no JSON: ${messageOf(error)}`);
-  }
+  const parsed = await readJson(
+    () => readFile(file, 'utf8'),
+    file,
+    'policies file',
+    '; `render` writes one beside the render it writes',
+  );
   if (!isObject(parsed)) return fail('is not a JSON object with a version and files');
   if (parsed.version === undefined) return fail('has no version');
   if (parsed.version !== POLICIES_VERSION)
@@ -290,9 +291,9 @@ function renderJson(result: RenderResult | undefined, errors: readonly RenderErr
   };
 }
 
-/** The JSON a command prints when its inputs are wrong. */
-function refuse(errors: readonly RenderError[]): number {
-  print({ errors });
+/** Prints `json` and each error, and says the inputs are wrong. */
+function refuse(errors: readonly RenderError[], json: unknown = { errors }): number {
+  print(json);
   complain(errors);
   return EXIT.input;
 }
@@ -361,17 +362,11 @@ async function renderCommand(
   await attempt(() => requireEmpty(out));
   const result = problems.length === 0 && answers !== undefined ? render(trees, answers) : undefined;
   const errors = result === undefined ? problems : result.errors;
-  if (result === undefined || errors.length > 0) {
-    print(renderJson(result, errors));
-    complain(errors);
-    return EXIT.input;
-  }
+  const json = renderJson(result, errors);
+  if (result === undefined || errors.length > 0) return refuse(errors, json);
   await applyChanges(out, result.tree);
-  await writeFile(
-    policiesOf(out),
-    `${JSON.stringify({ version: POLICIES_VERSION, files: Object.fromEntries(result.files) }, null, 2)}\n`,
-  );
-  print(renderJson(result, errors));
+  await writeFile(policiesOf(out), `${JSON.stringify({ version: POLICIES_VERSION, files: json.files }, null, 2)}\n`);
+  print(json);
   return EXIT.ok;
 }
 
@@ -410,7 +405,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
     throw new UsageError(`unknown command ${command}`);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = messageOf(error);
     if (error instanceof UsageError || (error as { code?: string }).code?.startsWith('ERR_PARSE_ARGS')) {
       process.stderr.write(`plx-template: ${message}\n(run with --help for usage)\n`);
       return EXIT.usage;

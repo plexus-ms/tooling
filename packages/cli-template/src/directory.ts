@@ -42,7 +42,10 @@ import { join } from 'node:path';
 import { InputError, messageOf } from './errors.ts';
 import { DIRECTORY, type Entry, isExecutable, MODE_TYPE, REGULAR, SYMLINK, type Tree } from './types.ts';
 
-const EMPTY = new Uint8Array();
+/** An entry for a directory that holds nothing. */
+const EMPTY_DIRECTORY: Entry = { bytes: new Uint8Array(), mode: DIRECTORY | 0o755 };
+
+const SYMLINK_ARGUMENT = 'is a symlink, which is not followed: name the directory itself';
 
 /** The permission bits a file's mode holds. */
 const PERMISSIONS = 0o7777;
@@ -71,7 +74,7 @@ async function leaf(path: string, mode: number): Promise<Entry | undefined> {
 export async function requireDirectory(path: string): Promise<void> {
   const st = await stat(path);
   if (st === undefined) throw new InputError('there is no such directory', path);
-  if (st.isSymbolicLink()) throw new InputError('is a symlink, which is not followed: name the directory itself', path);
+  if (st.isSymbolicLink()) throw new InputError(SYMLINK_ARGUMENT, path);
   if (!st.isDirectory()) throw new InputError('not a directory', path);
 }
 
@@ -86,7 +89,7 @@ export async function readTree(root: string): Promise<Tree> {
 async function walk(root: string, prefix: string, tree: Map<string, Entry>): Promise<void> {
   const names = (await readdir(join(root, prefix))).sort();
   if (names.length === 0 && prefix !== '') {
-    tree.set(prefix, { bytes: EMPTY, mode: DIRECTORY | 0o755 });
+    tree.set(prefix, EMPTY_DIRECTORY);
     return;
   }
   for (const name of names) {
@@ -123,7 +126,7 @@ export async function readCurrent(root: string, paths: Iterable<string>): Promis
 async function firstLeaf(root: string, at: string, tree: Map<string, Entry>): Promise<void> {
   const [name] = (await readdir(join(root, at))).sort();
   if (name === undefined) {
-    tree.set(at, { bytes: EMPTY, mode: DIRECTORY | 0o755 });
+    tree.set(at, EMPTY_DIRECTORY);
     return;
   }
   const path = `${at}/${name}`;
@@ -208,7 +211,7 @@ async function remove(root: string, path: string, keep: ReadonlySet<string>): Pr
 export async function requireEmpty(path: string): Promise<void> {
   const st = await stat(path);
   if (st === undefined) return;
-  if (st.isSymbolicLink()) throw new InputError('is a symlink, which is not followed: name the directory itself', path);
+  if (st.isSymbolicLink()) throw new InputError(SYMLINK_ARGUMENT, path);
   if (!st.isDirectory()) throw new InputError('exists and is not a directory', path);
   if ((await readdir(path)).length > 0) throw new InputError('is not empty', path);
 }
