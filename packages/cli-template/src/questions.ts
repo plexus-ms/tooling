@@ -14,7 +14,8 @@
 // question with neither is an error, one per question, naming its help text, so
 // that one render lists all of them. Either is then cast to the question's type
 // and checked against its choices, and a failure is an error naming the question.
-// Only the questions of the render's manifests own answers; the rest are unused.
+// A given answer that no question of the render's manifests owns and none of them
+// reads is unused.
 //
 // What the engine resolves is what copier (v9.19.1, see LICENSE.copier) resolves
 // in `_ask` and `Question`, without prompts, answers files, `ask`, `secret`,
@@ -87,9 +88,6 @@
 //   (fullwidth digits, U+0085, a byte order mark) read differently in the `bool`
 //   cast.
 // - An undefined variable is an error, as said above.
-//
-// Answers no question owns are unused. Declared reads and several templates are
-// the render's composition, which extends `unusedAnswers`.
 import { isDeepStrictEqual } from 'node:util';
 import { isMap, isNode, isSeq, parseDocument, parse as parseYaml } from 'yaml';
 import { messageOf } from './errors.ts';
@@ -280,8 +278,8 @@ export function resolveAnswers(manifest: Manifest, given: Answers, scope: Contex
   return { answers, context };
 }
 
-/** The names of the `given` answers that no question of the render's `manifests` owns. */
+/** The names of the `given` answers that no question of the render's `manifests` owns and none of them reads. */
 export function unusedAnswers(manifests: readonly Manifest[], given: Answers): string[] {
-  const owned = new Set(manifests.flatMap(({ questions }) => questions.map(({ name }) => name)));
-  return Object.keys(given).filter((name) => !owned.has(name));
+  const used = new Set(manifests.flatMap(({ questions, reads }) => [...questions, ...reads].map(({ name }) => name)));
+  return Object.keys(given).filter((name) => !used.has(name));
 }

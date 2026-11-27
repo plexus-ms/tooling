@@ -32,12 +32,19 @@
 // given answers and returns the resolved ones: the answers to the questions the
 // templates own, given or defaulted, without the questions `when` skipped. A
 // given answer no template owns or reads is listed as unused, and is no error.
+// Which answers each template sees, and in what order the templates resolve,
+// is render.ts's.
+//
+// Besides answers, templates see the engine's variables. Their names start
+// with `_`, which no question or read may take. There is one: `_templates`,
+// the names of the templates rendered together, sorted by name.
 //
 // `render` reports what went wrong as data: every error it found, each a
 // sentence for a person with the template, the path and the question it
 // concerns where there is one. An error between two templates, a question both
-// declare or a path both write, names the first in `template` and the second
-// in `other`, and its message names both. A render with errors writes nothing:
+// declare, a path both write, a cycle of reads or a read of a question its
+// owner skips, names one in `template` and the other in `other`, and its
+// message names both; render.ts says which is which. A render with errors writes nothing:
 // its tree, its files and its birth commands are empty.
 //
 // Each rendered path has an owner, the template that wrote it, and a policy:

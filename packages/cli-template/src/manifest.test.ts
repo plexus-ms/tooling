@@ -71,6 +71,7 @@ birth:
     count: 1,
     ripe: true,
     shape: 'round',
+    colour: 'red',
   });
   assert.deepEqual(result.errors, []);
   assert.deepEqual([...result.tree.keys()], ['notes.md']);
