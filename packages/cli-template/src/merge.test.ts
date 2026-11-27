@@ -185,3 +185,42 @@ test('merge merges a path the new render adds and the current tree already has a
     ],
   });
 });
+
+// Ported from tests/test_updatediff.py, test_file_removed: the template drops
+// files and directories the user never edited, beside files of the user's own.
+test('merge deletes a path the new render drops and the user never edited, and reports it as deleted', async () => {
+  const result = await run({
+    old: {
+      '1.txt': 'content 1',
+      'dir 2/2.txt': 'content 2',
+      'dir 3/subdir 3/3.txt': 'content 3',
+      'dir 4/subdir 4/4.txt': 'content 4',
+    },
+    new: { '6.txt': 'content 6' },
+    current: {
+      '1.txt': 'content 1',
+      'dir 2/2.txt': 'content 2',
+      'dir 3/subdir 3/3.txt': 'content 3',
+      'dir 4/subdir 4/4.txt': 'content 4',
+      'I.txt': 'content I',
+      'dir 3/subdir III/III.txt': 'content III',
+      'dir 4/subdir 4/IV.txt': 'content IV',
+    },
+  });
+  assert.deepEqual(result, {
+    tree: {
+      '6.txt': 'content 6',
+      'I.txt': 'content I',
+      'dir 3/subdir III/III.txt': 'content III',
+      'dir 4/subdir 4/IV.txt': 'content IV',
+    },
+    report: [
+      '1.txt: deleted',
+      '6.txt: added',
+      'dir 2/2.txt: deleted',
+      'dir 3/subdir 3/3.txt: deleted',
+      'dir 4/subdir 4/4.txt: deleted',
+    ],
+    calls: [],
+  });
+});
