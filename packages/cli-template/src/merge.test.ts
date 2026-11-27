@@ -89,3 +89,26 @@ test('merge leaves a path alone that neither render holds: it is the user’s, u
     calls: [],
   });
 });
+
+// Ported from tests/test_updatediff.py, test_update_deleted_path: the part of
+// `dont_wildmatch`, a file the template changes and the user did not.
+test('merge gives a path the user did not edit the new render’s entry, and reports it as clean, in path order', async () => {
+  const result = await run({
+    old: { 'pear.txt': 'green\n', 'apple.txt': 'red\n', 'basket/cherry.txt': 'dark red\n' },
+    new: {
+      'pear.txt': 'yellow\n',
+      'apple.txt': 'red\r\n',
+      'basket/cherry.txt': { bytes: [0xe9], mode: REGULAR | 0o644 },
+    },
+    current: { 'pear.txt': 'green\n', 'apple.txt': 'red\n', 'basket/cherry.txt': 'dark red\n' },
+  });
+  assert.deepEqual(result, {
+    tree: {
+      'pear.txt': 'yellow\n',
+      'apple.txt': 'red\r\n',
+      'basket/cherry.txt': { bytes: [0xe9], mode: REGULAR | 0o644 },
+    },
+    report: ['apple.txt: clean', 'basket/cherry.txt: clean', 'pear.txt: clean'],
+    calls: [],
+  });
+});
