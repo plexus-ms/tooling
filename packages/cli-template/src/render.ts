@@ -4,9 +4,9 @@
 //
 //   1. read each template: its manifest and its files (manifest.ts)
 //   2. resolve each template's reads and questions against the given answers
-//      (questions.ts), in the scope `scopeOf` builds
+//      (questions.ts), in its scope: the engine's variables and its reads
 //   3. render the files of all templates together (files.ts), each template's
-//      in the context `contextOf` builds, and give each path its owner and
+//      in its scope and its own answers, and give each path its owner and
 //      policy
 //
 // Every step adds what it finds wrong to one list of errors and carries on, so
@@ -97,12 +97,12 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
   const listed = readAll(templates, errors);
   const read = listed.toSorted((a, b) => compare(a.manifest.name, b.manifest.name));
   const owners = ownersOf(read, errors);
-  const engine = engineVariables(read);
+  const engine: Context = { _templates: read.map(({ manifest }) => manifest.name) };
   const resolved = new Map<Template, Resolved>();
   for (const template of resolutionOrder(read, owners, errors)) {
     const own: RenderError[] = [];
     const reads = readsOf(template, owners, resolved, listed.length < templates.length, given, own);
-    const scope = scopeOf(engine, reads.values);
+    const scope = { ...engine, ...reads.values };
     const resolution = resolveAnswers(template.manifest, given, scope, own);
     errors.push(...own);
     const unresolved = new Set(own.flatMap(({ question }) => question ?? []));
@@ -111,13 +111,14 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
 
   const renderings = read.flatMap((template) => {
     const done = resolved.get(template);
-    return done === undefined || done.failed ? [] : [{ template, context: contextOf(done.scope, done.resolution) }];
+    return done === undefined || done.failed
+      ? []
+      : [{ template, context: { ...done.scope, ...done.resolution.context } }];
   });
   const tree = new Map<string, Entry>();
   const files = new Map<string, Origin>();
-  for (const [path, { entry, source, owner }] of [...renderFiles(renderings, errors)].sort(([a], [b]) =>
-    compare(a, b),
-  )) {
+  const rendered = [...renderFiles(renderings, errors)].sort(([a], [b]) => compare(a, b));
+  for (const [path, { entry, source, owner }] of rendered) {
     tree.set(path, entry);
     files.set(path, { template: owner.manifest.name, policy: owner.manifest.policies.get(source) ?? 'merge' });
   }
@@ -270,19 +271,4 @@ function readsOf(
     }
   }
   return { values, complete };
-}
-
-/** The engine's variables, the same for every template of a render. */
-function engineVariables(read: readonly Template[]): Context {
-  return { _templates: read.map(({ manifest }) => manifest.name).sort() };
-}
-
-/** What a template's questions see besides its own earlier answers: the engine's variables and the answers it reads. */
-function scopeOf(engine: Context, reads: Context): Context {
-  return { ...engine, ...reads };
-}
-
-/** What a template's files render with: its scope and its own answers. */
-function contextOf(scope: Context, resolution: Resolution): Context {
-  return { ...scope, ...resolution.context };
 }
