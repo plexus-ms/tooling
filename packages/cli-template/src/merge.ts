@@ -1,7 +1,14 @@
 // merge: three rendered trees into one, the current directory's with the
-// template's changes applied (types.ts states the shapes). A path both renders
-// hold alike is left alone; the others are not merged yet.
-import { type Entry, type MergeEntry, type MergeFile, type MergeInput, type MergeResult, REGULAR } from './types.ts';
+// template's changes applied (types.ts states the shapes).
+import {
+  type Entry,
+  type MergeEntry,
+  type MergeFile,
+  type MergeInput,
+  type MergeResult,
+  type Outcome,
+  REGULAR,
+} from './types.ts';
 
 /** The old side of a path the old render lacks. */
 const EMPTY: Entry = { bytes: new Uint8Array(), mode: REGULAR | 0o644 };
@@ -12,43 +19,40 @@ export async function merge(input: MergeInput, mergeFile: MergeFile): Promise<Me
   const tree = new Map(current);
   const report: MergeEntry[] = [];
   for (const path of [...new Set([...old.keys(), ...next.keys()])].sort()) {
-    const o = old.get(path);
-    const n = next.get(path);
-    const c = tree.get(path);
-    if (same(o, n)) continue;
-    if (n !== undefined && o === undefined && c === undefined) {
-      tree.set(path, n);
-      report.push({ path, outcome: 'added' });
-      continue;
-    }
-    if (c === undefined) {
-      report.push({ path, outcome: 'kept' });
-      continue;
-    }
-    if (n === undefined && same(c, o)) {
-      tree.delete(path);
-      report.push({ path, outcome: 'deleted' });
-      continue;
-    }
-    if (n === undefined && c !== undefined) {
-      report.push({ path, outcome: 'conflicted' });
-      continue;
-    }
-    const base = o ?? EMPTY;
-    if (n !== undefined && (same(c, base) || same(c, n))) {
-      tree.set(path, n);
-      report.push({ path, outcome: 'clean' });
-      continue;
-    }
-    if (n !== undefined && c !== undefined) {
-      const merged = await mergeFile({ path, old: base.bytes, new: n.bytes, current: c.bytes });
-      tree.set(path, { bytes: merged.bytes, mode: n.mode });
-      report.push({ path, outcome: merged.conflicted ? 'conflicted' : 'clean' });
-      continue;
-    }
-    throw new Error(`merge: ${path} changed, which is not merged yet`);
+    const outcome = await mergePath(path, old.get(path), next.get(path), tree, mergeFile);
+    if (outcome !== undefined) report.push({ path, outcome });
   }
   return { tree, report };
+}
+
+/** Merges the old and the new render's entry at `path` into `tree`, and says what happened; nothing when nothing did. */
+async function mergePath(
+  path: string,
+  o: Entry | undefined,
+  n: Entry | undefined,
+  tree: Map<string, Entry>,
+  mergeFile: MergeFile,
+): Promise<Outcome | undefined> {
+  const c = tree.get(path);
+  if (same(o, n)) return undefined;
+  if (c === undefined) {
+    if (n === undefined || o !== undefined) return 'kept';
+    tree.set(path, n);
+    return 'added';
+  }
+  if (n === undefined) {
+    if (!same(c, o)) return 'conflicted';
+    tree.delete(path);
+    return 'deleted';
+  }
+  const base = o ?? EMPTY;
+  if (same(c, base) || same(c, n)) {
+    tree.set(path, n);
+    return 'clean';
+  }
+  const merged = await mergeFile({ path, old: base.bytes, new: n.bytes, current: c.bytes });
+  tree.set(path, { bytes: merged.bytes, mode: n.mode });
+  return merged.conflicted ? 'conflicted' : 'clean';
 }
 
 /** Whether two entries, either absent, are alike. */
