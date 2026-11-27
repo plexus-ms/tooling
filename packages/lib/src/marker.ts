@@ -175,7 +175,8 @@ const nameOf = (pair: Pair): string | undefined => (isScalar(pair.key) ? String(
 
 /**
  * A key the frontmatter lacks, on a line of its own: a reserved key before
- * the first key that is an answer or a later reserved key, an answer last.
+ * the first key that is an answer or a later reserved key, and above the
+ * comment lines directly over that key, which are about it; an answer last.
  */
 function insertKey(yaml: string, pairs: readonly Pair[], key: string, node: Node): string {
   if (isCollection(node)) node.flow = true;
@@ -187,7 +188,8 @@ function insertKey(yaml: string, pairs: readonly Pair[], key: string, node: Node
           const other = RESERVED_KEYS.indexOf(nameOf(p) as (typeof RESERVED_KEYS)[number]);
           return other === -1 || other > rank;
         });
-  const at = isNode(next?.key) && next.key.range ? lineStart(yaml, next.key.range[0]) : yaml.length;
+  const at =
+    isNode(next?.key) && next.key.range ? aboveComments(yaml, lineStart(yaml, next.key.range[0])) : yaml.length;
   return yaml.slice(0, at) + pairText(key, node) + yaml.slice(at);
 }
 
@@ -236,6 +238,17 @@ function pairText(key: string, node: unknown, options: { indent?: number; indent
   const doc = new Document({ [key]: null });
   doc.set(key, node);
   return doc.toString({ ...STYLE, ...options });
+}
+
+/** The start of the run of comment lines directly above the line at `at`, or `at` itself; a blank line ends the run. */
+function aboveComments(text: string, at: number): number {
+  let start = at;
+  while (start > 0) {
+    const previous = lineStart(text, start - 1);
+    if (!text.slice(previous, start).trimStart().startsWith('#')) break;
+    start = previous;
+  }
+  return start;
 }
 
 /** Where the line holding `at` starts. */
