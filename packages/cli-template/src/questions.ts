@@ -47,16 +47,15 @@
 //          string is true unless it is blank or one of n no f false off ~ null none,
 //          in any case; a list or map by whether it is empty
 //   json   a string is parsed as JSON; any other value is taken as it is
-//   yaml   a string is parsed as YAML 1.1 (`yes`, `010`, `1:30`); any other value
-//          is taken as it is
+//   yaml   a string is parsed as YAML 1.1 (`yes`, `010`, `1:30`) by the `yaml`
+//          package; any other value is taken as it is
 // A null is an error for every type but `json` and `yaml`.
 //
 // `when` is rendered and read as a bool. A question it skips is left out of the
-// reported answers, and its default is not validated. Where it has a default,
-// a given answer is cast, checked against its choices and validated all the same,
-// as in copier; where it has none, copier drops the question before it looks at
-// the answer, so the given one stays as it was given in the context and the files
-// see it, uncast and unchecked.
+// reported answers. A given answer is always cast, checked against the choices and
+// validated, as in copier, where `get_default` reads the given answer first; the
+// default of a skipped question is cast and checked but not validated. A skipped
+// question with neither a given answer nor a default is absent.
 //
 // `choices` is a list, a map of label to value, or a string of Jinja that renders
 // YAML 1.1 of either, which must be a list or a map; an empty one restricts
@@ -79,6 +78,14 @@
 //   and a null item of a list is the value null; only a map has labels.
 // - The extended choices of copier (`{value, validator}`) and `multiselect` do
 //   not exist.
+// - `float` of a bool is an error as well.
+// - A given answer that no question of the template owns is not in view of its
+//   questions, where copier shows every given answer.
+// - YAML is read by the `yaml` package's 1.1 mode, not by PyYAML: `y` and `n` are
+//   booleans here and strings there, and a duplicate key is an error here.
+// - Characters Python counts as digits or whitespace and JavaScript does not
+//   (fullwidth digits, U+0085, a byte order mark) read differently in the `bool`
+//   cast.
 // - An undefined variable is an error, as said above.
 //
 // Answers no question owns are unused. Declared reads and several templates are
@@ -148,19 +155,19 @@ function cast(type: QuestionType, answer: unknown): unknown {
 const DECIMAL = '\\d+(?:_\\d+)*';
 /** What Python's `float()` reads: a decimal with a sign, a fraction, an exponent and underscores between digits, or nan and inf. */
 const PYTHON_FLOAT = new RegExp(
-  `^[+-]?(?:(?:${DECIMAL}(?:\\.(?:${DECIMAL})?)?|\\.${DECIMAL})(?:e[+-]?${DECIMAL})?|nan|inf(?:inity)?)$`,
+  `^[+-]?(?:(?:${DECIMAL}(?:\\.(?:${DECIMAL})?)?|\\.${DECIMAL})(?:e[+-]?${DECIMAL})?)$`,
   'i',
 );
 const FALSE_WORDS = ['', 'n', 'no', 'f', 'false', 'off', '~', 'null', 'none'];
 
 /** `cast_to_bool` of copier: a number by its value, a string that Python reads as a number the same, a string else by its words, anything else by its truthiness. */
 function toBool(source: unknown): boolean {
-  if (typeof source === 'number') return Number.isNaN(source) || source !== 0;
+  if (typeof source === 'number') return source !== 0;
   if (typeof source === 'string') {
     const text = source.trim();
     if (PYTHON_FLOAT.test(text)) {
       const number = Number(text.replaceAll('_', ''));
-      return Number.isNaN(number) || number !== 0;
+      return number !== 0;
     }
     return !FALSE_WORDS.includes(text.toLowerCase());
   }
@@ -169,14 +176,14 @@ function toBool(source: unknown): boolean {
   return Boolean(source);
 }
 
-/** YAML as copier reads it, version 1.1: `yes` and `on` are booleans, `010` is octal. */
+/** YAML 1.1 by the `yaml` package, which copier's PyYAML is close to but not: `yes` and `on` are booleans, `010` is octal. */
 function parseYaml11(text: string): unknown {
   return parseYaml(text, { version: '1.1' });
 }
 
 /** The values of a map of choices, in its order; a null value stands for its label. */
 function labelled(entries: Iterable<[unknown, unknown]>): unknown[] {
-  return [...entries].map(([label, choice]) => (choice === null ? String(label) : choice));
+  return [...entries].map(([label, choice]) => (choice === null ? cast('str', label) : choice));
 }
 
 /** The choices that YAML text holds, a list or a map in the order it is written. */
@@ -235,8 +242,6 @@ function resolve(question: Question, given: Answers, seen: Context, applies: boo
   const isGiven = Object.hasOwn(given, question.name);
   const hasDefault = Object.hasOwn(question, 'default');
   if (!isGiven && !hasDefault) return MISSING;
-  // A skipped question without a default is dropped before copier looks at a given answer.
-  if (!applies && !hasDefault) return MISSING;
   const answer = isGiven
     ? accept(question, given[question.name], seen)
     : accept(question, field('default', question.default, seen), seen);
@@ -257,6 +262,7 @@ export function resolveAnswers(manifest: Manifest, given: Answers, scope: Contex
   for (const { name } of manifest.questions) if (Object.hasOwn(given, name)) context[name] = given[name];
   for (const question of manifest.questions) {
     try {
+      // What the question sees: the scope, and this template's answers so far, given or resolved.
       const seen = { ...scope, ...context };
       const applies = question.when === undefined || toBool(field('when', question.when, seen));
       const answer = resolve(question, given, seen, applies);
