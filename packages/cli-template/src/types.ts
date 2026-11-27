@@ -66,6 +66,15 @@ export const DIRECTORY = 0o040000;
 /** A symbolic link's type bits. */
 export const SYMLINK = 0o120000;
 
+/** The one bit of a file's mode the engine carries: its owner may execute it, as git decides. */
+const EXECUTABLE = 0o100;
+
+/** Whether a file of `mode` is executable, by its owner's bit alone. */
+export const isExecutable = (mode: number): boolean => (mode & EXECUTABLE) !== 0;
+
+/** A file's mode as the engine writes it: 0o100755 where executable, else 0o100644. */
+export const fileMode = (executable: boolean): number => REGULAR | (executable ? 0o755 : 0o644);
+
 /** One entry of a tree: its bytes and its mode. */
 export interface Entry {
   readonly bytes: Uint8Array;

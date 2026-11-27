@@ -32,7 +32,7 @@
 import { messageOf } from './errors.ts';
 import { type Context, renderString } from './jinja.ts';
 import { FILES, type Template } from './manifest.ts';
-import { DIRECTORY, type Entry, MODE_TYPE, REGULAR, type RenderError } from './types.ts';
+import { DIRECTORY, type Entry, fileMode, isExecutable, MODE_TYPE, REGULAR, type RenderError } from './types.ts';
 
 /** A rendered entry, with the path below `files/` it came from. */
 export interface Rendered {
@@ -49,7 +49,7 @@ const encoder = new TextEncoder();
 const EMPTY_DIRECTORY: Entry = { bytes: new Uint8Array(), mode: DIRECTORY | 0o755 };
 
 /** A file's entry as `render` writes it: its bytes, and a mode of 0o644 or 0o755. */
-const written = (bytes: Uint8Array, mode: number): Entry => ({ bytes, mode: REGULAR | (mode & 0o100 ? 0o755 : 0o644) });
+const written = (bytes: Uint8Array, mode: number): Entry => ({ bytes, mode: fileMode(isExecutable(mode)) });
 
 /** The text of `bytes`, or undefined where they are not valid UTF-8. */
 function textOf(bytes: Uint8Array): string | undefined {
