@@ -45,6 +45,7 @@ import { REQUIREMENT_NAME } from './lints.ts';
 import { type Declaration, MARKER_FILE, reasonGiven } from './marker.ts';
 import { type Directory, hasMarker, isOperations, type Kind } from './model.ts';
 import { appsOf, directoryAt, overview } from './overview.ts';
+import type { MarkerSite } from './sites.ts';
 import { bundledIndex } from './standardIndex.ts';
 
 export type Profile = 'stateless' | 'stateful';
@@ -70,6 +71,10 @@ export interface RepoFacts {
   conflicted?: string[];
   /** Its apps' directories, relative to the repo (`apps/<name>`). */
   apps: string[];
+  /** The `plx` pin of its `mise.toml`: the Plexus version it is on. */
+  pin?: string;
+  /** Every tracked marker read as configuration, the root first; undefined outside a git checkout. */
+  sites?: MarkerSite[];
 }
 
 /** What doctor read of an app. */
@@ -331,6 +336,19 @@ export const CHECKS: Readonly<Record<string, RepoCheck | AppCheck | UnitCheck>> 
   'PLX-App/Stateful/Seed': { binds: 'app', profile: 'stateful', check: seed },
 };
 
+/** What the marker as configuration must meet; each line is a finding of no requirement. */
+function markerConfig(repo: RepoFacts): string[] {
+  const root = repo.sites?.find((s) => s.dir === '.')?.config;
+  if (!root) return [];
+  const rendered = repo.sites?.some((s) => s.config?.templates !== undefined);
+  if (root.version === undefined)
+    return rendered ? [`${MARKER_FILE} lists \`templates\` but sets no \`version\`; \`plx update\` writes it`] : [];
+  const at = `\`version\` in ${MARKER_FILE} is ${root.version}, but mise.toml pins`;
+  if (repo.pin === undefined) return [`${at} no plx`];
+  if (repo.pin !== root.version) return [`${at} plx ${repo.pin}; only \`plx update\` moves it`];
+  return [];
+}
+
 // --- the diagnosis --------------------------------------------------------------
 
 export interface Finding {
@@ -387,8 +405,10 @@ function diagnoseUnit(unit: Facts, known: Set<string>): UnitReport {
     if (deviations.includes(name)) continue;
     for (const problem of run(c, unit, profile)) findings.push({ requirement: name, problem });
   }
-  if (unit.kind !== 'app')
+  if (unit.kind !== 'app') {
     for (const file of unit.conflicted ?? []) findings.push({ problem: `\`${file}\` holds a conflict marker` });
+    for (const problem of markerConfig(unit)) findings.push({ problem });
+  }
   const obsolete = (declaration?.obsolete ?? []).map((k) => `\`${k}\``).join(' and ');
   const hints: string[] = [];
   if (obsolete)
