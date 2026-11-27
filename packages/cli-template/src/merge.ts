@@ -48,13 +48,18 @@ async function mergePath(
 ): Promise<Outcome | undefined> {
   const c = at(tree, path);
   if (c === undefined && n !== undefined && (bornOnce || o === undefined)) {
-    if (ancestors(path).some((a) => isSymlink(tree.get(a)))) return 'kept';
+    const blocking = ancestors(path)
+      .map((a) => tree.get(a))
+      .find((entry) => entry !== undefined && kind(entry) !== DIRECTORY);
+    if (blocking !== undefined) return kind(blocking) === SYMLINK ? 'kept' : 'conflicted';
     tree.set(path, n);
     return 'added';
   }
   if (same(o, n)) return undefined;
-  if (isSymlink(c)) return 'kept';
-  if (isDirectory(o) || isDirectory(n)) return undefined;
+  if (kind(c) === SYMLINK) return 'kept';
+  const kinds = [o, n, c].map(kind);
+  if (kinds.includes(REGULAR) && kinds.includes(DIRECTORY)) return 'conflicted';
+  if (kinds.includes(DIRECTORY)) return undefined;
   if (bornOnce || c === undefined) return 'kept';
   if (n === undefined) {
     if (!same(c, o)) return 'conflicted';
@@ -98,12 +103,9 @@ function ancestors(path: string): string[] {
   return parts.slice(1).map((_, i) => parts.slice(0, i + 1).join('/'));
 }
 
-function isSymlink(entry: Entry | undefined): boolean {
-  return entry !== undefined && (entry.mode & MODE_TYPE) === SYMLINK;
-}
-
-function isDirectory(entry: Entry | undefined): boolean {
-  return entry !== undefined && (entry.mode & MODE_TYPE) === DIRECTORY;
+/** An entry's type bits: REGULAR, DIRECTORY or SYMLINK. */
+function kind(entry: Entry | undefined): number | undefined {
+  return entry === undefined ? undefined : entry.mode & MODE_TYPE;
 }
 
 /** Whether git takes `bytes` as binary: a NUL byte among the first 8000, as its `buffer_is_binary` decides. */
@@ -118,7 +120,8 @@ function executable(entry: Entry): boolean {
 /** Whether two entries, either absent, are alike. */
 function same(a: Entry | undefined, b: Entry | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
-  return equal(a.bytes, b.bytes) && executable(a) === executable(b);
+  if (kind(a) !== kind(b) || !equal(a.bytes, b.bytes)) return false;
+  return kind(a) !== REGULAR || executable(a) === executable(b);
 }
 
 function equal(a: Uint8Array, b: Uint8Array): boolean {
