@@ -1,5 +1,7 @@
 # Until the version that cuts over from copier is out, this template and
 # template-repo-operations are one: a change to either is made in both.
+# files/.gitignore.jinja is a .gitignore: npm leaves a file of that name out of a package, so the
+# template carries it with the suffix, which renders it to the same bytes.
 name: repo-operations
 
 questions:
