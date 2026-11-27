@@ -61,33 +61,44 @@ const kindOf = (mode: number): string => {
   return type === DIRECTORY ? 'directory' : type === SYMLINK ? 'symlink' : 'file';
 };
 
-/** Each way the two trees differ, by path in path order, copier's first in each message. */
-export function diffTrees(copier: Tree, engine: Tree): string[] {
+/** What each side of a comparison is called in a message; the first is the one expected to hold what the second must match. */
+export interface Names {
+  readonly copier: string;
+  readonly engine: string;
+}
+
+/** Each way the two trees differ, by path in path order, each message naming the side it is about. */
+export function diffTrees(
+  copier: Tree,
+  engine: Tree,
+  names: Names = { copier: 'copier', engine: 'the engine' },
+): string[] {
   const found: string[] = [];
   for (const path of [...new Set([...copier.keys(), ...engine.keys()])].sort()) {
     const c = copier.get(path);
     const e = engine.get(path);
-    if (!c) found.push(`${path}: only the engine writes it`);
-    else if (!e) found.push(`${path}: only copier writes it`);
-    else if (kindOf(c.mode) !== kindOf(e.mode))
-      found.push(`${path}: copier has a ${kindOf(c.mode)}, the engine a ${kindOf(e.mode)}`);
-    else if (kindOf(c.mode) === 'directory') continue;
+    if (!c) found.push(`${path}: only ${names.engine} writes it`);
+    else if (!e) found.push(`${path}: only ${names.copier} writes it`);
+    else if (kindOf(c.mode) !== kindOf(e.mode)) {
+      found.push(`${path}: ${names.copier} has a ${kindOf(c.mode)}, ${names.engine} a ${kindOf(e.mode)}`);
+    } else if (kindOf(c.mode) === 'directory') continue;
     else {
-      if (!Buffer.from(c.bytes).equals(e.bytes))
-        found.push(`${path}: bytes differ, ${firstDifference(c.bytes, e.bytes)}`);
+      if (!Buffer.from(c.bytes).equals(e.bytes)) {
+        found.push(`${path}: bytes differ, ${firstDifference(c.bytes, e.bytes, names)}`);
+      }
       const [ce, ee] = [(c.mode & 0o100) !== 0, (e.mode & 0o100) !== 0];
-      if (ce !== ee) found.push(`${path}: executable bit differs: copier ${ce}, engine ${ee}`);
+      if (ce !== ee) found.push(`${path}: executable bit differs: ${names.copier} ${ce}, ${names.engine} ${ee}`);
     }
   }
   return found;
 }
 
-function firstDifference(copier: Uint8Array, engine: Uint8Array): string {
+function firstDifference(copier: Uint8Array, engine: Uint8Array, names: Names): string {
   const [c, e] = [Buffer.from(copier).toString('utf8').split('\n'), Buffer.from(engine).toString('utf8').split('\n')];
   const at = c.findIndex((line, i) => line !== e[i]);
   if (at === -1 && c.length === e.length) return 'not as text';
   const line = at === -1 ? Math.min(c.length, e.length) : at;
-  return `first at line ${line + 1}: copier ${JSON.stringify(c[line])}, engine ${JSON.stringify(e[line])}`;
+  return `first at line ${line + 1}: ${names.copier} ${JSON.stringify(c[line])}, ${names.engine} ${JSON.stringify(e[line])}`;
 }
 
 /** The lines of each side's conflict markers that carry a label. */

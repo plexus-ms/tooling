@@ -497,9 +497,10 @@ describe('same version: the template sources are the same files in both places',
           `${template}: ${path} is listed as a departure but is in only one place`,
         );
       }
-      const found = diffTrees(exempt(mapped), exempt(portSide)).map(
-        (d) => `${template}: ${d.replace('copier', 'the template repo').replace('the engine', 'tooling')}`,
-      );
+      const found = diffTrees(exempt(mapped), exempt(portSide), {
+        copier: 'the template repo',
+        engine: 'tooling',
+      }).map((d) => `${template}: ${d}`);
       assert.deepEqual(found, []);
     });
   }
