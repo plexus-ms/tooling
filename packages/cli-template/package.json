@@ -1,6 +1,6 @@
 {
   "name": "@plexus-ms/cli-template",
-  "version": "0.129.1",
+  "version": "0.130.0",
   "description": "plx-template, a generic alternative to copier for several templates in one directory",
   "license": "GPL-3.0-or-later",
   "type": "module",
