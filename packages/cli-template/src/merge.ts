@@ -19,7 +19,7 @@ export async function merge(input: MergeInput, mergeFile: MergeFile): Promise<Me
   const tree = new Map(current);
   const report: MergeEntry[] = [];
   for (const path of [...new Set([...old.keys(), ...next.keys()])].sort()) {
-    const bornOnce = files.new.get(path)?.policy === 'born-once';
+    const bornOnce = (next.has(path) ? files.new : files.old).get(path)?.policy === 'born-once';
     const outcome = await mergePath(path, old.get(path), next.get(path), bornOnce, tree, mergeFile);
     if (outcome !== undefined) report.push({ path, outcome });
   }
