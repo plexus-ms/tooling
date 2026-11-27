@@ -26,6 +26,7 @@ export function render(templates: readonly Tree[], given: Answers): RenderResult
       tree.set(path, entry);
       files.set(path, { template: name, policy: template.manifest.policies.get(source) ?? 'merge' });
     }
+    birth.push(...template.manifest.birth.map((command) => ({ template: name, command })));
   });
   if (errors.length > 0) return { tree: new Map(), answers, unused: [], files: new Map(), birth: [], errors };
   return { tree, answers, unused: [], files, birth, errors };

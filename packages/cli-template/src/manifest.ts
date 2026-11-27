@@ -32,7 +32,7 @@ export function readTemplate(tree: Tree, _position: number, _errors: RenderError
     ...(fields as object),
   }));
   const policies = new Map(Object.entries(data.policies ?? {}) as [string, Policy][]);
-  const manifest: Manifest = { name: data.name, questions, reads: [], policies, birth: [] };
+  const manifest: Manifest = { name: data.name, questions, reads: [], policies, birth: data.birth ?? [] };
   const files = new Map(
     [...tree].filter(([path]) => path.startsWith(FILES)).map(([path, e]) => [path.slice(FILES.length), e]),
   );
