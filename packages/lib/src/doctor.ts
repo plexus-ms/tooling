@@ -196,16 +196,19 @@ function singlePort(compose: Compose): string[] {
 }
 
 /** The platform's binding of the app's port (§ 4 PLX-App), as the compose file spells it. */
-const LOOPBACK_PORT = `\${PLEXUS_LOOPBACK_PORT}`;
+const LOOPBACK_PORT = `\${PLEXUS_LOOPBACK_PORT:?<message>}`;
 const LOOPBACK_FORM = `127.0.0.1:${LOOPBACK_PORT}:<container-port>`;
 
 /**
- * The host port the platform sets: `${PLEXUS_LOOPBACK_PORT}`, with a
- * `:?message` that fails loudly when it is unset, or `$PLEXUS_LOOPBACK_PORT`.
- * A default (`:-3000`) fixes a port, and is not it.
+ * The app service's host port: `${PLEXUS_LOOPBACK_PORT:?message}`, which fails
+ * when the variable is unset or empty. Without the `:?` compose publishes on a
+ * random port instead, and with a default (`:-3000`) on a fixed one.
  */
-const isLoopbackVar = (host: string): boolean =>
-  /^(?:\$\{PLEXUS_LOOPBACK_PORT(?::\?[^}]*)?\}|\$PLEXUS_LOOPBACK_PORT)$/.test(host);
+const isLoopbackVar = (host: string): boolean => /^\$\{PLEXUS_LOOPBACK_PORT:\?[^}]*\}$/.test(host);
+
+/** Any spelling of the platform's port without a default: not a host port a service fixes of its own. */
+const namesLoopbackVar = (host: string): boolean =>
+  /^(?:\$\{PLEXUS_LOOPBACK_PORT(?::?\?[^}]*)?\}|\$PLEXUS_LOOPBACK_PORT)$/.test(host);
 
 function loopbackPort(compose: Compose): string[] {
   const problems: string[] = [];
@@ -215,10 +218,16 @@ function loopbackPort(compose: Compose): string[] {
     if (!isLoopback(port))
       problems.push(`the ${APP_SERVICE} service publishes \`${renderPort(port)}\`, not ${LOOPBACK_FORM}`);
   for (const [name, service] of Object.entries(compose.services)) {
+    if (service.network_mode === 'host')
+      problems.push(
+        `service \`${name}\` runs in the host's network (\`network_mode: host\`), reachable beyond loopback`,
+      );
     if (name === APP_SERVICE) continue;
     for (const port of portsOf(service)) {
+      if (hostIpOf(port) !== '127.0.0.1')
+        problems.push(`service \`${name}\` publishes \`${renderPort(port)}\` beyond 127.0.0.1`);
       const host = hostPortOf(port);
-      if (host && !isLoopbackVar(host))
+      if (host && !namesLoopbackVar(host))
         problems.push(`service \`${name}\` fixes host port \`${host}\` (\`${renderPort(port)}\`)`);
     }
   }
@@ -643,6 +652,13 @@ function partsOf(spec: string): string[] {
     else parts[parts.length - 1] += ch;
   }
   return parts;
+}
+
+/** The address a port is published on: undefined for every interface. */
+function hostIpOf(port: unknown): string | undefined {
+  if (isMapping(port)) return port.host_ip == null ? undefined : String(port.host_ip);
+  const parts = partsOf(String(port));
+  return parts.length >= 3 ? parts[0] : undefined;
 }
 
 /** The host side of a published port: '' or undefined when compose picks one. */

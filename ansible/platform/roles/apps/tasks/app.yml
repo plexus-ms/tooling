@@ -32,7 +32,9 @@
 # app (`app.env`). The project name is pinned to the deployment's slug, so that
 # container, network and volume names never depend on where compose was
 # invoked from. The loopback port is the one assigned
-# in the inventory, interpolated by compose as ${PLEXUS_LOOPBACK_PORT}. This
+# in the inventory, interpolated by compose as ${PLEXUS_LOOPBACK_PORT:?…}, so a
+# directory without this file refuses to start instead of publishing on a
+# random port (PLX-App/LoopbackPort). This
 # playbook is the file's only writer and always overwrites — the inventory is
 # the truth.
 - name: "{{ app.name }} | write .env (compose setting, platform bindings, values)"
