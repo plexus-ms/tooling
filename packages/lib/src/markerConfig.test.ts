@@ -200,3 +200,12 @@ test('setMarkerKeys refuses a key that is not written as `key: value`, and takes
   assert.equal(setMarkerKeys('---\n"a" : 1\n---\n', { a: 2 }), '---\n"a" : 2\n---\n');
   assert.equal(setMarkerKeys('---\n? a\n: 1\n---\n', { b: 2 }), '---\n? a\n: 1\nb: 2\n---\n', 'another key');
 });
+
+test('setMarkerKeys refuses a value another key refers to, and a value that refers to another', () => {
+  const shared = '---\na: &x [1]\nb: *x\n---\n';
+  assert.throws(() => setMarkerKeys(shared, { a: [2] }), /`a` carries the anchor `x`/);
+  assert.throws(() => setMarkerKeys('---\na: [&x 1, 2]\nb: *x\n---\n', { a: [3] }), /`a` carries the anchor `x`/);
+  assert.throws(() => setMarkerKeys(shared, { b: [3] }), /`b` is an alias/);
+  assert.equal(setMarkerKeys('---\na: &x 1\n---\n', { a: 2 }), '---\na: &x 2\n---\n', 'an anchor nothing uses');
+  assert.equal(setMarkerKeys('---\na: &x 1\nb: [*x, 2]\n---\n', { b: [3] }), '---\na: &x 1\nb: [3]\n---\n');
+});
