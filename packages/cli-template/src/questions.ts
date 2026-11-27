@@ -10,9 +10,12 @@
 // is absent from the answers, while its default, where it has one, is in the
 // context.
 //
-// For now a question takes the given answer of its name and nothing else, and
-// a question without one is absent from both; no answer is reported unused.
-import type { Context } from './jinja.ts';
+// A question takes the given answer of its name, and without one its default.
+// A string default is Jinja, in the scope and the answers before it: one `{{ }}`
+// holding a whole expression is evaluated to a native value, any other string is
+// rendered to text (`value`). Nothing else of a manifest value is touched.
+import { messageOf } from './errors.ts';
+import { type Context, evaluate, renderString } from './jinja.ts';
 import type { Answers, Manifest, RenderError } from './types.ts';
 
 /** One template's questions, resolved. */
@@ -23,17 +26,43 @@ export interface Resolution {
   readonly context: Context;
 }
 
+/** A string that is one `{{ expression }}` and nothing else, as the expression. */
+const EXPRESSION = /^\s*\{\{((?:(?!\{\{|\}\}).)*)\}\}\s*$/s;
+
+/** What a manifest value is in `context`: a string is Jinja, a whole `{{ expression }}` its native value and any other its text; other values are as they are. */
+function value(source: unknown, context: Context): unknown {
+  if (typeof source !== 'string') return source;
+  const expression = EXPRESSION.exec(source)?.[1];
+  return expression === undefined ? renderString(source, context) : evaluate(expression, context);
+}
+
+/** `value` of the field `what` of a question, an error naming the field's source where it fails. */
+function field(what: string, source: unknown, context: Context): unknown {
+  try {
+    return value(source, context);
+  } catch (error) {
+    throw new Error(`${what} \`${String(source)}\`: ${messageOf(error)}`);
+  }
+}
+
 /** The questions `manifest` owns, resolved against `given` with `scope` in view; problems go to `errors`. */
-export function resolveAnswers(
-  manifest: Manifest,
-  given: Answers,
-  _scope: Context,
-  _errors: RenderError[],
-): Resolution {
-  const answers = Object.fromEntries(
-    manifest.questions.filter((q) => Object.hasOwn(given, q.name)).map((q) => [q.name, given[q.name]]),
-  );
-  return { answers, context: answers };
+export function resolveAnswers(manifest: Manifest, given: Answers, scope: Context, errors: RenderError[]): Resolution {
+  const answers: Record<string, unknown> = {};
+  const context: Context = {};
+  for (const question of manifest.questions) {
+    try {
+      const seen = { ...scope, ...context };
+      let answer: unknown;
+      if (Object.hasOwn(given, question.name)) answer = given[question.name];
+      else if (Object.hasOwn(question, 'default')) answer = field('default', question.default, seen);
+      else continue;
+      answers[question.name] = answer;
+      context[question.name] = answer;
+    } catch (error) {
+      errors.push({ template: manifest.name, question: question.name, message: messageOf(error) });
+    }
+  }
+  return { answers, context };
 }
 
 /** The names of the `given` answers that no template of the render owns or reads, `manifests` being the render's. */
