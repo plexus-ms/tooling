@@ -25,13 +25,14 @@
 // path rendered below it; where the two belong to two templates, the error
 // names both templates as well, the first source's in `template`. Copier
 // differs here: the `.jinja` file wins and the other is silently not written.
-// Two directories of one template at one path are one directory. A directory
-// that renders to a path and holds nothing in the result, because the
-// template holds nothing there or because every file below it was skipped,
-// lands as an empty directory, as copier creates it; only the innermost of
-// nested ones is kept, and one below which another template writes is implied
-// by that template's paths. Two templates that both leave one directory empty
-// are two writers of one path, an error.
+// Directories at one path are one directory, of one template or of several.
+// A directory that renders to a path and holds nothing in the result, because
+// the templates hold nothing there or because every file below it was
+// skipped, lands as an empty directory, as copier creates it; only the
+// innermost of nested ones is kept, and one below which another template
+// writes is implied by that template's paths. An empty directory several
+// templates hold is owned by the one whose name sorts first, so that the owner
+// does not depend on the order the templates are given in.
 // A symlink anywhere in a template is rejected where the template is read
 // (manifest.ts).
 import { messageOf } from './errors.ts';
@@ -119,19 +120,21 @@ export function renderFiles(renderings: readonly Rendering[], errors: RenderErro
     else clash(first, value, (a, b) => `${a} and ${b} both render to ${path}`);
   };
 
-  // The directories that may land empty, by rendered path, each with the first source of each template at it.
-  const directories = new Map<string, Rendered[]>();
+  // The directories that may land empty, by rendered path: directories at one
+  // path are one, named by the first source of the template whose name sorts first.
+  const directories = new Map<string, Rendered>();
   for (const { template, context } of renderings) {
     for (const [path, source] of renderTemplate(template, context, put, errors)) {
-      directories.set(path, [...(directories.get(path) ?? []), { entry: EMPTY_DIRECTORY, source, owner: template }]);
+      const first = directories.get(path);
+      if (first === undefined || template.manifest.name < first.owner.manifest.name)
+        directories.set(path, { entry: EMPTY_DIRECTORY, source, owner: template });
     }
   }
 
-  // A directory is kept where nothing is written below it. Directories of one
-  // template at one path are one; two templates keeping one are two writers.
+  // A directory is kept where nothing is written below it.
   const taken = [...rendered.keys(), ...directories.keys()];
-  for (const [path, sources] of directories) {
-    if (!taken.some((other) => other.startsWith(`${path}/`))) for (const value of sources) put(path, value);
+  for (const [path, directory] of directories) {
+    if (!taken.some((other) => other.startsWith(`${path}/`))) put(path, directory);
   }
   for (const [path, below] of rendered) {
     for (let up = parentOf(path); up !== ''; up = parentOf(up)) {
