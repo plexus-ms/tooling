@@ -855,12 +855,17 @@ test('a given answer for a skipped question with a default is cast, checked agai
   assert.equal(basket(base, { q: 'five' }).errors.length, 1);
 });
 
-test('a skipped question without a default takes its given answer as it is, uncast and unchecked', () => {
-  const base = 'q:\n  type: int\n  when: false\n  choices: [1, 2]\n  validator: "no"';
-  const result = basket(base, { q: 'five' }, '{{ q }}');
-  assert.deepEqual(result.errors, []);
-  assert.deepEqual(result.answers, {});
-  assert.equal(result.out, 'five');
+// Ported from copier's `_ask`: `Question.get_default` reads the given answer first, so a given answer
+// keeps a skipped question from being dropped, and the init branch casts and validates it.
+test('a given answer for a skipped question without a default is cast, checked and validated, and absent from the answers', () => {
+  const skipped = basket('q:\n  type: int\n  when: false', { q: '5' }, '{{ q + 1 }}');
+  assert.deepEqual(skipped.errors, []);
+  assert.deepEqual(skipped.answers, {});
+  assert.equal(skipped.out, '6');
+  assert.equal(basket('q:\n  type: int\n  when: false', { q: 'abc' }).errors.length, 1);
+  assert.equal(basket('q:\n  type: str\n  when: false', { q: null }).errors.length, 1);
+  assert.equal(basket('q:\n  type: int\n  when: false\n  choices: [1, 2]', { q: 5 }).errors.length, 1);
+  assert.equal(basket('q:\n  type: int\n  when: false\n  validator: "no"', { q: 5 }).errors.length, 1);
 });
 
 // Ported from copier's `_ask`, where `answers.combined` holds every given answer from the start: a
@@ -904,4 +909,37 @@ test('a validator that fails to render names its field, as a default and a when 
   const result = basket('q:\n  default: x\n  validator: "{% if %}"', {});
   assert.match(result.errors[0]?.message ?? '', /^validator `\{% if %\}`: /);
   assert.match(basket('q:\n  when: "{% if %}"', {}).errors[0]?.message ?? '', /^when `/);
+});
+
+test('a null choice is chosen by its label, which is a rendered label of a manifest map or a label cast to text', () => {
+  const rendered = 'x:\n  default: a\nq:\n  type: str\n  choices:\n    "{{ x }}b": null\n    c: null';
+  assert.deepEqual(basket(rendered, { q: 'ab' }).answers, { x: 'a', q: 'ab' });
+  assert.equal(basket(rendered, { q: 'c' }).errors.length, 0);
+  assert.equal(basket(rendered, { q: '{{ x }}b' }).errors.length, 1);
+  const templated = 'q:\n  type: str\n  choices: "{true: null, 1: null, one: 2}"';
+  assert.deepEqual(basket(templated, { q: 'True' }).answers, { q: 'True' });
+  assert.deepEqual(basket(templated, { q: '1' }).answers, { q: '1' });
+});
+
+test('an int number beyond the safe range is an error, and a bool of 0E0 or 0. is false', () => {
+  assert.equal(basket('q:\n  type: int', { q: 2 ** 53 }).errors.length, 1);
+  assert.deepEqual(basket('q:\n  type: bool', { q: '0E0' }).answers, { q: false });
+  assert.deepEqual(basket('q:\n  type: bool', { q: '0.' }).answers, { q: false });
+});
+
+test('templated choices that render invalid YAML are an error naming the question', () => {
+  const result = basket('q:\n  default: a\n  choices: "[a, b"', {});
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.question, 'q');
+});
+
+// Deliberate differences from copier, in the header of questions.ts.
+test('a float from a bool is an error', () => {
+  assert.equal(basket('q:\n  type: float', { q: true }).errors.length, 1);
+});
+
+test('yaml is read by the yaml package, not PyYAML: y and n are booleans, a duplicate key is an error', () => {
+  assert.deepEqual(basket('q:\n  type: yaml', { q: 'y' }).answers, { q: true });
+  assert.deepEqual(basket('q:\n  type: yaml', { q: 'N' }).answers, { q: false });
+  assert.equal(basket('q:\n  type: yaml', { q: 'a: 1\na: 2' }).errors.length, 1);
 });
