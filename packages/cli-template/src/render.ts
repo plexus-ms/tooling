@@ -37,8 +37,8 @@
 // Order. A template is resolved after the owners of the answers it reads, and
 // otherwise in the order given, so that the order of the templates does not
 // change the tree; there are no dependencies between templates besides their
-// reads. Templates whose reads form a cycle are one error naming them, and
-// neither they nor the templates that read from them are resolved.
+// reads. Templates whose reads form a cycle, and the templates that read from
+// them, are one error naming them all by name, and none of them is resolved.
 //
 // Scope. A template sees only its own slice of the namespace: the engine's
 // variables, its declared reads, and its own questions. Its questions'
@@ -148,8 +148,9 @@ interface Resolved {
 
 /**
  * The templates in the order they resolve: each after the owners of the answers
- * it reads, else in the order given. Templates whose reads form a cycle are an
- * error naming them, and are left out with every template that reads from them.
+ * it reads, else in the order given. The templates left over each read from
+ * another left over, in a cycle or from one; they are one error naming them
+ * all, and none of them is resolved.
  */
 function resolutionOrder(
   read: readonly Template[],
@@ -169,36 +170,17 @@ function resolutionOrder(
     if (next === -1) break;
     order.push(...pending.splice(next, 1));
   }
-  // Each pending template reads from another pending one. Following those
-  // reads from each leads into a cycle, which is reported the first time a
-  // walk meets it.
-  const walked = new Set<Template>();
-  for (const start of pending) {
-    const walk: Template[] = [];
-    let at: Template | undefined = start;
-    while (at !== undefined && !walked.has(at)) {
-      walked.add(at);
-      walk.push(at);
-      at = edges(at).find(({ owner }) => pending.includes(owner))?.owner;
-    }
-    if (at === undefined || !walk.includes(at)) continue;
-    const cycle = walk.slice(walk.indexOf(at));
-    const first = cycle.reduce((a, b) => (read.indexOf(b) < read.indexOf(a) ? b : a));
-    const ordered = [...cycle.slice(cycle.indexOf(first)), ...cycle.slice(0, cycle.indexOf(first))];
-    const names = ordered.map(({ manifest }) => manifest.name);
-    const steps = ordered.map((template, i) => {
-      const owner = ordered[(i + 1) % ordered.length];
-      const name = edges(template).find((edge) => edge.owner === owner)?.name;
-      return `${template.manifest.name} reads ${name} from ${owner?.manifest.name}`;
-    });
-    const listed = `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
-    errors.push({
-      template: names[0],
-      other: names[1],
-      path: MANIFEST,
-      message: `the reads of ${listed} form a cycle: ${steps.join(', ')}`,
-    });
-  }
+  if (pending.length === 0) return order;
+  const left = pending.toSorted((a, b) => (a.manifest.name < b.manifest.name ? -1 : 1));
+  const names = left.map(({ manifest }) => manifest.name);
+  const waits = left.flatMap((template) =>
+    edges(template)
+      .filter(({ owner }) => pending.includes(owner))
+      .map(({ name, owner }) => `${template.manifest.name} reads ${name} from ${owner.manifest.name}`),
+  );
+  const listed = `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+  const message = `the reads of ${listed} wait on each other: ${waits.join(', ')}`;
+  errors.push({ template: names[0], other: names[1], path: MANIFEST, message });
   return order;
 }
 
