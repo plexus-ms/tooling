@@ -25,6 +25,8 @@ function withDirectories(
 ): void {
   const s = scratch();
   try {
+    mkdirSync(s.path('old'));
+    mkdirSync(s.path('new'));
     put(s.path('old'), old);
     put(s.path('new'), next);
     mkdirSync(s.path('target'));
@@ -221,5 +223,19 @@ test('a file of both renders against a directory of the target is a conflict, wh
       { path: 'x', outcome: 'conflicted' },
     ]);
     assert.deepEqual(read(s.path('target')), { 'x/inside.txt': 'mine\n', 'e/': '' });
+  });
+});
+
+test('a deletion that empties the target leaves the target itself', () => {
+  const old = { 'a/b/only.txt': 'x\n', 'top.txt': 'x\n' };
+  withDirectories(old, {}, old, (s) => {
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(
+      JSON.parse(run.stdout).report.map((e: { outcome: string }) => e.outcome),
+      ['deleted', 'deleted'],
+    );
+    assert.ok(statSync(s.path('target')).isDirectory());
+    assert.deepEqual(read(s.path('target')), {});
   });
 });
