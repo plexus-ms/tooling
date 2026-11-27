@@ -147,16 +147,21 @@ function frontmatterOf(text: string): { yaml: string; start: number; eol: string
 
 /**
  * The marker with the given frontmatter keys set, and every other byte as it
- * was: the body, the other keys, comments, quoting, spacing and blank lines.
- * A value already so leaves the text as it is. A replaced value keeps the
- * style it was written in (a block or a flow list, a quoted string), and
- * the comment on its key line; on one line also the spacing around it.
- * Comments inside a replaced block value, between or after its items, go
- * with it. A new reserved key goes
- * ahead of the answers in the order of RESERVED_KEYS, a new answer last; a
- * new list is written as a flow list (`[a, b]`). A key is set, never removed.
- * Throws when the page has no frontmatter or its frontmatter is not a block
- * mapping, which could not take a line without being rewritten.
+ * was: the body, the other keys, comments, quoting, spacing, blank lines and
+ * line breaks. A value already so leaves the text as it is. A replaced value
+ * keeps the style it was written in (a block or a flow list, a quoted
+ * string), and the comment on its key line; on one line also the spacing
+ * around it. Comments inside a replaced block value, between or after its
+ * items, go with it. A new reserved key goes ahead of the answers in the
+ * order of RESERVED_KEYS, above the comment of the key it precedes, a new
+ * answer last; a new value is written on one line, a list as a flow list
+ * (`[a, b]`). A key is set, never removed.
+ *
+ * Where a splice could change what it does not set, it throws rather than
+ * guess, naming the key: a page without frontmatter, a frontmatter that is
+ * not a block mapping or ends its YAML early (`...`), an explicit key
+ * (`? a`), a value with a tag of its own, an alias, or a value carrying an
+ * anchor that an alias refers to.
  */
 export function setMarkerKeys(text: string, keys: Record<string, unknown>): string {
   const { yaml, start, eol } = frontmatterOf(text);
