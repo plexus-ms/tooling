@@ -2,7 +2,7 @@
 // v9.19.1 (MIT, see LICENSE.copier); each test names its original.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DIRECTORY, REGULAR, render } from './index.ts';
+import { DIRECTORY, REGULAR, render, SYMLINK } from './index.ts';
 import { listing, template } from './testing/trees.ts';
 
 const ripe =
@@ -205,4 +205,18 @@ test('a file beside its .jinja sibling is not written, and the sibling is', () =
   );
   assert.deepEqual(result.errors, []);
   assert.deepEqual(listing(result.tree), { 'a.txt': 'rendered True', 'b.md': 'rendered', 'dir/c.txt': 'rendered' });
+});
+
+// Decided in the design (§ 2.6): copier copies or keeps a symlink, a template
+// holding one is an error here.
+test('a symlink below files/ is an error naming its path', () => {
+  const result = render(
+    [template(ripe, { 'shelf/apple.txt': 'x', 'shelf/link.txt': { text: 'apple.txt', mode: SYMLINK | 0o777 } })],
+    { ripe: true },
+  );
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.template, 'basket');
+  assert.equal(result.errors[0]?.path, 'files/shelf/link.txt');
+  assert.match(result.errors[0]?.message ?? '', /symlink/);
+  assert.deepEqual(listing(result.tree), {});
 });
