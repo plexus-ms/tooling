@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, symlinkSync } from 'node:fs';
 import { test } from 'node:test';
-import { plx, put, read, type Scratch, scratch } from './testing/run.ts';
+import { plxTemplate, put, read, type Scratch, scratch } from './testing/run.ts';
 
 const BASKET = [
   'name: basket',
@@ -42,7 +42,7 @@ test('render writes the tree beside the policies, and prints the result as JSON'
   withBasket((s, basket) => {
     put(s.dir, { 'answers.json': '{"fruit": "pear", "colour": "green"}' });
     const out = s.path('out');
-    const run = plx(['render', '--answers', s.path('answers.json'), out, basket]);
+    const run = plxTemplate(['render', '--answers', s.path('answers.json'), out, basket]);
     assert.equal(run.code, 0, run.stderr);
     assert.deepEqual(read(out), {
       'README.md': 'A basket of 3 pears.\n',
@@ -71,7 +71,7 @@ test('render writes the tree beside the policies, and prints the result as JSON'
 test('render takes the answers from standard input with -', () => {
   withBasket((s, basket) => {
     const out = s.path('out');
-    const run = plx(['render', '--answers', '-', out, basket], '{"fruit": "plum", "count": 5}');
+    const run = plxTemplate(['render', '--answers', '-', out, basket], '{"fruit": "plum", "count": 5}');
     assert.equal(run.code, 0, run.stderr);
     assert.equal(read(out)['README.md'], 'A basket of 5 plums.\n');
     assert.deepEqual(JSON.parse(run.stdout).answers, { count: 5, fruit: 'plum' });
@@ -91,7 +91,7 @@ test('an error in the inputs is code 3: every error listed in the JSON and on st
       'shelf/files/README.md': 'a shelf\n',
     });
     const out = s.path('out');
-    const run = plx(['render', out, basket, s.path('shelf')]);
+    const run = plxTemplate(['render', out, basket, s.path('shelf')]);
     assert.equal(run.code, 3);
     const { errors, files } = JSON.parse(run.stdout);
     assert.deepEqual(files, {});
@@ -120,7 +120,7 @@ test('two templates writing one path are an error naming both, in template and o
       'shelf/files/README.md.jinja': 'a shelf\n',
     });
     const out = s.path('out');
-    const run = plx(['render', '--answers', '-', out, basket, s.path('shelf')], '{"fruit": "fig"}');
+    const run = plxTemplate(['render', '--answers', '-', out, basket, s.path('shelf')], '{"fruit": "fig"}');
     assert.equal(run.code, 3);
     const [error] = JSON.parse(run.stdout).errors;
     assert.deepEqual([error.template, error.other], ['basket', 'shelf']);
@@ -134,7 +134,7 @@ test('an output directory that is not empty is refused, and nothing in it is tou
   withBasket((s, basket) => {
     const out = s.path('out');
     put(s.dir, { 'out/mine.txt': 'mine\n' });
-    const run = plx(['render', '--answers', '-', out, basket], '{"fruit": "fig"}');
+    const run = plxTemplate(['render', '--answers', '-', out, basket], '{"fruit": "fig"}');
     assert.equal(run.code, 3);
     assert.deepEqual(JSON.parse(run.stdout).errors, [{ message: 'is not empty', path: out }]);
     assert.deepEqual(read(out), { 'mine.txt': 'mine\n' });
@@ -146,7 +146,7 @@ test('an empty output directory is taken, a missing one, with its parents, is cr
   withBasket((s, basket) => {
     mkdirSync(s.path('empty'));
     for (const out of [s.path('empty'), s.path('deep/er/out')]) {
-      const run = plx(['render', '--answers', '-', out, basket], '{"fruit": "fig"}');
+      const run = plxTemplate(['render', '--answers', '-', out, basket], '{"fruit": "fig"}');
       assert.equal(run.code, 0, run.stderr);
       assert.equal(read(out)['README.md'], 'A basket of 3 figs.\n');
     }
@@ -163,14 +163,21 @@ test('answers that cannot be read, are no JSON or no object, a template director
       [['--answers', '-', s.path('o4'), s.path('no-such')], s.path('no-such')],
     ];
     for (const [args, path] of cases) {
-      const run = plx(['render', ...args], '{"fruit": "fig"}');
+      const run = plxTemplate(['render', ...args], '{"fruit": "fig"}');
       assert.equal(run.code, 3, args.join(' '));
       assert.ok(
         JSON.parse(run.stdout).errors.some((e: { path?: string }) => e.path === path),
         args.join(' '),
       );
     }
-    const both = plx(['render', '--answers', s.path('bad.json'), s.path('o5'), s.path('no-such'), s.path('also-not')]);
+    const both = plxTemplate([
+      'render',
+      '--answers',
+      s.path('bad.json'),
+      s.path('o5'),
+      s.path('no-such'),
+      s.path('also-not'),
+    ]);
     assert.equal(JSON.parse(both.stdout).errors.length, 3);
     assertNothingWritten(s.path('o5'));
   });
@@ -180,7 +187,7 @@ test('a symlink in a template is an error, and a template that holds nothing is 
   withBasket((s, basket) => {
     symlinkSync('README.md.jinja', s.path('basket/files/link'));
     mkdirSync(s.path('void'));
-    const run = plx(['render', '--answers', '-', s.path('out'), basket, s.path('void')], '{"fruit": "fig"}');
+    const run = plxTemplate(['render', '--answers', '-', s.path('out'), basket, s.path('void')], '{"fruit": "fig"}');
     assert.equal(run.code, 3);
     const errors = JSON.parse(run.stdout).errors;
     assert.ok(errors.some((e: { path?: string }) => e.path === 'files/link'));

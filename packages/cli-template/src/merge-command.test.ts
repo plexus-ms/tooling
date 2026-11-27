@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { plx, put, read, type Scratch, scratch } from './testing/run.ts';
+import { plxTemplate, put, read, type Scratch, scratch } from './testing/run.ts';
 import type { Listing } from './testing/trees.ts';
 
 /** The policies file beside a render, for the paths it holds: all `merge` but those named born-once. */
@@ -70,7 +70,7 @@ test('merge applies what the template changed to the directory, and reports each
     NEW,
     TARGET,
     (s) => {
-      const run = plx(['merge', s.path('old'), s.path('new'), s.path('target')]);
+      const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
       assert.equal(run.code, 0, run.stderr);
       assert.deepEqual(JSON.parse(run.stdout), {
         report: [
@@ -102,7 +102,7 @@ test('a render without its policies file, a malformed one, or a directory that i
     rmSync(s.path('old.plx-template.json'));
     writeFileSync(s.path('new.plx-template.json'), '{"files": {"clean.txt": {"policy": "sometimes"}}}');
     const before = read(s.path('target'));
-    const run = plx(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
     assert.equal(run.code, 3);
     const { errors } = JSON.parse(run.stdout);
     assert.deepEqual(
@@ -114,7 +114,7 @@ test('a render without its policies file, a malformed one, or a directory that i
     assert.deepEqual(read(s.path('target')), before);
 
     writeFileSync(s.path('new.plx-template.json'), policies(Object.keys(NEW)));
-    const missing = plx(['merge', s.path('no-old'), s.path('new'), s.path('no-target')]);
+    const missing = plxTemplate(['merge', s.path('no-old'), s.path('new'), s.path('no-target')]);
     assert.equal(missing.code, 3);
     assert.deepEqual(
       JSON.parse(missing.stdout).errors.map((e: { path: string }) => e.path),
@@ -137,7 +137,7 @@ test('merge changes only the executable bits of a file that exists, and never wi
     chmodSync(s.path('target/a.sh'), 0o600);
     chmodSync(s.path('target/b.sh'), 0o640);
     chmodSync(s.path('target/c.sh'), 0o755);
-    const run = plx(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
     assert.equal(run.code, 0, run.stderr);
     assert.deepEqual(
       JSON.parse(run.stdout).report.map((e: { outcome: string }) => e.outcome),
@@ -158,7 +158,7 @@ test('merge never writes or deletes through a symlink', () => {
     symlinkSync(s.path('outside'), s.path('target/dir'));
     symlinkSync(s.path('outside'), s.path('target/new'));
     symlinkSync(s.path('outside/gone.txt'), s.path('target/gone.txt'));
-    const run = plx(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
     assert.equal(run.code, 0, run.stderr);
     assert.deepEqual(read(s.path('outside')), { 'target.txt': 'one\n', 'file.txt': 'one\n', 'gone.txt': 'one\n' });
     assert.ok(lstatSync(s.path('target/link')).isSymbolicLink());
@@ -172,7 +172,7 @@ test('a deletion removes the directories it leaves empty, up to the target, and 
   const next = { 'a/keep.txt': 'x\n', 'g/h': { text: '', mode: 0o040755 } };
   withDirectories(old, next, old, (s) => {
     mkdirSync(s.path('target/empty-before'));
-    const run = plx(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
     assert.equal(run.code, 0, run.stderr);
     assert.deepEqual(Object.keys(read(s.path('target'))).sort(), ['a/keep.txt', 'empty-before/', 'g/h/']);
   });
@@ -184,7 +184,7 @@ test('merge reads only what the renders name: an unreadable directory elsewhere 
     chmodSync(s.path('target/node_modules'), 0o000);
     chmodSync(s.path('target/.git'), 0o000);
     try {
-      const run = plx(['merge', s.path('old'), s.path('new'), s.path('target')]);
+      const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
       assert.equal(run.code, 0, run.stderr);
       assert.equal(readFileSync(s.path('target/a.txt'), 'utf8'), 'two\n');
     } finally {
@@ -198,7 +198,7 @@ test('merge adds an empty directory of the new render, and a file the user delet
   const old = { 'a.txt': 'one\n' };
   const next = { 'a.txt': 'two\n', 'shelf/empty': { text: '', mode: 0o040755 } };
   withDirectories(old, next, {}, (s) => {
-    const run = plx(['merge', s.path('old'), s.path('new'), s.path('target')]);
+    const run = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('target')]);
     assert.equal(run.code, 0, run.stderr);
     assert.deepEqual(read(s.path('target')), { 'shelf/empty/': '' });
     assert.deepEqual(JSON.parse(run.stdout).report, [

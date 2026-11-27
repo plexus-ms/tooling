@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { chmodSync, cpSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { plx, put, read, scratch } from './testing/run.ts';
+import { plxTemplate, put, read, scratch } from './testing/run.ts';
 
 const MANIFEST = [
   'name: basket',
@@ -48,9 +48,9 @@ test('an update by hand: render the old template, render the new one, merge into
     put(s.path('v2'), V2);
     put(s.dir, { 'answers.json': '{"fruit": "pear"}' });
 
-    const first = plx(['render', '--answers', s.path('answers.json'), s.path('old'), s.path('v1')]);
+    const first = plxTemplate(['render', '--answers', s.path('answers.json'), s.path('old'), s.path('v1')]);
     assert.equal(first.code, 0, first.stderr);
-    const second = plx(['render', '--answers', s.path('answers.json'), s.path('new'), s.path('v2')]);
+    const second = plxTemplate(['render', '--answers', s.path('answers.json'), s.path('new'), s.path('v2')]);
     assert.equal(second.code, 0, second.stderr);
 
     // The project: the old render, as it was committed, and what the user did to it.
@@ -62,7 +62,7 @@ test('an update by hand: render the old template, render the new one, merge into
     writeFileSync(project('mine.txt'), "not the template's\n");
     chmodSync(project('bin/count.sh'), 0o755);
 
-    const merged = plx(['merge', s.path('old'), s.path('new'), s.path('project')]);
+    const merged = plxTemplate(['merge', s.path('old'), s.path('new'), s.path('project')]);
     assert.equal(merged.code, 0, merged.stderr);
     assert.deepEqual(JSON.parse(merged.stdout).report, [
       { path: 'bin/run.sh', outcome: 'clean' },

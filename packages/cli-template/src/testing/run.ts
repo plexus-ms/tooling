@@ -44,7 +44,7 @@ export function scratch(): Scratch {
 }
 
 /** Runs `plx-template` with `args`, `input` on its standard input. */
-export function plx(args: readonly string[], input = '', cwd?: string): Run {
+export function plxTemplate(args: readonly string[], input = '', cwd?: string): Run {
   const result = spawnSync(process.execPath, [BIN, ...args], { input, encoding: 'utf8', cwd });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
