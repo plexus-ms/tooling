@@ -1,27 +1,40 @@
 // merge: three rendered trees into one, the current directory's with the
-// template's changes applied (types.ts states the shapes). It looks at each
-// path that either render holds, in path order, with its policy from the new
-// render (from the old one where only the old has it), and the first rule that
-// fits decides; "current" is what the current tree holds at the path, a
-// directory where it holds entries below it:
+// template's changes applied (types.ts states the shapes). The two renders
+// hold files and empty directories only, as `render` writes them; a symlink in
+// either is not a render, and `merge` refuses it with an error.
+//
+// It looks at each path that either render holds, in path order, with its
+// policy from the new render (from the old one where only the old has it),
+// and the first rule that fits decides; "current" is what the current tree
+// holds at the path, a directory where it holds entries below it:
 //
 //   1. current holds nothing there, the new render does, and the path is
 //      born-once or new to the template: written, `added`; but `kept` where a
 //      directory it lies in is a symlink in the current tree, and
 //      `conflicted` where one is a file
 //   2. the old and the new render hold it alike: left alone
-//   3. current is a symlink: `kept`, never written, deleted or written through
-//   4. a file on one side, a directory on another: current stays, `conflicted`
-//   5. an empty directory otherwise: left alone; merge never deletes one
-//   6. born-once, or current lacks it: `kept`. A born-once path is never
-//      touched once it exists, nor deleted when the template drops it or its
-//      name no longer renders; a path the user deleted stays deleted
-//   7. the new render lacks it: `deleted` where current is the old render's
+//   3. the template drops an empty directory: left alone; merge never deletes
+//      a directory
+//   4. current is a symlink: `kept`, never written, deleted or written through
+//   5. born-once, or current holds nothing: `kept`. A born-once path is never
+//      touched once it exists, whatever either side holds, nor deleted when
+//      the template drops it or its name no longer renders; a path the user
+//      deleted stays deleted, also where the template turns a file into a
+//      directory or back
+//   6. current already holds what the new render does: a file is written,
+//      `clean`; a directory is left alone
+//   7. a file on one side, a directory on another: current stays, `conflicted`
+//   8. the new render lacks it: `deleted` where current is the old render's
 //      entry, else current stays, `conflicted`. A template that renames a file
 //      drops one path and adds another, so the user's edits to the old name
 //      survive this way
-//   8. otherwise both are files and the two changes are merged: the content
-//      and the executable bit apart
+//   9. otherwise all three are files or absent, the new render and current
+//      both hold one, and the two changes are merged: the content and the
+//      executable bit apart
+//
+// Rule 1 is the only one that adds an empty directory; after rules 3, 6 and 7
+// no directory is left, so `merge` reports a directory only as added or as
+// conflicting with a file.
 //
 // Alike means the same type and bytes, and for a file the same executable bit,
 // the one bit of a mode the engine carries (types.ts); a change of the bit
@@ -46,8 +59,8 @@
 // The report holds one entry, in path order, for each path the template
 // changed, the old and the new render holding it differently, and for each
 // path rule 1 writes; a path the template left alone is not reported, whatever
-// the current tree holds there, and neither is an empty directory merge does
-// not add. A path that neither render holds is the user's: untouched and
+// the current tree holds there, and neither are the directories of rules 3
+// and 6. A path that neither render holds is the user's: untouched and
 // unreported. The tree no longer implies a directory whose files were all
 // deleted; whether such a directory is removed is for whoever applies the tree.
 //
@@ -114,24 +127,24 @@ async function mergePath(
     return 'added';
   }
   if (same(old, next)) return undefined; // 2
-  if (kind(old) === DIRECTORY && next === undefined) return undefined;
-  if (kind(current) === SYMLINK) return 'kept'; // 3
-  if (bornOnce || current === undefined) return 'kept';
-  if (next !== undefined && kind(next) === REGULAR && same(current, next)) {
+  if (kind(old) === DIRECTORY && next === undefined) return undefined; // 3
+  if (kind(current) === SYMLINK) return 'kept'; // 4
+  if (bornOnce || current === undefined) return 'kept'; // 5
+  // 6
+  if (next !== undefined && same(current, next)) {
+    if (kind(next) === DIRECTORY) return undefined;
     tree.set(path, next);
     return 'clean';
   }
-  const kinds = [old, next, current].map(kind);
-  if (kinds.includes(REGULAR) && kinds.includes(DIRECTORY)) return 'conflicted'; // 4
-  if (kinds.includes(DIRECTORY)) return undefined; // 5
-  if (current === undefined) return 'kept'; // 6
-  // 7
+  // 7: after rules 1 to 6, a side that is a directory has a file on another
+  if ([old, next, current].map(kind).includes(DIRECTORY)) return 'conflicted';
+  // 8
   if (next === undefined) {
     if (!same(current, old)) return 'conflicted';
     tree.delete(path);
     return 'deleted';
   }
-  // 8
+  // 9
   const base = old ?? EMPTY;
   const merged = await mergeContent(path, base.bytes, next.bytes, current.bytes, mergeFile);
   if (merged === undefined) return 'conflicted';
