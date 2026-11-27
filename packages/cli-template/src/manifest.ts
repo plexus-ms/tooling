@@ -17,7 +17,8 @@ export interface Template {
 }
 
 const MANIFEST = 'template.yml';
-const FILES = 'files/';
+/** The directory of a template's tree that holds its files. */
+export const FILES = 'files/';
 
 const utf8 = new TextDecoder('utf-8', { fatal: true });
 
