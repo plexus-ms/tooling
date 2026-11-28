@@ -201,7 +201,17 @@ export {
   type StandardIndex,
 } from './standardIndex.ts';
 export { isClean, mergeLine, renderSummary, type Summary, summarize } from './summary.ts';
-export { planSync, type Rendered, type SiteMerge, type SiteSides, type Source, type SyncPlan } from './sync.ts';
+export {
+  planSync,
+  type Rendered,
+  type RenderTemplates,
+  type SiteMerge,
+  type SiteSides,
+  type Source,
+  type SyncPlan,
+  type TemplateSides,
+  type Templates,
+} from './sync.ts';
 export {
   copierIn,
   type SiteResult,

@@ -75,7 +75,7 @@ test("planSync lists the errors of a side's own render with the site and the sid
       [{ dir: '.', old: basket, new: basket }],
       { labels: { old: 'the templates of 0.1.0', new: 'the templates of 0.2.0' } },
     ),
-    /^\.: a question without an answer \(question size\) \[the templates of 0\.2\.0\]$/,
+    { message: '.: a question without an answer (question size) [the templates of 0.2.0]' },
   );
   assert.equal(text(repo, 'list.txt'), 'apples\nfresh\n');
 });
