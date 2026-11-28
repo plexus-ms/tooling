@@ -1453,6 +1453,18 @@ test('doctor reads the templates this plx bundles from disk and runs the marker 
   );
 });
 
+const turboMarker = (answers: string) =>
+  marked(`---\nversion: 0.130.0\ntemplates: [repo-turbo]\ntenant: plexus\n${answers}---\n`);
+const problemsOf = async (tree: Tree) =>
+  (await doctorOver(tree, '/ws/web', VERBS, CROSSED, {}, '0.130.0')).units[0]?.findings.map((f) => f.problem);
+
+test("repo-turbo's major is a question of a repo with display versions, and a number", async () => {
+  assert.deepEqual(await problemsOf(turboMarker('display_versions: true\nmajor: 1\n')), []);
+  assert.deepEqual(await problemsOf(turboMarker('display_versions: true\nmajor: one\n')), [
+    'PLEXUS.md: `major` of repo-turbo: "one" is not a whole number',
+  ]);
+});
+
 // --- the version, the root's resolved answers, who is named, and when the bundle is read ------
 
 const CROSSED = { '/ws/web': ['PLEXUS.md', 'mise.toml', 'apps/site/docker/compose.yaml'] };
