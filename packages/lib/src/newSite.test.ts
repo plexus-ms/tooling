@@ -388,7 +388,7 @@ test('a repo from repo-turbo and an app from app-nextjs in it: the trees and the
   process.env.MISE_TRUSTED_CONFIG_PATHS = target;
   try {
     git(target, 'add', '-A');
-    const { facts } = await examine(new Context({}, realIo()), target);
+    const { facts } = await examine(new Context({}, realIo()), target, bundled.version);
     const report = diagnose(facts);
     assert.deepEqual(
       report.units.flatMap((u) => u.findings.map((f) => `${u.path}: ${f.problem}`)),
@@ -640,4 +640,29 @@ test('a read of a key another rendered template owns is written once, as the own
   await newSite(recording().ctx, create(target, ['shop', 'reader'], { tenant: 'acme', stalls: '3' }, root));
   assert.match(text(target, 'PLEXUS.md'), /\nstalls: 3\n/);
   assert.equal(text(target, 'PLEXUS.md').match(/stalls/g)?.length, 1);
+});
+
+test('a repo made from app-nextjs alone, with the tenant it reads, raises no finding of the checks of the doctor against the templates', async () => {
+  const target = scratch.fresh('readonly');
+  await newSite(recording().ctx, {
+    dir: target,
+    templates: ['app-nextjs'],
+    answers: { name: 'o', tenant: 'acme' },
+    plxVersion: bundled.version,
+    root: templatesRoot(),
+  });
+  assert.match(text(target, 'PLEXUS.md'), /\ntenant: acme\n/);
+  git(target, 'init', '-q', '-b', 'main');
+  git(target, 'add', '-A');
+  const { facts } = await examine(new Context({}, realIo()), target, bundled.version);
+  const report = diagnose(facts);
+  // Such a repo has no mise.toml, so the repo contract's checks fail; what is pinned is that the marker's
+  // keys, the read `tenant` among them, raise no finding against the templates.
+  const problems = report.units.flatMap((u) => u.findings.map((f) => f.problem));
+  assert.ok(problems.length > 0, 'the repo contract finds the missing mise.toml');
+  assert.deepEqual(
+    problems.filter((p) => !/mise|plx/.test(p)),
+    [],
+  );
+  assert.equal(report.units.length, 1);
 });
