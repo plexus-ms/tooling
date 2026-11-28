@@ -17,7 +17,8 @@
 // this workspace's plx-template to render them, as an installed one would be
 // run. A template renders template-owned.txt and notes.txt, "generated" at
 // 0.1.0 and "updated from <version>" after it, and the root of the web repo
-// its package.json and, after 0.1.0, a new question `lint` with a default.
+// its package.json and, after 0.1.0, a new question `lint` with a default;
+// the app's template a born-once layout.txt, which the fixture's app lacks.
 // On copier, for the preview of `ship`'s dry run, their answers files name
 // the template repos.
 //
@@ -322,12 +323,23 @@ function templatesFor(version: string, root: string): string {
         : {}),
     }) as Record<string, string>;
   for (const template of ['repo-turbo', 'app-nextjs', 'repo-operations']) {
+    // The app's layout is born once, and the fixture's apps leave it out, as a route-group app does.
+    const born =
+      template === 'app-nextjs'
+        ? { 'files/layout.txt': `layout of ${version}\n`, policies: ['policies:', '  layout.txt: born-once'] }
+        : undefined;
     const questions = [
       ...(template === 'repo-turbo' && version !== '0.1.0' ? ['  lint:', '    default: strict'] : []),
       ...(REQUIRING === template && version !== '0.1.0' ? ['  region:', '    type: str'] : []),
     ];
-    const manifest = [`name: ${template}`, ...(questions.length ? ['questions:', ...questions] : []), ''].join('\n');
-    for (const [path, text] of Object.entries({ 'template.yml': manifest, ...files(template) }))
+    const manifest = [
+      `name: ${template}`,
+      ...(questions.length ? ['questions:', ...questions] : []),
+      ...(born?.policies ?? []),
+      '',
+    ].join('\n');
+    const extra = born ? { 'files/layout.txt': born['files/layout.txt'] } : {};
+    for (const [path, text] of Object.entries({ 'template.yml': manifest, ...files(template), ...extra }))
       put(join(root, template, path), text);
   }
   return root;
@@ -1600,6 +1612,18 @@ test('update: takes a version with the engine, without copier: two sites, a loca
     /^- Files that hold conflict markers: `apps\/site\/template-owned\.txt`\.$/m,
   );
   assert.equal(result && isClean(result), false, 'the run exits nonzero');
+});
+
+test('update: a born-once file the old render holds and a site lacks stays missing, as the user left it', async () => {
+  fixture('update-born-once');
+  versionCut('0.2.0');
+  const { error, out } = await runUpdate({ yes: true }, { repo: join(WS, 'acme/web') });
+  assert.equal(error, undefined, out);
+  assert.match(onVersion('acme-web', '0.2.0', 'apps/site/template-owned.txt'), /^updated from 0\.2\.0$/);
+  assert.throws(
+    () => onVersion('acme-web', '0.2.0', 'apps/site/layout.txt'),
+    'both sides render it from the markers on the branch, so it is no birth',
+  );
 });
 
 test('update: a repo that still tracks a copier answers file is refused, pointing to the crossover runbook', async () => {
