@@ -14,7 +14,7 @@
 import { resolve } from 'node:path';
 import { diagnose, type Examination, examine, type Report } from '@plexus-ms/lib';
 import type { Command } from 'commander';
-import { contextOf } from '../program.ts';
+import { contextOf, version } from '../program.ts';
 import { colorByDefault, type Style, style } from '../style.ts';
 
 export function register(program: Command): void {
@@ -29,7 +29,7 @@ export function register(program: Command): void {
     .action(async (dir: string, opts: { color?: boolean }, command: Command) => {
       const ctx = contextOf(command);
       const given = resolve(dir);
-      const { facts, ...examined } = await examine(ctx, given);
+      const { facts, ...examined } = await examine(ctx, given, version);
       const report: DoctorReport = { ...examined, ...diagnose(facts) };
       const s = style(opts.color ?? colorByDefault());
       ctx.result(report, (r) => renderReport(r, s, !ctx.quiet, given));
