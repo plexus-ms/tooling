@@ -1,6 +1,7 @@
 // planSync on scratch repos, as `plx update` calls it: the two sides of a site
-// from two versions' templates, each rendered by its own side. `apply`'s use
-// of it is tested through `apply` (apply.test.ts).
+// from two versions' templates, each rendered by its own side, and the version
+// written into the root marker with the defaults. `apply`'s use of it is
+// tested through `apply` (apply.test.ts).
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -78,4 +79,35 @@ test("planSync lists the errors of a side's own render with the site and the sid
     { message: '.: a question without an answer (question size) [the templates of 0.2.0]' },
   );
   assert.equal(text(repo, 'list.txt'), 'apples\nfresh\n');
+});
+
+test('planSync writes the version into the root marker in the same splice as its defaults', async () => {
+  const old = templatesAt(scratch.fresh('v1'), { basket: BASKET });
+  const next = templatesAt(scratch.fresh('v2'), { basket: BASKET_NEXT });
+  const repo = repoWith(scratch.fresh('repo'), { 'PLEXUS.md': ROOT, 'list.txt': 'apples\nfresh\n' });
+  const plan = await planSync(
+    quietContext(),
+    repo,
+    { old: { root: old }, new: { root: next } },
+    [{ dir: '.', old: basket, new: basket }],
+    { version: '0.2.0' },
+  );
+  assert.deepEqual(plan.sites[0]?.defaults, { count: 3 });
+  await plan.perform();
+  assert.equal(text(repo, 'PLEXUS.md'), marker('version: 0.2.0\ntemplates: [basket]\nfruit: apple\ncount: 3\n'));
+  assert.equal(text(repo, 'list.txt'), '3 apples\nfresh\n');
+});
+
+test('planSync writes the version into a root marker that renders nothing, and nowhere under a dry run', async () => {
+  const root = templatesAt(scratch.fresh('templates'), { basket: BASKET });
+  const repo = repoWith(scratch.fresh('repo'), { 'PLEXUS.md': marker('version: 0.1.0\n') });
+  const none: Source = { templates: [], answers: {} };
+  const sites = [{ dir: '.', old: none, new: none, contextOnly: true }];
+  const dry = await planSync(quietContext({ yes: true, dryRun: true }), repo, root, sites, { version: '0.2.0' });
+  await dry.perform();
+  assert.equal(text(repo, 'PLEXUS.md'), marker('version: 0.1.0\n'));
+  const plan = await planSync(quietContext(), repo, root, sites, { version: '0.2.0' });
+  assert.deepEqual(plan.sites, [], 'the root is no site of the plan');
+  await plan.perform();
+  assert.equal(text(repo, 'PLEXUS.md'), marker('version: 0.2.0\n'));
 });
