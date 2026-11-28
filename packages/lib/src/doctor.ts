@@ -39,14 +39,14 @@
 // guard adds the checks of the markers against them (siteTemplates.ts): every
 // name in `templates` is bundled, every key is reserved or a question or read
 // of a listed template, and every answer is valid for its question. Where no
-// templates are given, those three are skipped. Reading the bundled templates
-// from disk into the facts is the one join still open: `readRepo` does not
-// fill them yet, so `plx doctor` itself runs none of the three.
+// templates are given, those three are skipped. `readRepo` gives them for a
+// repo with sites: every directory of `templatesRoot()`, read once per run.
 //
 //   plx doctor          # this repo and its apps, from anywhere inside it
 //   plx doctor ~/dev    # every Plexus repo beneath, and its apps
-import { realpath } from 'node:fs/promises';
+import { readdir, realpath } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
+import { readTemplate } from './bundled.ts';
 import {
   APP_SERVICE,
   type Compose,
@@ -70,6 +70,7 @@ import { appsOf, directoryAt, overview } from './overview.ts';
 import { findSites, type MarkerSite, siteAnswers } from './sites.ts';
 import { type Bundled, templateFindings } from './siteTemplates.ts';
 import { bundledIndex } from './standardIndex.ts';
+import { templatesRoot } from './templatesRoot.ts';
 
 export type Profile = 'stateless' | 'stateful';
 
@@ -608,6 +609,7 @@ async function readRepo(ctx: Context, dir: Directory, path: string, kind: RepoFa
       throw error;
     });
   const conflicted = tracked === undefined ? undefined : await filesWithConflictMarkers(ctx, dir.path);
+  const sites = tracked !== undefined && crossedOver(tracked) ? await readSites(ctx, dir.path) : undefined;
   return {
     kind,
     path,
@@ -617,8 +619,23 @@ async function readRepo(ctx: Context, dir: Directory, path: string, kind: RepoFa
     ...(conflicted?.length ? { conflicted } : {}),
     apps: [],
     ...(dir.pin ? { pin: dir.pin } : {}),
-    ...(tracked !== undefined && crossedOver(tracked) ? await readSites(ctx, dir.path) : {}),
+    ...sites,
+    ...(sites?.sites ? { templates: await bundledTemplates() } : {}),
   };
+}
+
+let bundled: Promise<Bundled> | undefined;
+
+/** The templates this plx bundles, each read from `templatesRoot()`, once per run. */
+function bundledTemplates(): Promise<Bundled> {
+  bundled ??= (async () => {
+    const root = templatesRoot();
+    const names = (await readdir(root, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+    return new Map(
+      await Promise.all(names.sort().map(async (name) => [name, (await readTemplate(root, name)).tree] as const)),
+    );
+  })();
+  return bundled;
 }
 
 /** The repo's sites, or why they cannot be read: a marker git tracks that is not a readable file is a finding, never a failed run. */

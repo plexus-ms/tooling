@@ -1120,7 +1120,7 @@ test('the marker checks are skipped in a repo that still tracks a copier answers
 test('doctor reads the plx pin and the tracked markers, and fails the repo for each marker finding', async () => {
   const tree = ws();
   const web = tree.web as Tree;
-  web['PLEXUS.md'] = '---\nversion: 0.130.0\ntemplates: [repo-turbo]\n---\n';
+  web['PLEXUS.md'] = '---\nversion: 0.130.0\ntemplates: [repo-turbo]\ntenant: plexus\n---\n';
   web['mise.toml'] = '[tools]\n"npm:@plexus-ms/cli" = "0.131.0"\n';
   const site = (web.apps as Tree).site as Tree;
   site['PLEXUS.md'] = '---\nprofile: stateless\nversion: 0.131.0\n---\n';
