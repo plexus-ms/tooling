@@ -50,7 +50,10 @@
 // A key that the root's marker would receive as a default and that the template
 // of any nested site of the repo declares, planned or not, or that a nested
 // marker already answers, is refused before anything is written: it would
-// stand in two markers, which no marker may do. A render error is listed once, with the sides it came from.
+// stand in two markers, which no marker may do. The manifests are read from the
+// new side's root; a nested site's template that cannot be read there is
+// refused as well, since the check cannot be made without it. A render error is
+// listed once, with the sides it came from.
 import { join } from 'node:path';
 import type { Answers, MergeEntry, MergePlan, RenderError, RenderedSide } from '@plexus-ms/cli-template';
 import { loadTemplate, readTemplate } from './bundled.ts';
@@ -257,7 +260,14 @@ export async function planSync(
   };
 }
 
-/** The refusals for a root default that would stand in two markers: a nested site declares it, or answers it. */
+/**
+ * The refusals for a root default that would stand in two markers: a nested
+ * site declares it, or answers it. A nested site's template that cannot be
+ * read is refused too, since whether it declares the key cannot be told: a
+ * check that cannot be made is not passed. Where the nested site is rendered
+ * as well, its render reports the template first; one that is not rendered, or
+ * whose manifest only this plx cannot read (another version's), meets it here.
+ */
 async function doubledKeys(
   root: string,
   rootSide: { templates: readonly string[]; defaults: Record<string, unknown> } | undefined,
@@ -266,17 +276,27 @@ async function doubledKeys(
   if (!rootSide) return [];
   const lines: string[] = [];
   const fix = 'a key is answered in one marker only: answer it in the root marker and remove it from the nested one';
-  const declares = async (name: string, key: string) =>
-    (await loadTemplate(root, name).catch(() => undefined))?.questions.some((q) => q.name === key) === true;
+  const questionsOf = async (name: string): Promise<string[] | Error> =>
+    loadTemplate(root, name).then(
+      (manifest) => manifest.questions.map((q) => q.name),
+      (error: Error) => error,
+    );
   for (const key of Object.keys(rootSide.defaults)) {
     let rootTemplate: string | undefined;
-    for (const name of rootSide.templates) if (!rootTemplate && (await declares(name, key))) rootTemplate = name;
+    for (const name of rootSide.templates) {
+      const questions = await questionsOf(name);
+      if (!rootTemplate && Array.isArray(questions) && questions.includes(key)) rootTemplate = name;
+    }
     const where = `${MARKER_FILE} would get \`${key}\` as the default of template ${rootTemplate}`;
     for (const { dir, templates, answers } of siblings) {
       const marker = join(dir, MARKER_FILE);
       for (const name of templates) {
-        // A template that cannot be loaded is the render's error to report.
-        if (await declares(name, key))
+        const questions = await questionsOf(name);
+        if (questions instanceof Error)
+          lines.push(
+            `${where}, and template ${name} of ${marker} cannot be read, so whether it declares it too cannot be told: ${questions.message}`,
+          );
+        else if (questions.includes(key))
           lines.push(`${where}, and template ${name} of ${marker} declares it too: ${fix}`);
       }
       if (key in answers) lines.push(`${where}, and ${marker} answers it already: ${fix}`);
