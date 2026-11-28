@@ -13,6 +13,7 @@ import { register as changeset } from './changeset.ts';
 import { register as deploy } from './deploy.ts';
 import { register as deployTargets } from './deploy-targets.ts';
 import { register as doctor } from './doctor.ts';
+import { register as newSite } from './new.ts';
 import { register as overview } from './overview.ts';
 import { register as requirements } from './requirements.ts';
 import { register as umbrella } from './umbrella.ts';
@@ -23,6 +24,7 @@ export const commands: ((program: Command) => void)[] = [
   doctor,
   update,
   apply,
+  newSite,
   umbrella,
   requirements,
   changeset,
