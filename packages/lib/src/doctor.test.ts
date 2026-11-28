@@ -1429,7 +1429,7 @@ test('doctor reads the templates this plx bundles from disk and runs the marker 
   const tree = ws();
   const web = tree.web as Tree;
   web['PLEXUS.md'] =
-    '---\nversion: 0.131.0\ntemplates: [repo-turbo, ghost]\ntenant: plexus\npublishes_packages: maybe\nstray: 1\n---\n';
+    '---\nversion: 0.131.0\ntemplates: [repo-turbo, ghost]\ntenant: plexus\nci_strategy: cloud\nstray: 1\n---\n';
   web['mise.toml'] = '[tools]\n"npm:@plexus-ms/cli" = "0.131.0"\n';
   const tracked = { '/ws/web': ['PLEXUS.md', 'mise.toml', 'apps/site/docker/compose.yaml'] };
   const report = await doctorOver(tree, '/ws/web', VERBS, tracked);
@@ -1443,7 +1443,7 @@ test('doctor reads the templates this plx bundles from disk and runs the marker 
     `${problems}`,
   );
   assert.ok(
-    problems.some((p) => p?.includes('`publishes_packages` of repo-turbo')),
+    problems.some((p) => p?.includes('`ci_strategy` of repo-turbo')),
     `${problems}`,
   );
 });
