@@ -87,6 +87,9 @@
 //   - in the same-version check, a copier template file named `.gitignore` is the port's
 //     `.gitignore.jinja` (npm leaves the former out of a package), and copier's own
 //     template of its answers file is skipped (portedPath).
+// The answers the engine resolves are compared with copier's recorded ones completed with
+// the keys of the frontmatter of the marker copier rendered: copier wrote `major` into it
+// at birth, the ported template asks it as a question, and the ring compares the two.
 // The answers the engine is given are the ones copier is given, with the profile
 // values mapped and, for the app template, `tenant` passed as a given answer where
 // copier reads it from the enclosing repo's answers file (copierJob).
@@ -125,6 +128,7 @@ import {
   portedPath,
   stripCopierMarker,
   unifyTree,
+  withMarkerFrontmatter,
 } from './helpers.ts';
 
 const ROOT = join(import.meta.dirname, '..');
@@ -504,8 +508,9 @@ describe('rendering: the engine renders what copier copies', { concurrency: 6 },
       const { site, dst } = siteOf(template, parent);
       await copierCopy(template, 'HEAD', answers, dst, site);
       const copied = await readTree(dst);
-      const { tenant, ...own } = copierAnswersAsEngine(
-        parseAnswers(decoder.decode(copied.get(ANSWERS_FILE)?.bytes)).answers,
+      const { tenant, ...own } = withMarkerFrontmatter(
+        copierAnswersAsEngine(parseAnswers(decoder.decode(copied.get(ANSWERS_FILE)?.bytes)).answers),
+        copied,
       );
       // An app's tenant is the enclosing repo's answer: copier records it, the engine is given it.
       const recorded = template === 'app-nextjs' ? own : { ...own, tenant };

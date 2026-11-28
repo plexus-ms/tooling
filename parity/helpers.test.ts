@@ -21,6 +21,7 @@ import {
   stripCopierMarker,
   unifyConflictLabels,
   unifyTree,
+  withMarkerFrontmatter,
 } from './helpers.ts';
 
 const enc = (text: string) => new TextEncoder().encode(text);
@@ -36,6 +37,16 @@ const tree = (files: Record<string, string | { text: string; mode: number }>): T
 test('the marker strip removes the frontmatter and the blank line after it, and nothing else', () => {
   assert.equal(dec(stripCopierMarker(enc('---\nprofile: stateful\n---\n\nbody\n---\nmore\n'))), 'body\n---\nmore\n');
   assert.equal(dec(stripCopierMarker(enc('---\n---\n\n\nbody\n'))), '\nbody\n');
+});
+
+test("copier's answers are completed with the keys of its marker's frontmatter, and with none where it has none", () => {
+  const recorded = { tenant: 'acme' };
+  assert.deepEqual(withMarkerFrontmatter(recorded, tree({ 'PLEXUS.md': '---\nmajor: 3\n---\n\nbody\n' })), {
+    tenant: 'acme',
+    major: 3,
+  });
+  assert.deepEqual(withMarkerFrontmatter(recorded, tree({ 'PLEXUS.md': '---\n---\n\nbody\n' })), recorded);
+  assert.deepEqual(withMarkerFrontmatter(recorded, tree({})), recorded);
 });
 
 test('the marker strip takes a marker with a frontmatter and no body to be empty', () => {

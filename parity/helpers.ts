@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { type Answers, DIRECTORY, MODE_TYPE, SYMLINK, type Tree } from '../packages/cli-template/src/index.ts';
 import { ANSWERS_FILE } from '../packages/lib/src/copier.ts';
+import { splitFrontmatter } from '../packages/lib/src/marker.ts';
 import type { TemplateName } from './harness.ts';
 
 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -47,6 +48,16 @@ export function copierAnswersAsEngine(recorded: Answers): Answers {
   const { profile, ...rest } = recorded;
   if (typeof profile !== 'string') return recorded;
   return { ...rest, profile: profile.replace(/-app$/, '') };
+}
+
+/**
+ * The answers copier recorded, completed with the keys of the frontmatter of the
+ * marker it rendered: a fact copier wrote there at birth (`major`) is an answer
+ * of the engine, so the two are compared as answers.
+ */
+export function withMarkerFrontmatter(recorded: Answers, copied: Tree): Answers {
+  const marker = copied.get(MARKER);
+  return marker ? { ...recorded, ...splitFrontmatter(decoder.decode(marker.bytes)).data } : recorded;
 }
 
 /** A copier tree as the engine's would be: without its answers file, and its marker without frontmatter. */
