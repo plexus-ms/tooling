@@ -1461,7 +1461,7 @@ const problemsOf = async (tree: Tree) =>
 test("repo-turbo's major is a question of a repo with display versions, and a number", async () => {
   assert.deepEqual(await problemsOf(turboMarker('display_versions: true\nmajor: 1\n')), []);
   assert.deepEqual(await problemsOf(turboMarker('display_versions: true\nmajor: one\n')), [
-    'PLEXUS.md: `major` of repo-turbo: "one" is not a whole number',
+    'PLEXUS.md: `major` of repo-turbo: "one" is no int',
   ]);
 });
 
@@ -1496,7 +1496,9 @@ test("they are skipped, and a line says so, where the running plx is not the roo
     {},
     '0.131.0',
   );
-  assert.ok(unset.units[0]?.hints?.some((h) => h.includes('names no version')));
+  assert.deepEqual(unset.units[0]?.hints, [
+    'the markers are not checked against the templates: this plx is 0.131.0, the root marker names no version, so there is no version to run',
+  ]);
 });
 
 test('the bundled templates are read only for a repo in which a marker lists templates', async () => {
@@ -1544,6 +1546,15 @@ test('an invalid answer of a nested marker is named at that marker alone', () =>
   assert.deepEqual(findings(crossed(sites, { templates: DEFAULTED })), [
     { problem: 'apps/a/PLEXUS.md: `profile` of app-nextjs: "bogus" is not one of stateless, stateful' },
   ]);
+});
+
+test("a nested marker's own answer wins over the root's resolved one for the same key", () => {
+  const sized = bundle({
+    'repo-turbo': 'questions:\n  size: {default: xl}\n',
+    'app-nextjs': 'questions:\n  size: {choices: [s, m], default: s}\n',
+  });
+  const sites = [rootOf({}), nestedApp('apps/a', { size: 'm' })];
+  assert.deepEqual(findings(crossed(sites, { templates: sized, rootAnswers: { size: 'xl' } })), []);
 });
 
 test('a root marker that lists no templates is checked for keys where a nested marker lists some', () => {
