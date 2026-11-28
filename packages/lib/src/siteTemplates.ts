@@ -34,12 +34,19 @@
 // own templates only, so an answer is judged once, at the marker that lists
 // its question's template; a read is judged where its template is listed.
 import { join } from 'node:path';
-import { render, type Tree } from '@plexus-ms/cli-template';
+import type { render, Tree } from '@plexus-ms/cli-template';
 import { MARKER_FILE } from './marker.ts';
 import { type MarkerSite, siteAnswers } from './sites.ts';
 
-/** The templates a plx bundles, each as the engine reads it, by the name a marker lists. */
-export type Bundled = ReadonlyMap<string, Tree>;
+/**
+ * The templates a plx bundles, each as the engine reads it, by the name a
+ * marker lists, and the engine's `render`, which the caller loads (engine.ts)
+ * so that no program that never renders imports the engine.
+ */
+export interface Bundled {
+  readonly trees: ReadonlyMap<string, Tree>;
+  readonly render: typeof render;
+}
 
 /** The findings of the markers among `sites` against `bundled`. */
 export function templateFindings(sites: readonly MarkerSite[], bundled: Bundled): string[] {
@@ -47,10 +54,10 @@ export function templateFindings(sites: readonly MarkerSite[], bundled: Bundled)
 }
 
 function unknownNames(sites: readonly MarkerSite[], bundled: Bundled): string[] {
-  const held = [...bundled.keys()].sort().map((name) => `\`${name}\``);
+  const held = [...bundled.trees.keys()].sort().map((name) => `\`${name}\``);
   return sites.flatMap(({ dir, config }) =>
     (config?.templates ?? [])
-      .filter((name) => !bundled.has(name))
+      .filter((name) => !bundled.trees.has(name))
       .map(
         (name) =>
           `${join(dir, MARKER_FILE)}: \`templates\` names \`${name}\`, which this plx does not bundle (it bundles ${held.join(', ')})`,
@@ -64,8 +71,8 @@ function invalidAnswers(sites: readonly MarkerSite[], bundled: Bundled): string[
     if (!config?.templates?.length) return [];
     const answers = answersOf(sites, dir);
     if (!answers) return [];
-    const { errors } = render(
-      config.templates.flatMap((name) => bundled.get(name) ?? []),
+    const { errors } = bundled.render(
+      config.templates.flatMap((name) => bundled.trees.get(name) ?? []),
       answers,
     );
     return errors
@@ -78,14 +85,14 @@ function invalidAnswers(sites: readonly MarkerSite[], bundled: Bundled): string[
 
 function unknownKeys(sites: readonly MarkerSite[], bundled: Bundled): string[] {
   const listed = (site: MarkerSite) => site.config?.templates ?? [];
-  const trees = (names: Iterable<string>) => [...new Set(names)].flatMap((name) => bundled.get(name) ?? []);
+  const trees = (names: Iterable<string>) => [...new Set(names)].flatMap((name) => bundled.trees.get(name) ?? []);
   return sites.flatMap((site) => {
     const { dir, config } = site;
     const root = dir === '.';
     if (!config || !(root ? sites.some((s) => listed(s).length > 0) : listed(site).length > 0)) return [];
     const answers = answersOf(sites, dir);
     if (!answers) return [];
-    const { unused } = render(trees(root ? sites.flatMap(listed) : listed(site)), answers);
+    const { unused } = bundled.render(trees(root ? sites.flatMap(listed) : listed(site)), answers);
     const scope = root ? 'a template that a marker of the repo lists' : 'a template it lists';
     return unused
       .filter((key) => Object.hasOwn(config.answers, key))

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { REGULAR, type Tree as Template } from '@plexus-ms/cli-template';
+import { REGULAR, render, type Tree as Template } from '@plexus-ms/cli-template';
 import { type Compose, type Mapping, parseCompose } from './compose.ts';
 import { Context } from './context.ts';
 import { type AppFacts, CHECKS, diagnose, examine, type Facts, type RepoFacts } from './doctor.ts';
@@ -11,6 +11,7 @@ import type { MarkerConfig } from './marker.ts';
 import { unitsOf } from './model.ts';
 import { overview } from './overview.ts';
 import type { MarkerSite } from './sites.ts';
+import type { Bundled } from './siteTemplates.ts';
 import { type FakeExec, fakeIo, link, type Tree, UNREADABLE } from './testing/fakeIo.ts';
 import { UsageError } from './version.ts';
 
@@ -1236,8 +1237,10 @@ const template = (name: string, manifest = ''): Template =>
   new Map([['template.yml', { bytes: new TextEncoder().encode(`name: ${name}\n${manifest}`), mode: REGULAR | 0o644 }]]);
 
 /** The templates a plx bundles, by name, each with the manifest lines given. */
-const bundle = (manifests: Record<string, string>): Map<string, Template> =>
-  new Map(Object.entries(manifests).map(([name, manifest]) => [name, template(name, manifest)]));
+const bundle = (manifests: Record<string, string>): Bundled => ({
+  trees: new Map(Object.entries(manifests).map(([name, manifest]) => [name, template(name, manifest)])),
+  render,
+});
 
 const BUNDLED = bundle({ 'repo-turbo': '', 'app-nextjs': '' });
 

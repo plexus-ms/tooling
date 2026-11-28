@@ -62,6 +62,7 @@ import {
 import { filesWithConflictMarkers } from './conflicts.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE } from './copier.ts';
+import { engine } from './engine.ts';
 import { ExecError } from './io.ts';
 import { REQUIREMENT_NAME } from './lints.ts';
 import { type Declaration, MARKER_FILE, reasonGiven } from './marker.ts';
@@ -631,9 +632,10 @@ function bundledTemplates(): Promise<Bundled> {
   bundled ??= (async () => {
     const root = templatesRoot();
     const names = (await readdir(root, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
-    return new Map(
-      await Promise.all(names.sort().map(async (name) => [name, (await readTemplate(root, name)).tree] as const)),
+    const trees = await Promise.all(
+      names.sort().map(async (name) => [name, (await readTemplate(root, name)).tree] as const),
     );
+    return { trees: new Map(trees), render: (await engine()).render };
   })();
   return bundled;
 }
