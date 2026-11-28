@@ -51,13 +51,18 @@
 // What a caller of the library uses, beside `readTree`: `readManifest` reads
 // the manifest of a template directory, and `readTemplateDirectory` that
 // manifest with the tree `render` takes, both throwing one error that lists
-// every problem of the manifest. `planMerge` reads what `merge` looks at in a
+// every problem of the manifest. `readRender` reads a render directory that
+// `plx-template render` wrote, with the policies file beside it (cli.ts says
+// how the two travel), into the side `planMerge` takes, so that a caller can
+// merge a render another version of the command made; each way the directory
+// or its policies file is wrong is an input error naming the path, the first
+// symlink in the render among them. `planMerge` reads what `merge` looks at in a
 // directory, merges two renders given as trees with their policies, and
 // returns the report with `apply`, which makes the directory hold the result.
 // Nothing is written before `apply`, so a caller can show the report first; the
 // merge of the command `plx-template merge` is the same plan applied at once.
 import { chmod, lstat, mkdir, readdir, readFile, readlink, rmdir, unlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { InputError, messageOf } from './errors.ts';
 import { gitMergeFile } from './git-merge-file.ts';
 import { readTemplate } from './manifest.ts';
@@ -70,6 +75,7 @@ import {
   type MergeEntry,
   MODE_TYPE,
   type Policies,
+  type Policy,
   REGULAR,
   type RenderError,
   SYMLINK,
@@ -277,6 +283,76 @@ export async function readManifest(root: string): Promise<Manifest> {
 export interface RenderedSide {
   readonly tree: Tree;
   readonly policies: Policies;
+}
+
+/** Where `render` writes the policies of the render in `dir`: beside it, so that no file of the render is one it did not render. */
+export const policiesOf = (dir: string): string => `${resolve(dir)}.plx-template.json`;
+
+/** The version of the policies file `render` writes and `readRender` reads. */
+export const POLICIES_VERSION = 1;
+
+const POLICIES: readonly string[] = ['merge', 'born-once'] satisfies Policy[];
+
+/** Whether `value` is a JSON object: not null, not a list. */
+export function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The JSON of `path`, read by `read`; what goes wrong is an input error about `what`, with `hint` after a failed read. */
+export async function readJson(read: () => Promise<string>, path: string, what: string, hint = ''): Promise<unknown> {
+  let text: string;
+  try {
+    text = await read();
+  } catch (error) {
+    throw new InputError(`cannot read the ${what}: ${messageOf(error)}${hint}`, path);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new InputError(`the ${what} is no JSON: ${messageOf(error)}`, path);
+  }
+}
+
+/** The policies `render` wrote beside the render in `dir`, which holds `tree`; each way it can be wrong is an input error. */
+async function readPolicies(dir: string, tree: Tree): Promise<Policies> {
+  const file = policiesOf(dir);
+  const fail = (what: string): never => {
+    throw new InputError(`the policies file ${what}`, file);
+  };
+  const parsed = await readJson(
+    () => readFile(file, 'utf8'),
+    file,
+    'policies file',
+    '; `render` writes one beside the render it writes',
+  );
+  if (!isObject(parsed)) return fail('is not a JSON object with a version and files');
+  if (parsed.version === undefined) return fail('has no version');
+  if (parsed.version !== POLICIES_VERSION)
+    return fail(
+      `is version ${String(parsed.version)}, and this plx-template reads version ${POLICIES_VERSION} only; was it written by a later plx-template?`,
+    );
+  if (!isObject(parsed.files)) return fail('has no files: a map of path to { template, policy }');
+  const files = Object.entries(parsed.files);
+  const bad = files.filter(([, v]) => !isObject(v) || !POLICIES.includes(v.policy as string)).map(([path]) => path);
+  if (bad.length > 0) return fail(`gives no policy, merge or born-once, to ${bad.join(', ')}`);
+  const lacking = [...tree.keys()].filter((path) => !(path in (parsed.files as object)));
+  if (lacking.length > 0) return fail(`lacks ${lacking.join(', ')}, which its render holds`);
+  const extra = files.map(([path]) => path).filter((path) => !tree.has(path));
+  if (extra.length > 0) return fail(`names ${extra.join(', ')}, which its render does not hold`);
+  return new Map(files as [string, { policy: Policy }][]);
+}
+
+/** The render directory `dir` as a side of a merge, with the policies file beside it, as the header says. */
+export async function readRender(dir: string): Promise<RenderedSide> {
+  const tree = await readTree(dir);
+  const links = [...tree].filter(([, e]) => (e.mode & MODE_TYPE) === SYMLINK).map(([path]) => join(dir, path));
+  const [link, ...more] = links;
+  if (link !== undefined)
+    throw new InputError(
+      `is a symlink, and a render holds none${more.length > 0 ? ` (nor ${more.join(', ')})` : ''}`,
+      link,
+    );
+  return { tree, policies: await readPolicies(dir, tree) };
 }
 
 /** A merge decided, not yet applied. */
