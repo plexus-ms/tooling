@@ -4,8 +4,8 @@
 //
 //   patch  a hotfix: taken at once
 //   minor  routine: taken once the oldest version the repo has not taken is as
-//          old as its interval (7 days unless its answers say otherwise; zero
-//          takes every version)
+//          old as its interval (7 days unless its root marker says
+//          otherwise; zero takes every version)
 //   major  a contract changed: taken only when asked, with the migration note
 //
 // Within the repo's major, any pending patch release is a hotfix: the newest
@@ -40,7 +40,7 @@ export type Need =
   | { take: false; why: string; held?: string };
 
 export interface NeedInput {
-  /** What each site of the repo records as its version (the answers' `_commit`). */
+  /** The version the repo records: its root marker's `version` (update.ts), one for all its sites. */
   recorded: (string | undefined)[];
   /** The template's releases, in any order. */
   releases: Release[];
