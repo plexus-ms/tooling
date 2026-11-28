@@ -3,10 +3,11 @@
 // whose files are what the fixture templates render for the markers at HEAD,
 // changes a marker in the working tree, and applies.
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { after, test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { apply, Context, planSync, realIo, templatesRoot } from './index.ts';
 import {
   type Files,
@@ -542,6 +543,21 @@ test('apply needs no templates root when no marker changed, and takes the bundle
   );
   git(repo, 'checkout', '--', 'PLEXUS.md');
   assert.equal((await apply(quietContext(), { repo, plxVersion: VERSION })).sites.length, 0);
+});
+
+test('apply looks for no templates root while no site is taken', async () => {
+  const { repo } = fixture();
+  // A copy of this package's sources where no `templates` directory exists beside or above them, so that `templatesRoot()` throws.
+  const lib = join(scratch.fresh('bare'), 'packages', 'lib');
+  mkdirSync(lib, { recursive: true });
+  cpSync(join(import.meta.dirname), join(lib, 'src'), {
+    recursive: true,
+    filter: (path) => !path.endsWith('.test.ts'),
+  });
+  symlinkSync(join(import.meta.dirname, '..', 'node_modules'), join(lib, 'node_modules'));
+  const bare = (await import(pathToFileURL(join(lib, 'src', 'index.ts')).href)) as { apply: typeof apply };
+  assert.throws(() => templatesRoot(pathToFileURL(join(lib, 'src', 'templatesRoot.ts')).href), /no bundled templates/);
+  assert.equal((await bare.apply(quietContext(), { repo, plxVersion: VERSION })).sites.length, 0);
 });
 
 test('apply asks nothing when the re-render changes no file, and counts the defaults it writes in what it asks', async () => {
