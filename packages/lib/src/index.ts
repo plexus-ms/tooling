@@ -250,3 +250,10 @@ export {
   UsageError,
   VERSIONED_REPOS,
 } from './version.ts';
+export {
+  type Fetched,
+  type FetchVersion,
+  fromRegistry,
+  templatesOf,
+  type VersionOptions,
+} from './versionTemplates.ts';
