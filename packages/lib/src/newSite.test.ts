@@ -88,6 +88,10 @@ const TEMPLATES = {
     manifest: ['name: reader', 'reads:', '  stalls:', ''].join('\n'),
     files: { 'reader.txt.jinja': '{{ stalls }}\n' },
   },
+  quoted: {
+    manifest: ['name: quoted', 'birth:', '  - [echo, "a b;c"]', '  - ["true"]', ''].join('\n'),
+    files: { 'PLEXUS.md.jinja': '- Quoted.\n' },
+  },
   nomarker: {
     manifest: ['name: nomarker', ''].join('\n'),
     files: { 'a.txt': 'a\n' },
@@ -472,19 +476,28 @@ test('every template that cannot be read is named in one error', async () => {
 test('a failed birth command says that the tree is written and lists the commands still to run', async () => {
   const root = roots();
   const target = scratch.fresh('failed');
+  const { ctx, ran } = recording({ yes: true }, (command) => command === 'git');
+  await assert.rejects(newSite(ctx, create(target, ['shop'], { tenant: 'acme' }, root)), (error: Error) => {
+    assert.match(error.message, /git failed/);
+    assert.match(error.message, /files are written/);
+    assert.match(error.message, /git init\)\n.*mise trust\)/s);
+    return true;
+  });
+  assert.ok(existsSync(join(target, 'PLEXUS.md')));
+  assert.equal(ran.length, 1, 'the run stops at the first failed command');
+});
+
+test('the commands left to run are printed as the narration prints them, quoted', async () => {
+  const root = roots();
+  const target = scratch.fresh('quoted');
   await assert.rejects(
-    newSite(
-      recording({ yes: true }, (command) => command === 'git').ctx,
-      create(target, ['shop'], { tenant: 'acme' }, root),
-    ),
+    newSite(recording({ yes: true }, (command) => command === 'echo').ctx, create(target, ['quoted'], {}, root)),
     (error: Error) => {
-      assert.match(error.message, /git failed/);
-      assert.match(error.message, /files are written/);
-      assert.match(error.message, /git init\)\n.*mise trust\)/s);
+      assert.ok(error.message.includes(`(cd ${target} && echo 'a b;c')`), error.message);
+      assert.ok(error.message.includes(`(cd ${target} && true)`), error.message);
       return true;
     },
   );
-  assert.ok(existsSync(join(target, 'PLEXUS.md')));
 });
 
 // Behaviour that was in place, pinned.

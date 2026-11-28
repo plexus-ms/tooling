@@ -137,6 +137,13 @@ test('an answers file that is no JSON object is a usage error', async () => {
   await assert.rejects(plx('new', '--templates', templates, '--answers', file, fresh(), 'shop'), UsageError);
 });
 
+test('an answers file holding null is a usage error', async () => {
+  const { UsageError } = await import('@plexus-ms/lib');
+  const file = join(dir, 'null.json');
+  writeFileSync(file, 'null');
+  await assert.rejects(plx('new', '--templates', templates, '--answers', file, fresh(), 'shop'), UsageError);
+});
+
 test('a missing answers file is a usage error naming the option', async () => {
   const { UsageError } = await import('@plexus-ms/lib');
   await assert.rejects(
