@@ -11,9 +11,10 @@
 // user edited, a file the user deleted, a binary file changed on both sides)
 // are the engine's own spec ring's, and the replays below edit only files that
 // both renders hold, so that they do not reach those rules.
-// One more departure follows from them: the engine writes a born-once file the consumer
-// lacks, and copier's update-time `_exclude` does not, so the replays of the app template start
-// at a version that already renders its born-once source files.
+// One more departure follows from them: a born-once file that a version of a template adds
+// is written by the engine into a site that lacks it, as a birth, and copier's update-time
+// `_exclude` never writes it. The replays of the app template therefore start at 0.123.0,
+// the first version that renders its born-once source files; 0.119.0 has no `src/` yet.
 //
 // Three checks, over the template repos as cloned for the run (below), against the
 // engine on `templates/`:
@@ -399,7 +400,7 @@ const REPLAYS: readonly Replay[] = [
     from: '0.123.0',
     answers: { ...T, name: '@acme/web' },
     reason:
-      'the oldest version that renders the born-once source files, which the update must leave as the consumer edited them (an older consumer lacks them, and the engine writes a born-once file that is absent where copier does not: a rule of the engine, not compared)',
+      'the oldest version that renders the born-once source files, which the update must leave as the consumer edited them (0.119.0 has no `src/` yet, and a born-once file a version adds is written by the engine where copier does not write it: a rule of the engine, not compared)',
   },
   {
     template: 'app-nextjs',
