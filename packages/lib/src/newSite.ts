@@ -21,8 +21,9 @@
 //      templates, plus the given ones. A root answer given again is refused
 //      (§ 5 of Decisions: a key is answered in one marker only), and so is a
 //      question of the app's templates that the root answers, which would
-//      stand in two markers. A template that cannot be read, and every render
-//      error, are reported together.
+//      stand in two markers. Every template that cannot be read is reported
+//      together, and that stops the run; only when all are read are the
+//      render errors, all of them, reported together.
 //   4. Write the tree, then the marker's frontmatter into the file the render
 //      produced (`PLEXUS.md`; a render without one is refused, as the marker
 //      is where the answers go). The frontmatter is `version`, for a repo
@@ -51,7 +52,7 @@ import type { Answers, Manifest } from '@plexus-ms/cli-template';
 import { versionRefusal } from './apply.ts';
 import { readTemplate } from './bundled.ts';
 import type { Context } from './context.ts';
-import { run } from './effects.ts';
+import { describe, run } from './effects.ts';
 import { engine } from './engine.ts';
 import { MARKER_FILE, type MarkerConfig, parseMarkerConfig, setMarkerKeys } from './marker.ts';
 import { describeError, resolvedAnswers } from './sync.ts';
@@ -211,7 +212,7 @@ export async function newSite(ctx: Context, options: NewOptions): Promise<Create
     try {
       await ctx.apply([run(command as string, args, { cwd: dir })]);
     } catch (error) {
-      const left = birth.slice(at).map((c) => `  (cd ${dir} && ${c.join(' ')})`);
+      const left = birth.slice(at).map(([c, ...a]) => `  ${describe(run(c as string, a, { cwd: dir }))}`);
       throw new Error(
         `${(error as Error).message}\nthe files are written; run the commands still to do by hand, in order:\n${left.join('\n')}`,
       );

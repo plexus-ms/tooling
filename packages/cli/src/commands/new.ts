@@ -5,7 +5,8 @@
 // The directory must be empty or absent. In a git repo whose root holds a
 // PLEXUS.md, tracked or not (a repo just born has committed nothing), it is a
 // new app, rendered with the root's answers plus the given ones, and refused
-// where the root is on another version than this plx; anywhere else it is a
+// where the root lists templates and is on another version than this plx or
+// names none; anywhere else it is a
 // new repo. The templates are the ones this
 // plx bundles, named as the directories of `templates/` are (repo-turbo,
 // repo-operations, app-nextjs). Answers come as `-a key=value`, repeatable,
