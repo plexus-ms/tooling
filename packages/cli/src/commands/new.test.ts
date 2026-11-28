@@ -155,6 +155,14 @@ test('an answers file that is no JSON is a usage error naming the option', async
   );
 });
 
+test('an answer with no key is a usage error, and a value keeps every = it holds', async () => {
+  const { UsageError } = await import('@plexus-ms/lib');
+  await assert.rejects(plx('new', '--templates', templates, fresh(), 'shop', '-a', '=x'), UsageError);
+  const target = fresh();
+  await plx('new', '--templates', templates, target, 'shop', '-a', 'tenant=a=b');
+  assert.match(readFileSync(join(target, 'PLEXUS.md'), 'utf8'), /\ntenant: a=b\n/);
+});
+
 test('new is in the help, with its options', () => {
   const help = buildProgram()
     .commands.find((c) => c.name() === 'new')

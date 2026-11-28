@@ -293,6 +293,25 @@ test('a repo from repo-turbo and an app from app-nextjs in it: the trees and the
     root: templatesRoot(),
   });
   assert.equal(repo.kind, 'repo');
+  assert.deepEqual(repo.files, [
+    '.dockerignore',
+    '.github/workflows/housekeeping.yml',
+    '.github/workflows/on_commit.yml',
+    '.github/workflows/on_pr.yml',
+    '.github/workflows/on_push.yml',
+    '.github/workflows/plx-update.yml',
+    '.gitignore',
+    'PLEXUS.md',
+    'apps/.gitkeep',
+    'biome.json',
+    'hk.pkl',
+    'mise.toml',
+    'package.json',
+    'packages/.gitkeep',
+    'pnpm-workspace.yaml',
+    'renovate.json',
+    'turbo.json',
+  ]);
   assert.deepEqual(
     ran.map((r) => [r.command, ...r.args].join(' ')),
     [
@@ -322,19 +341,35 @@ test('a repo from repo-turbo and an app from app-nextjs in it: the trees and the
   assert.match(appMarker, /^---\ntemplates: \[app-nextjs\]\nname: web\nprofile: stateless\n---\n\n/);
   assert.ok(!appMarker.includes('version'));
   assert.ok(!appMarker.includes('tenant'));
-  assert.ok(app.files.includes('src/app/healthz/route.ts'));
+  assert.deepEqual(app.files, [
+    '.gitignore',
+    'PLEXUS.md',
+    'docker/Dockerfile',
+    'docker/compose.ci.yaml',
+    'docker/compose.yaml',
+    'next.config.ts',
+    'package.json',
+    'postcss.config.mjs',
+    'src/app/healthz/route.ts',
+    'src/app/layout.tsx',
+    'src/app/page.tsx',
+    'tsconfig.json',
+  ]);
 
   // The doctor reads what git tracks, and lists the tasks of a mise.toml that `mise trust` (faked above) would have trusted.
   process.env.MISE_TRUSTED_CONFIG_PATHS = target;
-  git(target, 'add', '-A');
-  const { facts } = await examine(new Context({}, realIo()), target);
-  const report = diagnose(facts);
-  assert.deepEqual(
-    report.units.flatMap((u) => u.findings.map((f) => `${u.path}: ${f.problem}`)),
-    [],
-  );
-  assert.equal(report.units.length, 2);
-  delete process.env.MISE_TRUSTED_CONFIG_PATHS;
+  try {
+    git(target, 'add', '-A');
+    const { facts } = await examine(new Context({}, realIo()), target);
+    const report = diagnose(facts);
+    assert.deepEqual(
+      report.units.flatMap((u) => u.findings.map((f) => `${u.path}: ${f.problem}`)),
+      [],
+    );
+    assert.equal(report.units.length, 2);
+  } finally {
+    delete process.env.MISE_TRUSTED_CONFIG_PATHS;
+  }
 });
 
 // The version the repo is on is the running plx's: the bundled templates are that version's.
@@ -426,4 +461,60 @@ test('a failed birth command says that the tree is written and lists the command
     },
   );
   assert.ok(existsSync(join(target, 'PLEXUS.md')));
+});
+
+// Behaviour that was in place, pinned.
+
+test('an app template that asks a question the root answers is refused, and nothing is written', async () => {
+  const root = roots();
+  const repo = shopRepo();
+  const target = join(repo, 'apps', 'r');
+  await assert.rejects(newSite(recording().ctx, create(target, ['rooted'], {}, root)), /`city`.*root marker/);
+  assert.equal(existsSync(target), false);
+});
+
+test('the birth commands run after the tree is written', async () => {
+  const root = roots();
+  const { ctx, ran } = recording();
+  await newSite(ctx, create(scratch.fresh('order'), ['shop'], { tenant: 'acme' }, root));
+  assert.equal(ran.length, 2);
+  assert.ok(ran.every((r) => r.tree));
+});
+
+test('only the given answers can be unused: the root answers an app is rendered with are not', async () => {
+  const root = roots();
+  const repo = shopRepo();
+  const plain = await newSite(recording().ctx, create(join(repo, 'apps', 'a'), ['stall'], { goods: 'a' }, root));
+  assert.deepEqual(plain.unused, []);
+  const typo = await newSite(
+    recording().ctx,
+    create(join(repo, 'apps', 'b'), ['stall'], { goods: 'a', cty: 'x' }, root),
+  );
+  assert.deepEqual(typo.unused, ['cty']);
+});
+
+test('a target that is a file is refused as not a directory', async () => {
+  const root = roots();
+  const dir = scratch.fresh('afile');
+  write(dir, { 'x.txt': 'x\n' });
+  await assert.rejects(
+    newSite(recording().ctx, create(join(dir, 'x.txt'), ['shop'], { tenant: 'a' }, root)),
+    /not a directory/,
+  );
+});
+
+test('a root marker that cannot be read is refused with the path of the file', async () => {
+  const root = roots();
+  const repo = repoMarked('---\nversion: banana\n---\n');
+  await assert.rejects(
+    newSite(recording().ctx, create(join(repo, 'apps', 'x'), ['stall'], { goods: 'a' }, root)),
+    (error: Error) => error.message.startsWith(`${join(repo, 'PLEXUS.md')}: `),
+  );
+});
+
+test('the templates are listed in the marker in the order they were given', async () => {
+  const root = roots();
+  const target = scratch.fresh('order2');
+  await newSite(recording().ctx, create(target, ['shop', 'nomarker'], { tenant: 'acme' }, root));
+  assert.match(text(target, 'PLEXUS.md'), /\ntemplates: \[shop, nomarker\]\n/);
 });
