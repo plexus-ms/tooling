@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { Context, newSite, realIo, templatesRoot, UsageError } from '@plexus-ms/lib';
 import { appsOfDeploys } from '../commands/displayVersions.ts';
@@ -170,7 +171,7 @@ test('the major a newborn repo-turbo repo with display versions states is the on
     ] as const) {
       const target = join(dir, `major-${major}`);
       // The birth commands and git are not the matter here: nothing but the tree is written.
-      const ctx = new Context({ yes: true }, { ...realIo(), exec: async () => '' });
+      const ctx = new Context({ yes: true }, { ...realIo(), stderr: new PassThrough(), exec: async () => '' });
       await newSite(ctx, {
         dir: target,
         templates: ['repo-turbo'],
