@@ -48,9 +48,10 @@
 // its tree, its files and its birth commands are empty.
 //
 // Each rendered path has an owner, the template that wrote it, and a policy:
-// `merge` (the default) or `born-once`, written when the path is absent and
-// never touched again. `merge` takes the policies of both renders, the old
-// one's for the paths only it has.
+// `merge` (the default) or `born-once`, written only at birth, where neither
+// the old render nor the current directory holds the path, and never touched
+// or deleted after. `merge` takes the policies of both renders, the old one's
+// for the paths only it has.
 //
 // `merge` takes three trees, the old render, the new render and the current
 // directory, and returns the current tree with the merge applied, and one
