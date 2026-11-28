@@ -36,7 +36,11 @@
 // the new side and was not on the old one (a template added, a `when` that
 // became true) and the marker's answers, the root's included, do not give it.
 // The write splices the marker's text (`setMarkerKeys`), so everything a human
-// wrote stays as it was; the root marker's `version` is never touched here.
+// wrote stays as it was. The root marker's `version` is written only when the
+// caller gives one (`update`, never `apply`), and then in the root marker's
+// one splice with its defaults, read when the plan is made: a write of its own
+// before or after would be lost to the other. It is written whether or not the
+// root renders anything or is merged, since every site of the repo moves to it.
 //
 // Performing a plan writes the merges, each site's in turn, then the markers.
 // A conflicted path is left in the file between the engine's markers, or kept
@@ -100,6 +104,8 @@ export interface SyncOptions {
   labels?: { old: string; new: string };
   /** Every nested site of the repo, the ones not planned included: its templates and its marker's own answers. */
   siblings?: readonly { dir: string; templates: readonly string[]; answers: Answers }[];
+  /** The version to write into the root marker, which must be among the sites; none: the version is left as it is. */
+  version?: string;
 }
 
 /** What planning decided for one site. */
@@ -222,16 +228,19 @@ export async function planSync(
   const merges: { dir: string; plan: MergePlan }[] = [];
   const markers: Plan = [];
   const planned: SiteMerge[] = [];
+  if (options.version !== undefined && !rootEntry)
+    throw new Error('the version goes into the root marker, and the root is not among the sites');
   for (const entry of rendered) {
-    if (entry.site.contextOnly) continue;
-    const { dir } = entry.site;
+    const { dir, contextOnly } = entry.site;
+    const defaults = contextOnly ? {} : defaultsOf(entry);
+    const keys = { ...defaults, ...(dir === '.' && options.version !== undefined ? { version: options.version } : {}) };
+    if (Object.keys(keys).length > 0) {
+      const path = join(repo, dir, MARKER_FILE);
+      markers.push(write(path, setMarkerKeys(await ctx.readFile(path), keys)));
+    }
+    if (contextOnly) continue;
     const plan = await planMerge(join(repo, dir), entry.old, entry.new);
     merges.push({ dir, plan });
-    const defaults = defaultsOf(entry);
-    if (Object.keys(defaults).length > 0) {
-      const path = join(repo, dir, MARKER_FILE);
-      markers.push(write(path, setMarkerKeys(await ctx.readFile(path), defaults)));
-    }
     planned.push({ dir, report: plan.report, defaults });
   }
   return {
