@@ -1,7 +1,8 @@
 // The templates (§ 1.6 PLX) by name, and what a copier answers file's recorded
-// source says about which one a site is generated from. Both the model (which
-// repo is the operations repo) and the consumers (which sites an update
-// takes) read a source through `templateOf`.
+// source says about which one a site is generated from. The model (which repo
+// is the operations repo) and the consumers (which repos `update` refuses as
+// not crossed over, which sites the preview of an unreleased version takes)
+// read a source through `templateOf`.
 import { VERSIONED_REPOS } from './version.ts';
 
 /** The versioned repos that are templates: what a repo can be generated from. */
@@ -15,7 +16,7 @@ export const templateSource = (template: string): string => `gh:plexus-ms/${temp
  * became the Turborepo template, the platform repo the operations repo; 0.120.0:
  * the repos' `preset-` prefix became `template-`, copier's own word). A
  * consumer whose answers still name the old one is a consumer of the current
- * one, and its next update points the answers at the new name.
+ * one.
  */
 export const RENAMED_TEMPLATES: Readonly<Record<string, string>> = {
   'preset-repo-web': 'template-repo-turbo',
@@ -53,10 +54,4 @@ export function templateOf(src: string, templates: readonly string[]): string | 
   if (templates.includes(repo.name)) return repo.name;
   const current = Object.hasOwn(RENAMED_TEMPLATES, repo.name) ? RENAMED_TEMPLATES[repo.name] : undefined;
   return current && templates.includes(current) ? current : undefined;
-}
-
-/** Whether a recorded source names a template by a name it had before a rename, in any spelling. */
-export function namesOldTemplate(src: string): boolean {
-  const repo = githubRepoOf(src);
-  return repo?.owner === UPSTREAM && Object.hasOwn(RENAMED_TEMPLATES, repo.name);
 }

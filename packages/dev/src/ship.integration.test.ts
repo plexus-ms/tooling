@@ -1463,7 +1463,7 @@ test('update --recursive: a repo whose templates refuse to render fails, pushes 
   assert.equal(error, undefined, out);
   assert.match(onVersion('acme-web', '0.2.0', 'template-owned.txt'), /updated from/);
   assert.throws(() => onVersion('acme-platform', '0.2.0', 'template-owned.txt'), 'no branch for the repo that failed');
-  assert.ok(has(out, /✗ FAILED — platform: .*region.*\[the templates of 0\.2\.0\]/), out);
+  assert.ok(has(out, /✗ FAILED — acme\/platform: .*region.*\[the templates of 0\.2\.0\]/), out);
   assert.deepEqual(result?.failed, ['acme/platform']);
   assert.deepEqual(result?.mergeable, ['https://forge/acme-web/pull/1']);
   assert.deepEqual(result?.clean, ['acme/web', 'acme/web/apps/site']);

@@ -1,5 +1,8 @@
 // update --recursive: `update` in every repo generated from the templates
-// under a directory, at any depth (§ 3 PLX-Updates). The operator's
+// under a directory, at any depth (§ 3 PLX-Updates): every git repo whose root
+// marker names a version or lists templates, and every one that still has a
+// copier answers file naming a template, which `update` refuses with the
+// crossover runbook (consumers.ts). The operator's
 // convenience over the verb, for whoever has many repos checked out side by
 // side, the maintainers or a tenant's own operator: it needs no checkout of
 // the upstream, reads the published versions like `update` does, and decides
@@ -19,12 +22,11 @@
 //   plx update -r ~/dev --now                  # every repo, the newest version whatever its step
 //   plx -n update -r ~/dev --now               # preview in worktrees, push nothing
 //   plx -y update -r ~/dev --to 0.66.0
-import { findConsumers } from './consumers.ts';
+import { findRepos } from './consumers.ts';
 import type { Context } from './context.ts';
 import { detailOf } from './io.ts';
 import type { Release } from './need.ts';
 import { overview } from './overview.ts';
-import { TEMPLATES, templateSource } from './templates.ts';
 import { type Outcome, releasesOf, type UpdateOptions, update } from './update.ts';
 import { isPlexusVersion, preflightForge, UsageError } from './version.ts';
 
@@ -37,9 +39,8 @@ export async function updateRecursive(ctx: Context, options: RecursiveOptions): 
   const { dir, ...rest } = options;
   if (options.to !== undefined && !isPlexusVersion(options.to))
     throw new UsageError(`'${options.to}' is not plain semver (X.Y.Z, no v)`);
-  const consumers = await findConsumers(ctx, await overview(ctx, dir), TEMPLATES);
-  if (consumers.length === 0)
-    ctx.say(`• no repo generated from ${TEMPLATES.map(templateSource).join(', ')} found under ${dir}`);
+  const consumers = await findRepos(ctx, await overview(ctx, dir));
+  if (consumers.length === 0) ctx.say(`• no repo generated from the templates found under ${dir}`);
   let releases: Release[] = [];
   if (consumers.some((c) => !c.skipped)) {
     await preflightForge(ctx);

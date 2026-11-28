@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { namesOldTemplate, templateOf } from './templates.ts';
+import { templateOf } from './templates.ts';
 
 test('a consumer recorded under a template’s old name is a consumer of the current one', () => {
   assert.equal(templateOf('gh:plexus-ms/preset-repo-web', ['template-repo-turbo']), 'template-repo-turbo');
@@ -37,11 +37,4 @@ test('a recorded source is read for owner and repo name, whichever way it spells
     '/Users/me/dev/plexus-ms/template-repo-operations',
   ])
     assert.equal(templateOf(src, ops), undefined, src);
-});
-
-test('an old name is an old name in any spelling; the current name is not', () => {
-  assert.equal(namesOldTemplate('gh:plexus-ms/preset-repo-web'), true);
-  assert.equal(namesOldTemplate('https://github.com/plexus-ms/preset-repo-platform.git'), true);
-  assert.equal(namesOldTemplate('gh:plexus-ms/template-repo-turbo'), false);
-  assert.equal(namesOldTemplate('git@github.com:acme/preset-repo-web.git'), false);
 });

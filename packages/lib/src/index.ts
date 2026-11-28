@@ -36,7 +36,7 @@ export {
   parseCompose,
 } from './compose.ts';
 export { filesWithConflictMarkers, hasConflictMarkers, hasUnmergedEntries } from './conflicts.ts';
-export { type Consumer, expectedBranch, findConsumers, type Site } from './consumers.ts';
+export { type Consumer, expectedBranch, findConsumers, findRepos, type Site } from './consumers.ts';
 export { Context, type Options } from './context.ts';
 export {
   ANSWERS_FILE,
@@ -212,15 +212,7 @@ export {
   type TemplateSides,
   type Templates,
 } from './sync.ts';
-export {
-  copierIn,
-  type SiteResult,
-  type SiteUpdate,
-  scratchCommit,
-  type Take,
-  type Taken,
-  takeVersion,
-} from './take.ts';
+export { type SiteResult, type SitesStep, type Take, type Taken, takeVersion } from './take.ts';
 export { RENAMED_TEMPLATES, TEMPLATES, templateOf, templateSource } from './templates.ts';
 export { templatesRoot } from './templatesRoot.ts';
 export {

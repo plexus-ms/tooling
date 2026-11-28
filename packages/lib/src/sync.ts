@@ -287,7 +287,7 @@ async function doubledKeys(
       const questions = await questionsOf(name);
       if (!rootTemplate && Array.isArray(questions) && questions.includes(key)) rootTemplate = name;
     }
-    const where = `${MARKER_FILE} would get \`${key}\` as the default of template ${rootTemplate}`;
+    const where = `${MARKER_FILE} would get \`${key}\` as the default of ${rootTemplate ? `template ${rootTemplate}` : 'a template of its own'}`;
     for (const { dir, templates, answers } of siblings) {
       const marker = join(dir, MARKER_FILE);
       for (const name of templates) {
