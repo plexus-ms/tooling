@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { REGULAR, render, type Tree as Template } from '@plexus-ms/cli-template';
 import { type Compose, type Mapping, parseCompose } from './compose.ts';
 import { Context } from './context.ts';
 import { type AppFacts, CHECKS, diagnose, examine, type Facts, type RepoFacts } from './doctor.ts';
@@ -10,6 +11,7 @@ import type { MarkerConfig } from './marker.ts';
 import { unitsOf } from './model.ts';
 import { overview } from './overview.ts';
 import type { MarkerSite } from './sites.ts';
+import type { Bundled } from './siteTemplates.ts';
 import { type FakeExec, fakeIo, link, type Tree, UNREADABLE } from './testing/fakeIo.ts';
 import { UsageError } from './version.ts';
 
@@ -667,14 +669,15 @@ async function doctorOver(
   webTasks: string[] = VERBS,
   tracked: Record<string, string[]> = {},
   around: Tree = {},
+  plx?: string,
 ) {
   const files: Record<string, string[]> = { '/ws/web': ['PLEXUS.md', 'apps/site/docker/compose.yaml'], ...tracked };
   const git = (cwd: string, args: string[]) =>
     args[0] === 'ls-files' && files[cwd] ? files[cwd].map((f) => `${f}\0`).join('') : undefined;
   const mise = miseTasks({ '/ws/web': webTasks, '/ws/ops': ['dev', 'build', 'verify', 'check', 'test'] });
   const ctx = new Context({}, fakeIo({ ...around, ws: tree }, git, { mise: (cwd) => mise(cwd) }));
-  const { facts, ...examined } = await examine(ctx, root);
-  return { ...examined, ...diagnose(facts) };
+  const { facts, ...examined } = await examine(ctx, root, plx);
+  return { ...examined, facts, ...diagnose(facts) };
 }
 
 const requirements = (report: Awaited<ReturnType<typeof doctorOver>>) =>
@@ -1119,7 +1122,7 @@ test('the marker checks are skipped in a repo that still tracks a copier answers
 test('doctor reads the plx pin and the tracked markers, and fails the repo for each marker finding', async () => {
   const tree = ws();
   const web = tree.web as Tree;
-  web['PLEXUS.md'] = '---\nversion: 0.130.0\ntemplates: [repo-turbo]\n---\n';
+  web['PLEXUS.md'] = '---\nversion: 0.130.0\ntemplates: [repo-turbo]\ntenant: plexus\n---\n';
   web['mise.toml'] = '[tools]\n"npm:@plexus-ms/cli" = "0.131.0"\n';
   const site = (web.apps as Tree).site as Tree;
   site['PLEXUS.md'] = '---\nprofile: stateless\nversion: 0.131.0\n---\n';
@@ -1226,4 +1229,314 @@ test('doctor reads which tracked files hold a conflict marker, and fails the rep
       ['apps/site', []],
     ],
   );
+});
+
+// --- the marker against the templates this plx bundles -------------------------------------
+
+/** A template as the engine reads it: its manifest, which names the template, and no files. */
+const template = (name: string, manifest = ''): Template =>
+  new Map([['template.yml', { bytes: new TextEncoder().encode(`name: ${name}\n${manifest}`), mode: REGULAR | 0o644 }]]);
+
+/** The templates a plx bundles, by name, each with the manifest lines given. */
+const bundle = (manifests: Record<string, string>): Bundled => ({
+  trees: new Map(Object.entries(manifests).map(([name, manifest]) => [name, template(name, manifest)])),
+  render,
+});
+
+const BUNDLED = bundle({ 'repo-turbo': '', 'app-nextjs': '' });
+
+test('a name in templates that this plx does not bundle is a finding naming the marker and the template', () => {
+  const sites = [
+    site('.', { version: '0.131.0', templates: ['repo-turbo', 'ghost'] }),
+    site('apps/a', { templates: ['app-nextjs', 'spectre'] }),
+  ];
+  assert.deepEqual(findings(crossed(sites, { templates: BUNDLED })), [
+    {
+      problem:
+        'PLEXUS.md: `templates` names `ghost`, which this plx does not bundle (it bundles `app-nextjs`, `repo-turbo`)',
+    },
+    {
+      problem:
+        'apps/a/PLEXUS.md: `templates` names `spectre`, which this plx does not bundle (it bundles `app-nextjs`, `repo-turbo`)',
+    },
+  ]);
+});
+
+test('names that this plx bundles pass, and an empty list too', () => {
+  const sites = [ROOT, site('apps/a', { templates: ['app-nextjs'] }), site('apps/b', { templates: [] })];
+  assert.deepEqual(findings(crossed(sites, { templates: BUNDLED })), []);
+});
+
+test('the template names are not checked where no bundled templates are given, or before the repo has crossed over', () => {
+  const sites = [site('.', { version: '0.131.0', templates: ['ghost'] })];
+  assert.deepEqual(findings(crossed(sites)), []);
+  const onCopier = crossed(sites, { templates: BUNDLED, tracked: ['.copier-answers.yml'] });
+  assert.deepEqual(findings(onCopier), []);
+});
+
+const QUESTIONED = bundle({
+  'repo-turbo': 'questions:\n  tenant: {default: acme}\n  ci: {default: github}\n',
+  'app-nextjs': 'questions:\n  profile: {default: stateless}\nreads:\n  tenant:\n  region: {default: eu}\n',
+});
+const withTemplates = (sites: MarkerSite[]) => findings(crossed(sites, { templates: QUESTIONED }));
+const UNKNOWN_ROOT = (key: string) =>
+  `PLEXUS.md: \`${key}\` is neither reserved nor a question or read of a template that a marker of the repo lists`;
+
+test('a key of the root marker that no listed template owns or reads is a finding', () => {
+  const root = site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { tenant: 'acme', colour: 'red' } });
+  assert.deepEqual(withTemplates([root]), [{ problem: UNKNOWN_ROOT('colour') }]);
+});
+
+test('every key of the markers is checked, each finding naming its marker', () => {
+  const root = site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { tenant: 'acme', shade: 1 } });
+  const nested = site('apps/a', { templates: ['app-nextjs'], answers: { profile: 'stateless', hue: 2 } });
+  assert.deepEqual(withTemplates([root, nested]), [
+    { problem: UNKNOWN_ROOT('shade') },
+    { problem: 'apps/a/PLEXUS.md: `hue` is neither reserved nor a question or read of a template it lists' },
+  ]);
+});
+
+test('the root marker may hold answers that a template of a nested site owns or reads', () => {
+  const root = site('.', {
+    version: '0.131.0',
+    templates: ['repo-turbo'],
+    answers: { tenant: 'acme', profile: 'stateful', region: 'us' },
+  });
+  assert.deepEqual(withTemplates([root, site('apps/a', { templates: ['app-nextjs'] })]), []);
+});
+
+test('a nested marker may answer a read of its templates that no template owns there', () => {
+  const nested = site('apps/a', { templates: ['app-nextjs'], answers: { tenant: 'acme', region: 'us' } });
+  assert.deepEqual(withTemplates([ROOT, nested]), []);
+});
+
+test('a nested marker may not answer what only the root marker templates own', () => {
+  const nested = site('apps/a', { templates: ['app-nextjs'], answers: { tenant: 'acme', ci: 'forgejo' } });
+  assert.deepEqual(withTemplates([ROOT, nested]), [
+    { problem: 'apps/a/PLEXUS.md: `ci` is neither reserved nor a question or read of a template it lists' },
+  ]);
+});
+
+test('a marker that lists no templates is not checked for keys: its keys are what its app states', () => {
+  const root = site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { tenant: 'acme' } });
+  assert.deepEqual(withTemplates([root, site('apps/third', { answers: { profile: 'stateful', anything: 1 } })]), []);
+  assert.deepEqual(withTemplates([site('.', { version: '0.131.0', answers: { whatever: 1 } })]), []);
+});
+
+test('a template that this plx does not bundle owns no key', () => {
+  const nested = site('apps/a', { templates: ['ghost'], answers: { profile: 'stateless' } });
+  assert.deepEqual(withTemplates([ROOT, nested]), [
+    {
+      problem:
+        'apps/a/PLEXUS.md: `templates` names `ghost`, which this plx does not bundle (it bundles `app-nextjs`, `repo-turbo`)',
+    },
+    { problem: 'apps/a/PLEXUS.md: `profile` is neither reserved nor a question or read of a template it lists' },
+  ]);
+});
+
+// --- the answers against their questions ------------------------------------------------
+
+const TYPED = bundle({
+  'repo-turbo': `questions:
+  port: {type: int, default: 3000}
+  size: {choices: [s, m], default: s}
+  word: {default: ok, validator: "{% if word == 'bad' %}no bad words{% endif %}"}
+  need: {help: Say who it is}
+`,
+  'app-nextjs': 'reads:\n  need:\n  region:\n',
+});
+const answering = (answers: Record<string, unknown>, nested?: MarkerSite) =>
+  findings(
+    crossed(
+      [
+        site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { need: 'me', ...answers } }),
+        ...(nested ? [nested] : []),
+      ],
+      {
+        templates: TYPED,
+      },
+    ),
+  );
+
+test('answers that are valid for their questions pass, a number in a string cast as the engine casts it', () => {
+  assert.deepEqual(answering({ port: '220', size: 'm', word: 'fine' }), []);
+});
+
+test('an answer of the wrong type, outside the choices or refused by the validator is a finding naming the marker and the question', () => {
+  assert.deepEqual(answering({ port: 'abc', size: 'xl', word: 'bad' }), [
+    { problem: 'PLEXUS.md: `port` of repo-turbo: "abc" is no int' },
+    { problem: 'PLEXUS.md: `size` of repo-turbo: "xl" is not one of s, m' },
+    { problem: 'PLEXUS.md: `word` of repo-turbo: no bad words' },
+  ]);
+});
+
+test('a question without a default that the marker does not answer is a finding with its help', () => {
+  const root = site('.', { version: '0.131.0', templates: ['repo-turbo'] });
+  assert.deepEqual(findings(crossed([root], { templates: TYPED })), [
+    { problem: 'PLEXUS.md: `need` of repo-turbo: no answer and no default: Say who it is' },
+  ]);
+});
+
+test("a nested marker is validated with the root marker's answers and its own, and a read nobody answers is a finding", () => {
+  const nested = site('apps/a', { templates: ['app-nextjs'], answers: {} });
+  assert.deepEqual(answering({}, nested), [
+    {
+      problem:
+        'apps/a/PLEXUS.md: `region` of app-nextjs: app-nextjs reads region, which no template of the render owns and no answer gives',
+    },
+  ]);
+  assert.deepEqual(answering({ region: 'eu' }, nested), []);
+});
+
+test('an answer the root marker gives is validated once, not again for each nested site', () => {
+  const nested = (dir: string) => site(dir, { templates: ['app-nextjs'] });
+  assert.deepEqual(answering({ region: 'eu', port: 'abc' }, nested('apps/a')).length, 1);
+  const two = findings(
+    crossed(
+      [
+        site('.', {
+          version: '0.131.0',
+          templates: ['repo-turbo'],
+          answers: { need: 'me', region: 'eu', port: 'abc' },
+        }),
+        nested('apps/a'),
+        nested('apps/b'),
+      ],
+      { templates: TYPED },
+    ),
+  );
+  assert.equal(two.length, 1);
+});
+
+test('a manifest error that the engine reports of a bundled template is no finding of the marker', () => {
+  // An unreadable template of the bundle never gets here: readTemplate refuses it, and doctor fails.
+  const broken = bundle({ 'repo-turbo': 'questions: 3\n' });
+  const root = site('.', { version: '0.131.0', templates: ['repo-turbo'] });
+  assert.deepEqual(findings(crossed([root], { templates: broken })), []);
+});
+
+test('answers are not validated where no templates are given, or for a marker with a doubled key', () => {
+  const root = site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { port: 'abc' } });
+  assert.deepEqual(findings(crossed([root])), []);
+  const doubled = findings(
+    crossed(
+      [
+        site('.', { version: '0.131.0', templates: ['repo-turbo'], answers: { need: 'me', region: 'a' } }),
+        site('apps/a', { templates: ['app-nextjs'], answers: { region: 'b' } }),
+      ],
+      { templates: TYPED },
+    ),
+  );
+  assert.deepEqual(doubled.length, 1, 'the doubled key alone');
+});
+
+test('doctor reads the templates this plx bundles from disk and runs the marker checks against them', async () => {
+  const tree = ws();
+  const web = tree.web as Tree;
+  web['PLEXUS.md'] =
+    '---\nversion: 0.131.0\ntemplates: [repo-turbo, ghost]\ntenant: plexus\nci_strategy: cloud\nstray: 1\n---\n';
+  web['mise.toml'] = '[tools]\n"npm:@plexus-ms/cli" = "0.131.0"\n';
+  const tracked = { '/ws/web': ['PLEXUS.md', 'mise.toml', 'apps/site/docker/compose.yaml'] };
+  const report = await doctorOver(tree, '/ws/web', VERBS, tracked);
+  const problems = report.units[0]?.findings.map((f) => f.problem) ?? [];
+  assert.ok(
+    problems.some((p) => p?.includes('`templates` names `ghost`, which this plx does not bundle')),
+    `${problems}`,
+  );
+  assert.ok(
+    problems.some((p) => p?.includes('`stray` is neither reserved nor a question')),
+    `${problems}`,
+  );
+  assert.ok(
+    problems.some((p) => p?.includes('`ci_strategy` of repo-turbo')),
+    `${problems}`,
+  );
+});
+
+// --- the version, the root's resolved answers, who is named, and when the bundle is read ------
+
+const CROSSED = { '/ws/web': ['PLEXUS.md', 'mise.toml', 'apps/site/docker/compose.yaml'] };
+const PIN_130 = '[tools]\n"npm:@plexus-ms/cli" = "0.130.0"\n';
+const marked = (marker: string) => {
+  const tree = ws();
+  (tree.web as Tree)['PLEXUS.md'] = marker;
+  (tree.web as Tree)['mise.toml'] = PIN_130;
+  return tree;
+};
+const BROKEN = '---\nversion: 0.130.0\ntemplates: [repo-turbo, ghost]\ntenant: plexus\nstray: 1\n---\n';
+
+test("the marker checks against the templates run where the running plx is the root marker's version", async () => {
+  const report = await doctorOver(marked(BROKEN), '/ws/web', VERBS, CROSSED, {}, '0.130.0');
+  assert.ok(report.units[0]?.findings.some((f) => f.problem?.includes('`stray` is neither reserved')));
+});
+
+test("they are skipped, and a line says so, where the running plx is not the root marker's version", async () => {
+  const report = await doctorOver(marked(BROKEN), '/ws/web', VERBS, CROSSED, {}, '0.131.0');
+  assert.deepEqual(report.units[0]?.findings, []);
+  assert.deepEqual(report.units[0]?.hints, [
+    'the markers are not checked against the templates: this plx is 0.131.0, the root marker names version 0.130.0; run the plx that version pins',
+  ]);
+  const unset = await doctorOver(
+    marked('---\ntemplates: [repo-turbo]\n---\n'),
+    '/ws/web',
+    VERBS,
+    CROSSED,
+    {},
+    '0.131.0',
+  );
+  assert.ok(unset.units[0]?.hints?.some((h) => h.includes('names no version')));
+});
+
+test('the bundled templates are read only for a repo in which a marker lists templates', async () => {
+  const listing = await doctorOver(marked(BROKEN), '/ws/web', VERBS, CROSSED, {}, '0.130.0');
+  assert.ok((listing.facts[0] as RepoFacts).templates);
+  for (const marker of ['---\nversion: 0.130.0\n---\n', '---\nversion: 0.130.0\ntemplates: []\n---\n']) {
+    const report = await doctorOver(marked(marker), '/ws/web', VERBS, CROSSED, {}, '0.130.0');
+    const facts = report.facts[0] as RepoFacts;
+    assert.equal(facts.templates, undefined, marker);
+    assert.equal(facts.rootAnswers, undefined, marker);
+  }
+});
+
+test("the root marker's resolved answers, defaults included, are read from the templates", async () => {
+  const valid = marked('---\nversion: 0.130.0\ntemplates: [repo-turbo]\ntenant: plexus\n---\n');
+  const report = await doctorOver(valid, '/ws/web', VERBS, CROSSED, {}, '0.130.0');
+  assert.equal((report.facts[0] as RepoFacts).rootAnswers?.ci_strategy, 'github');
+});
+
+const DEFAULTED = bundle({
+  'repo-turbo': 'questions:\n  tenant: {default: acme}\n',
+  'app-nextjs': 'questions:\n  profile: {choices: [stateless, stateful], default: stateless}\nreads:\n  tenant:\n',
+});
+const rootOf = (answers: Record<string, unknown>, templates = ['repo-turbo']) =>
+  site('.', { version: '0.131.0', templates, answers });
+const nestedApp = (dir: string, answers: Record<string, unknown> = {}) =>
+  site(dir, { templates: ['app-nextjs'], answers });
+
+test('a nested template reads what a root template defaults and the root marker does not state', () => {
+  const sites = [rootOf({}), nestedApp('apps/a')];
+  const unresolved = findings(crossed(sites, { templates: DEFAULTED }));
+  assert.equal(unresolved.length, 1, "with the root marker's raw keys alone, the read is unmet");
+  assert.deepEqual(findings(crossed(sites, { templates: DEFAULTED, rootAnswers: { tenant: 'acme' } })), []);
+});
+
+test("an invalid root answer to a nested template's question is one finding, named at the root marker", () => {
+  const sites = [rootOf({ tenant: 'a', profile: 'bogus' }), nestedApp('apps/a'), nestedApp('apps/b')];
+  assert.deepEqual(findings(crossed(sites, { templates: DEFAULTED })), [
+    { problem: 'PLEXUS.md: `profile` of app-nextjs: "bogus" is not one of stateless, stateful' },
+  ]);
+});
+
+test('an invalid answer of a nested marker is named at that marker alone', () => {
+  const sites = [rootOf({ tenant: 'a' }), nestedApp('apps/a', { profile: 'bogus' }), nestedApp('apps/b')];
+  assert.deepEqual(findings(crossed(sites, { templates: DEFAULTED })), [
+    { problem: 'apps/a/PLEXUS.md: `profile` of app-nextjs: "bogus" is not one of stateless, stateful' },
+  ]);
+});
+
+test('a root marker that lists no templates is checked for keys where a nested marker lists some', () => {
+  const root = rootOf({ tenant: 'a', profile: 'stateful', stray: 1 }, []);
+  assert.deepEqual(findings(crossed([root, nestedApp('apps/a')], { templates: DEFAULTED })), [
+    { problem: UNKNOWN_ROOT('stray') },
+  ]);
 });

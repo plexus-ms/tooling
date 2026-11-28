@@ -35,10 +35,23 @@
 // that cannot be read as a file is a finding of its repo, not a failed run.
 // A repo that lists no `templates` needs no `version`.
 //
+// Given the templates this plx bundles (`RepoFacts.templates`), the same
+// guard adds the checks of the markers against them (siteTemplates.ts): every
+// name in `templates` is bundled, every key is reserved or a question or read
+// of a listed template, and every answer is valid for its question. Where no
+// templates are given, those three are skipped. `readRepo` gives them, with
+// the root marker's answers resolved (sync.ts), for a repo in which a marker
+// lists a template: every directory of `templatesRoot()`, read once per run.
+// They are the running plx's templates, so they are given only where the root
+// marker's `version` is the running plx's, the condition under which `plx
+// apply` renders; otherwise the three are skipped and a hint says why (the
+// version against the pin is reported beside, as before).
+//
 //   plx doctor          # this repo and its apps, from anywhere inside it
 //   plx doctor ~/dev    # every Plexus repo beneath, and its apps
-import { realpath } from 'node:fs/promises';
+import { readdir, realpath } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
+import { readTemplate } from './bundled.ts';
 import {
   APP_SERVICE,
   type Compose,
@@ -54,13 +67,17 @@ import {
 import { filesWithConflictMarkers } from './conflicts.ts';
 import type { Context } from './context.ts';
 import { ANSWERS_FILE } from './copier.ts';
+import { engine } from './engine.ts';
 import { ExecError } from './io.ts';
 import { REQUIREMENT_NAME } from './lints.ts';
 import { type Declaration, MARKER_FILE, reasonGiven } from './marker.ts';
 import { type Directory, hasMarker, isOperations, type Kind } from './model.ts';
 import { appsOf, directoryAt, overview } from './overview.ts';
 import { findSites, type MarkerSite, siteAnswers } from './sites.ts';
+import { type Bundled, templateFindings } from './siteTemplates.ts';
 import { bundledIndex } from './standardIndex.ts';
+import { resolvedAnswers } from './sync.ts';
+import { templatesRoot } from './templatesRoot.ts';
 
 export type Profile = 'stateless' | 'stateful';
 
@@ -91,6 +108,12 @@ export interface RepoFacts {
   sites?: MarkerSite[];
   /** Why the sites could not be listed or read, when they could not. */
   sitesProblem?: string;
+  /** The templates this plx bundles, by name; undefined where they are not given, and the checks against them are skipped. */
+  templates?: Bundled;
+  /** The root marker's answers with the defaults of its templates, which a nested site's render is given beneath its own. */
+  rootAnswers?: Record<string, unknown>;
+  /** Why the checks against the templates were skipped, where this plx is not the version the root marker names. */
+  templatesSkipped?: string;
 }
 
 /** What doctor read of an app. */
@@ -380,7 +403,11 @@ function markerConfig(repo: RepoFacts): string[] {
       } catch (error) {
         problems.push((error as Error).message);
       }
-  return [...versionOfRoot(repo), ...problems];
+  return [
+    ...versionOfRoot(repo),
+    ...problems,
+    ...(repo.templates ? templateFindings(sites, repo.templates, repo.rootAnswers) : []),
+  ];
 }
 
 function versionOfRoot(repo: RepoFacts): string[] {
@@ -470,6 +497,7 @@ function diagnoseUnit(unit: Facts, known: Set<string>): UnitReport {
   const hints: string[] = [];
   if (obsolete)
     hints.push(`the marker's ${obsolete} ${obsolete.includes(' and ') ? 'are' : 'is'} no longer read and can go`);
+  if (unit.kind !== 'app' && unit.templatesSkipped) hints.push(unit.templatesSkipped);
   if (unit.kind === 'app' && unit.compose?.includes)
     hints.push(
       'docker/compose.yaml uses `include`: the compose checks read what the file itself declares, not the files it includes',
@@ -524,7 +552,7 @@ export interface Examination {
  * cannot be read, and a symbolic link to an app or a repo, are named, never
  * fatal.
  */
-export async function examine(ctx: Context, dir: string): Promise<Examination> {
+export async function examine(ctx: Context, dir: string, plxVersion?: string): Promise<Examination> {
   const given = resolve(dir);
   const own = await ctx.readDir(given).catch(() => []);
   let top = own.some((e) => e.name === '.git') ? given : undefined;
@@ -537,7 +565,7 @@ export async function examine(ctx: Context, dir: string): Promise<Examination> {
     return {
       root: top,
       inRepo: true,
-      facts: await readUnits(ctx, repo, found.apps, top),
+      facts: await readUnits(ctx, repo, found.apps, top, plxVersion),
       skipped: [],
       links: found.links.map(rel),
       unreadable: found.unreadable.map(({ path, why }) => ({ path: rel(path), why })),
@@ -550,7 +578,8 @@ export async function examine(ctx: Context, dir: string): Promise<Examination> {
     if (d.symlink) examination.links.push(rel(d.path));
     if (d.gitRoot) {
       const apps = d.apps ?? [];
-      if (hasMarker(d) || apps.length > 0) examination.facts.push(...(await readUnits(ctx, d, apps, given)));
+      if (hasMarker(d) || apps.length > 0)
+        examination.facts.push(...(await readUnits(ctx, d, apps, given, plxVersion)));
       else examination.skipped.push(rel(d.path));
     }
     for (const child of d.children) await visit(child);
@@ -572,8 +601,20 @@ async function enclosingGitRoot(ctx: Context, dir: string): Promise<string | und
 }
 
 /** A repo and its apps, with paths relative to `base`. */
-async function readUnits(ctx: Context, dir: Directory, apps: string[], base: string): Promise<Facts[]> {
-  const repo = await readRepo(ctx, dir, relative(base, dir.path) || '.', isOperations(dir) ? 'operations' : 'repo');
+async function readUnits(
+  ctx: Context,
+  dir: Directory,
+  apps: string[],
+  base: string,
+  plxVersion?: string,
+): Promise<Facts[]> {
+  const repo = await readRepo(
+    ctx,
+    dir,
+    relative(base, dir.path) || '.',
+    isOperations(dir) ? 'operations' : 'repo',
+    plxVersion,
+  );
   repo.apps = apps.map((path) => relative(dir.path, path));
   const facts: Facts[] = [repo];
   for (const path of apps)
@@ -587,7 +628,13 @@ function markerOf(dir: Directory): MarkerRead | undefined {
   return problem ? { problem } : undefined;
 }
 
-async function readRepo(ctx: Context, dir: Directory, path: string, kind: RepoFacts['kind']): Promise<RepoFacts> {
+async function readRepo(
+  ctx: Context,
+  dir: Directory,
+  path: string,
+  kind: RepoFacts['kind'],
+  plxVersion?: string,
+): Promise<RepoFacts> {
   const marker = markerOf(dir);
   const tracked = await ctx
     .read('git', ['ls-files', '-z'], { cwd: dir.path })
@@ -597,6 +644,7 @@ async function readRepo(ctx: Context, dir: Directory, path: string, kind: RepoFa
       throw error;
     });
   const conflicted = tracked === undefined ? undefined : await filesWithConflictMarkers(ctx, dir.path);
+  const sites = tracked !== undefined && crossedOver(tracked) ? await readSites(ctx, dir.path) : undefined;
   return {
     kind,
     path,
@@ -606,8 +654,50 @@ async function readRepo(ctx: Context, dir: Directory, path: string, kind: RepoFa
     ...(conflicted?.length ? { conflicted } : {}),
     apps: [],
     ...(dir.pin ? { pin: dir.pin } : {}),
-    ...(tracked !== undefined && crossedOver(tracked) ? await readSites(ctx, dir.path) : {}),
+    ...sites,
+    ...(sites?.sites ? await templateFacts(sites.sites, plxVersion) : {}),
   };
+}
+
+/** What the checks against the templates need, where a marker lists a template and this plx is the version the root marker names. */
+async function templateFacts(
+  sites: readonly MarkerSite[],
+  plxVersion: string | undefined,
+): Promise<Pick<RepoFacts, 'templates' | 'rootAnswers' | 'templatesSkipped'>> {
+  if (!sites.some((s) => (s.config?.templates?.length ?? 0) > 0)) return {};
+  const root = sites.find((s) => s.dir === '.')?.config;
+  if (plxVersion !== undefined && root?.version !== plxVersion) {
+    const named = root?.version === undefined ? 'names no version' : `names version ${root.version}`;
+    return {
+      templatesSkipped: `the markers are not checked against the templates: this plx is ${plxVersion}, the root marker ${named}; run the plx that version pins`,
+    };
+  }
+  return {
+    templates: await bundledTemplates(),
+    ...(root
+      ? {
+          rootAnswers: await resolvedAnswers(templatesRoot(), {
+            templates: root.templates ?? [],
+            answers: root.answers,
+          }),
+        }
+      : {}),
+  };
+}
+
+let bundled: Promise<Bundled> | undefined;
+
+/** The templates this plx bundles, each read from `templatesRoot()`, once per run. */
+function bundledTemplates(): Promise<Bundled> {
+  bundled ??= (async () => {
+    const root = templatesRoot();
+    const names = (await readdir(root, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+    const trees = await Promise.all(
+      names.sort().map(async (name) => [name, (await readTemplate(root, name)).tree] as const),
+    );
+    return { trees: new Map(trees), render: (await engine()).render };
+  })();
+  return bundled;
 }
 
 /** The repo's sites, or why they cannot be read: a marker git tracks that is not a readable file is a finding, never a failed run. */
