@@ -1497,7 +1497,7 @@ test("they are skipped, and a line says so, where the running plx is not the roo
     '0.131.0',
   );
   assert.deepEqual(unset.units[0]?.hints, [
-    'the markers are not checked against the templates: this plx is 0.131.0, the root marker names no version, so there is no version to run',
+    'the markers are not checked against the templates: this plx is 0.131.0, the root marker names no version, so there is nothing to check this plx against',
   ]);
 });
 
