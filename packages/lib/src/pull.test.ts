@@ -10,7 +10,7 @@ test('a body that needs no hand says so first, then what the pull request is', (
   assert.equal(needsAHand(base), false);
   assert.equal(
     pullBody(base),
-    'Nothing needs a hand: every site merged clean.\n\nPlexus 0.2.0 (§ 1.5 PLX): `copier update` at the root, `apps/site`, the lockfile where manifests moved, and the workflow refs.\n\nOpened by `plx update`.',
+    'Nothing needs a hand: every site merged clean.\n\nPlexus 0.2.0 (§ 1.5 PLX): the templates at the root, `apps/site`, the version in the root marker, the lockfile where manifests moved, and the workflow refs.\n\nOpened by `plx update`.',
   );
 });
 
@@ -28,7 +28,7 @@ test('a body that needs a hand opens with every reason, the lockfile with what t
   assert.doesNotMatch(body, /is a draft/, 'the same body serves a pull request the forge would not make a draft');
   assert.match(body, /^- Conflicts at `apps\/site`, committed with their markers\.$/m);
   assert.match(body, /^- Files that hold conflict markers: `apps\/site\/a\.txt`, `mise\.toml`\.$/m);
-  assert.match(body, /^- `copier update` failed at the root, left as it was; run it there by hand\.$/m);
+  assert.match(body, /^- The templates were not applied at the root, left as it was; the run's log says why\.$/m);
   assert.match(
     body,
     /^- The lockfile did not refresh: run `pnpm install` after resolving, and commit the lockfile\.$/m,
@@ -163,7 +163,7 @@ test('a body a later run writes says what it checked at the tip, never that ever
   const ready = pullBody(later);
   assert.match(
     ready,
-    /^Ready for review: no tracked file holds a conflict marker, and every site's answers record 0\.2\.0\.\n\n/,
+    /^Ready for review: no tracked file holds a conflict marker, and the root marker names 0\.2\.0\.\n\n/,
   );
   assert.doesNotMatch(ready, /merged clean/);
   assert.doesNotMatch(ready, /pnpm install/);
@@ -176,15 +176,15 @@ test('a body a later run writes says what it checked at the tip, never that ever
   );
   assert.doesNotMatch(pullBody(resolved), /once resolved/, 'ready, nothing is left to resolve');
 
-  const behind = { ...later, behind: ['.', 'apps/site'], lockfile: true };
+  const behind = { ...later, behind: ['.'], lockfile: true };
   assert.equal(needsAHand(behind), true);
   const body = pullBody(behind);
-  assert.match(body, /^\*\*Needs a hand\.\*\* .+ every site's answers record the version\./);
+  assert.match(body, /^\*\*Needs a hand\.\*\* .+ the root marker names the version\./);
   assert.match(
     body,
-    /^- The answers at the root do not record 0\.2\.0: copier did not run here\. On this branch, in the root, run `mise exec copier@[0-9.]+ -- copier update --trust --skip-answered --vcs-ref 0\.2\.0` and commit what it changes\.$/m,
+    /^- The root `PLEXUS\.md` does not name version 0\.2\.0, which `plx update` writes with the templates: restore it, or delete this branch and run `plx update --to 0\.2\.0` again\.$/m,
   );
-  assert.match(body, /^- The answers at `apps\/site` do not record 0\.2\.0:/m);
+  assert.doesNotMatch(body, /copier/);
   assert.match(body, /^- Run `pnpm install` once resolved, and commit the lockfile\.$/m);
   assert.doesNotMatch(body, /did not refresh/, 'a later run does not know whether the refresh failed');
 });

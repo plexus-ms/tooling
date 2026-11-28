@@ -29,6 +29,19 @@ test('expectedBranch follows what the repo is, and the answers for a package rep
   assert.equal(expectedBranch(dir('/x', copier('template-repo-operations'))), undefined, 'no marker');
 });
 
+test('expectedBranch reads the marker of a repo that has crossed over from copier', () => {
+  const config = (templates: string[], answers: Record<string, unknown> = {}) => ({
+    config: { version: '0.2.0', templates, deviations: [], answers },
+  });
+  assert.equal(expectedBranch(dir('/o', { ...config(['repo-operations']), ...marker() })), 'main');
+  assert.equal(expectedBranch(dir('/w', { ...config(['repo-turbo']), ...marker() })), 'develop');
+  assert.equal(
+    expectedBranch(dir('/l', { ...config(['repo-turbo'], { publishes_packages: true }), ...marker() })),
+    'main',
+    'a package repo, by the answer in its marker',
+  );
+});
+
 test('findConsumers groups sites by repo with the branch the version lands on, and skips the templates', async () => {
   const tree = dir('/ws', {}, [
     dir('/ws/plexus-ms', {}, [
