@@ -71,6 +71,12 @@ questions:
     default: false
     when: "{{ not publishes_packages }}"
 
+  major:
+    type: int
+    help: "The major of the display version the next production release cuts (PLX-Releases), MAJOR.MINOR; the minor counts up by itself, and a human raises the major in the pull request that warrants it"
+    default: 1
+    when: "{{ display_versions and not publishes_packages }}"
+
   pr_reviewers:
     type: str
     help: "GitHub logins asked to review the pull requests that wait for a human, the update bot's and plx update's alike, comma-separated (empty: none); a pull request the bot merges itself asks nobody unless its checks fail"
