@@ -3,7 +3,7 @@
 // through the Context's injected Io, which here records them and runs nothing;
 // git, which the verb reads the enclosing repo with, goes to the real one.
 import assert from 'node:assert/strict';
-import { mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -83,7 +83,11 @@ function recording(options = { yes: true }) {
   return { ctx, ran, narrated: () => narrated };
 }
 
-const roots = () => templatesAt(scratch.fresh('templates'), TEMPLATES);
+const roots = () => {
+  const root = templatesAt(scratch.fresh('templates'), TEMPLATES);
+  chmodSync(join(root, 'shop', 'files', 'run.sh'), 0o755);
+  return root;
+};
 
 const create = (target: string, templates: string[], answers: Record<string, unknown>, root: string) =>
   ({ dir: target, templates, answers, plxVersion: VERSION, root }) as const;
@@ -96,7 +100,7 @@ test('a repo is written with its marker: the version, the templates and every re
   assert.equal(text(target, 'sign.txt'), 'acme in Oslo\n');
   assert.equal(
     text(target, 'PLEXUS.md'),
-    '---\nversion: 0.131.0\ntemplates: [shop]\ntenant: acme\ncity: Oslo\nstalls: 2\n---\n\n- A shop of acme.\n',
+    '---\nversion: 0.131.0\ntemplates: [shop]\ncity: Oslo\nstalls: 2\ntenant: acme\n---\n\n- A shop of acme.\n',
   );
   assert.equal(created.kind, 'repo');
   assert.deepEqual(created.answers, { tenant: 'acme', city: 'Oslo', stalls: 2 });
@@ -285,12 +289,12 @@ test('a repo from repo-turbo and an app from app-nextjs in it: the trees and the
     ],
   );
   const marker = text(target, 'PLEXUS.md');
-  assert.match(
-    marker,
-    new RegExp(`^---\\nversion: ${bundled.version}\\ntemplates: \\[repo-turbo\\]\\ntenant: acme\\n`),
-  );
+  assert.match(marker, new RegExp(`^---\\nversion: ${bundled.version}\\ntemplates: \\[repo-turbo\\]\\n`));
   assert.match(marker, /\nci_strategy: github\n/);
+  assert.match(marker, /\ntenant: acme\n/);
 
+  // The birth commands were faked, so the repo is made a git repo here: the app finds its repo by git.
+  git(target, 'init', '-q', '-b', 'main');
   const app = await newSite(recording().ctx, {
     dir: join(target, 'apps', 'web'),
     templates: ['app-nextjs'],
@@ -305,8 +309,8 @@ test('a repo from repo-turbo and an app from app-nextjs in it: the trees and the
   assert.ok(!appMarker.includes('tenant'));
   assert.ok(app.files.includes('src/app/healthz/route.ts'));
 
-  // The birth commands were faked, so the repo is made a git repo here; the doctor reads what git tracks.
-  git(target, 'init', '-q', '-b', 'main');
+  // The doctor reads what git tracks, and lists the tasks of a mise.toml that `mise trust` (faked above) would have trusted.
+  process.env.MISE_TRUSTED_CONFIG_PATHS = target;
   git(target, 'add', '-A');
   const { facts } = await examine(new Context({}, realIo()), target);
   const report = diagnose(facts);
@@ -315,4 +319,5 @@ test('a repo from repo-turbo and an app from app-nextjs in it: the trees and the
     [],
   );
   assert.equal(report.units.length, 2);
+  delete process.env.MISE_TRUSTED_CONFIG_PATHS;
 });

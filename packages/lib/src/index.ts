@@ -150,6 +150,7 @@ export {
   parseMaxAge,
   type Release,
 } from './need.ts';
+export { type Created, type NewOptions, newSite } from './newSite.ts';
 export { overview, PRUNED, type ScanOptions } from './overview.ts';
 export {
   askForReviews,
