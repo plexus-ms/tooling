@@ -1424,3 +1424,26 @@ test('answers are not validated where no templates are given, or for a marker wi
   );
   assert.deepEqual(doubled.length, 1, 'the doubled key alone');
 });
+
+test('doctor reads the templates this plx bundles from disk and runs the marker checks against them', async () => {
+  const tree = ws();
+  const web = tree.web as Tree;
+  web['PLEXUS.md'] =
+    '---\nversion: 0.131.0\ntemplates: [repo-turbo, ghost]\ntenant: plexus\npublishes_packages: maybe\nstray: 1\n---\n';
+  web['mise.toml'] = '[tools]\n"npm:@plexus-ms/cli" = "0.131.0"\n';
+  const tracked = { '/ws/web': ['PLEXUS.md', 'mise.toml', 'apps/site/docker/compose.yaml'] };
+  const report = await doctorOver(tree, '/ws/web', VERBS, tracked);
+  const problems = report.units[0]?.findings.map((f) => f.problem) ?? [];
+  assert.ok(
+    problems.some((p) => p?.includes('`templates` names `ghost`, which this plx does not bundle')),
+    `${problems}`,
+  );
+  assert.ok(
+    problems.some((p) => p?.includes('`stray` is neither reserved nor a question')),
+    `${problems}`,
+  );
+  assert.ok(
+    problems.some((p) => p?.includes('`publishes_packages` of repo-turbo')),
+    `${problems}`,
+  );
+});
