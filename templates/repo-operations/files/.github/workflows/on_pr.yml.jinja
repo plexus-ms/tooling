@@ -1,0 +1,24 @@
+{% raw %}name: on_pr
+
+# Generated from plexus-ms/template-repo-operations: edit the template, never this file.
+# The check of a pull request, as the merge result (§ 2 PLX-Delivery).
+
+on:
+  pull_request:
+    paths-ignore: ['**/*.md']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: on_pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    uses: plexus-ms/tooling/.github/workflows/_check.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      size: small
+      tasks: verify
+{% endraw %}

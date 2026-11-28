@@ -1,0 +1,14 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>plexus-ms/tooling//renovate/default"{% if publishes_packages %}, "github>plexus-ms/tooling//renovate/library"{% endif %}]{% if pr_reviewers %},
+  "reviewers": [{% for r in pr_reviewers.split(',') %}"{{ r.strip() }}"{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}{% if private_packages_scope %},
+  "packageRules": [
+    {
+      "description": "The tenant's own private packages, from the forge's package registry (§ 5 PLX-Delivery): no release-age wait, as pnpm-workspace.yaml exempts them too; every update waits for a human.",
+      "matchDatasources": ["npm"],
+      "matchPackageNames": ["{{ private_packages_scope }}/**"],
+      "registryUrls": ["https://npm.pkg.github.com"],
+      "minimumReleaseAge": null
+    }
+  ]{% endif %}
+}

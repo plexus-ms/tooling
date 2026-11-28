@@ -202,6 +202,9 @@ importers:
       '@inquirer/prompts':
         specifier: ^8.8.0
         version: 8.8.0(@types/node@24.19.2)
+      '@plexus-ms/cli-template':
+        specifier: workspace:*
+        version: link:../cli-template
       '@plexus-ms/lib':
         specifier: workspace:*
         version: link:../lib

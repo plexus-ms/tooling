@@ -8,8 +8,9 @@
 // and the first rule that fits decides; "current" is what the current tree
 // holds at the path, a directory where it holds entries below it:
 //
-//   1. current holds nothing there, the new render does, and the path is
-//      born-once or new to the template: written, `added`; but `kept` where a
+//   1. the new render holds it, and neither the old render nor current does:
+//      the path is new to the template and written, `added`, whatever its
+//      policy, since this is a born-once file's birth; but `kept` where a
 //      directory it lies in is a symlink in the current tree, and
 //      `conflicted` where one is a file
 //   2. the old and the new render hold it alike: left alone
@@ -20,7 +21,9 @@
 //      touched once it exists, whatever either side holds, nor deleted when
 //      the template drops it or its name no longer renders; a path the user
 //      deleted stays deleted, also where the template turns a file into a
-//      directory or back
+//      directory or back. A born-once path the old render holds was born, so
+//      where current lacks it the user deleted it, and it stays deleted too:
+//      rule 1 is its only writer
 //   6. current already holds what the new render does: a file is written,
 //      `clean`; a directory is left alone
 //   7. a file on one side, a directory on another: current stays, `conflicted`
@@ -118,7 +121,7 @@ async function mergePath(
   const current = at(tree, path);
   // The rules of the header, by number.
   // 1
-  if (current === undefined && next !== undefined && (bornOnce || old === undefined)) {
+  if (current === undefined && next !== undefined && old === undefined) {
     const blocking = ancestors(path)
       .map((a) => tree.get(a))
       .find((entry) => entry !== undefined && kind(entry) !== DIRECTORY);

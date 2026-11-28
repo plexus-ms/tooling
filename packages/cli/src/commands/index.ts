@@ -8,6 +8,7 @@
 // --json, verbosity and --yes then apply without code of the command's own.
 // Keep the module's header comment the hand-run form of the verb.
 import type { Command } from 'commander';
+import { register as apply } from './apply.ts';
 import { register as changeset } from './changeset.ts';
 import { register as deploy } from './deploy.ts';
 import { register as deployTargets } from './deploy-targets.ts';
@@ -21,6 +22,7 @@ export const commands: ((program: Command) => void)[] = [
   overview,
   doctor,
   update,
+  apply,
   umbrella,
   requirements,
   changeset,

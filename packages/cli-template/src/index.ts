@@ -7,8 +7,20 @@
 // meaning are in types.ts: `render` and `merge`. It reads and writes no
 // directory and runs no command (boundary.test.ts). `gitMergeFile`, the real
 // merge of one file that the caller hands to `merge`, is the one function
-// that does: it writes temporary files and runs git.
+// that does: it writes temporary files and runs git. The functions that touch
+// a directory for a caller of the library are exported beside them, `readTree`,
+// `readManifest` and `planMerge` (directory.ts).
+export {
+  type MergePlan,
+  planMerge,
+  type RenderedSide,
+  readManifest,
+  readTemplateDirectory,
+  readTree,
+  type TemplateDirectory,
+} from './directory.ts';
 export { gitMergeFile } from './git-merge-file.ts';
+export { TEMPLATE_NAME } from './manifest.ts';
 export { merge } from './merge.ts';
 export { render } from './render.ts';
 export {

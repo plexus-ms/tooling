@@ -1,0 +1,30 @@
+{% raw %}name: plx-update
+
+# Generated from plexus-ms/template-repo-operations: edit the template, never this file.
+# Mounts the update verb, `plx update` (§ 3 PLX-Updates).
+
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version to take (default: the newest)"
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    uses: plexus-ms/tooling/.github/workflows/_plx-update.yml@0.130.0
+    with:
+      version: ${{ inputs.version || '' }}
+      now: ${{ github.event_name == 'workflow_dispatch' }}
+      gh-client-id: ${{ vars.GH_CLIENT_ID }}
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+    secrets:
+      gh-private-key: ${{ secrets.GH_PRIVATE_KEY }}
+      op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+{%- endraw %}

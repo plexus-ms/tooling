@@ -1,0 +1,22 @@
+# Generated from plexus-ms/template-app-nextjs.
+# The override of compose.yaml that `plx-ci test` reads beside it, never the deploy verb (§ 1 PLX-Delivery).
+
+# Added to the environment the specs run in, on the runner beside the stack, to CI, PLEXUS_LOOPBACK_PORT and E2E_BASE_URL.
+x-plexus-ci:
+  env: {}
+
+# Stands in for .env and .env.secret, with throwaway values.
+x-ci-env: &ci-env
+  PUBLIC_URL: http://127.0.0.1:${PLEXUS_LOOPBACK_PORT:?set by plx-ci test}
+
+services:
+  web:
+    environment: *ci-env
+    restart: "no"
+{%- if profile == "stateful" %}
+  # plx-ci test runs migrate once before `up`.
+  migrate:
+    environment: *ci-env
+  # Data services go here, published on 127.0.0.1 for the specs and kept in RAM (`volumes: !override []`
+  # and a tmpfs for the data directory), with the database URL in x-plexus-ci.env above.
+{%- endif %}

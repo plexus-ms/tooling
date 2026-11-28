@@ -1,0 +1,31 @@
+# Until the version that cuts over from copier is out, this template and
+# template-app-nextjs are one: a change to either is made in both.
+# files/.gitignore.jinja is a .gitignore: npm leaves a file of that name out of a package, so the
+# template carries it with the suffix, which renders it to the same bytes.
+name: app-nextjs
+
+# The enclosing repo's answer; whoever renders the app passes it.
+reads:
+  tenant:
+
+questions:
+  name:
+    type: str
+    help: "App name (for package.json)"
+
+  profile:
+    type: str
+    help: "The app's profile (§§ 8 and 9 PLX-App), which its marker states: stateless, an app holding no state of its own; stateful, an app with data services of its own, which gets a migrate service in its compose file and migrate and seed scripts to write"
+    choices:
+      - stateless
+      - stateful
+    default: stateless
+
+policies:
+  # The app's source and its marker are rendered at birth only: an update would fight what the author
+  # wrote, or add a root layout to an app whose route groups hold their own; the marker's frontmatter is
+  # plx's.
+  PLEXUS.md.jinja: born-once
+  src/app/layout.tsx: born-once
+  src/app/page.tsx.jinja: born-once
+  src/app/healthz/route.ts: born-once

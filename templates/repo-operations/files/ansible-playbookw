@@ -1,0 +1,17 @@
+#!/bin/bash
+# Generated from plexus-ms/template-repo-operations.
+# Runs a playbook with the op:// pointers of secrets.env resolved (§ 1 PLX-Secrets): ./ansible-playbookw <playbook> [args...]
+
+playbook="${1:?Usage: $0 <playbook> [extra args...]}"
+shift
+
+SECRETS_FILE="$(dirname "$playbook")/secrets.env"
+if [ -f "$SECRETS_FILE" ]; then
+  SECRETS_ARG="--env-file $SECRETS_FILE"
+else
+  SECRETS_ARG=""
+fi
+
+op run --no-masking $SECRETS_ARG -- \
+  ansible-playbook \
+  "./$playbook" "$@"

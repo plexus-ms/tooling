@@ -1,0 +1,72 @@
+# Until the version that cuts over from copier is out, this template and
+# template-repo-operations are one: a change to either is made in both.
+# files/.gitignore.jinja is a .gitignore: npm leaves a file of that name out of a package, so the
+# template carries it with the suffix, which renders it to the same bytes.
+name: repo-operations
+
+questions:
+  tenant:
+    type: str
+    help: "Tenant slug (URL-friendly)"
+
+  github_org:
+    type: str
+    help: "GitHub org of the tenant (image registry owner and forge org)"
+    default: "{{ tenant }}"
+
+  infrastructure:
+    type: bool
+    help: "Does this tenant build its own infrastructure layer (Proxmox hypervisor, backup server, ingress VM) instead of buying hosts from a provider? Adds infrastructure.yml, the mount of plexus.infrastructure.playbook"
+    default: false
+
+  ci_strategy:
+    type: str
+    help: "Where the tenant's CI jobs run (§ 8 PLX-Delivery), the same answer as its app repos': github, the forge's runners; on-prem, container slots on runner hosts of the tenant's own; hybrid, slots for the small and medium jobs and throwaway cloud instances for the large ones, whose daily sweep this repo mounts; on-prem and hybrid add ci.yml, the mount of plexus.ci.playbook for the runner host"
+    default: github
+    choices:
+      - github
+      - on-prem
+      - hybrid
+
+  ci_registry:
+    type: str
+    help: "Where the app repos' runs keep the images they build and test (§ 8 PLX-Delivery): ghcr, the forge's registry, nothing to mount here; own, a registry on the tenant's object storage, whose monthly buckets this repo rotates"
+    choices:
+      - ghcr
+      - own
+    default: "{{ 'ghcr' if ci_strategy == 'github' else 'own' }}"
+
+  ci_overlay:
+    type: str
+    help: "How a deploy of a third-party app reaches its host (§ 8 PLX-Delivery): none, as the inventory names it; netbird, over the tenant's overlay, which a job on the forge's runners joins for its length"
+    choices:
+      - none
+      - netbird
+    default: none
+
+  alerts_email:
+    type: str
+    help: "Hybrid strategy: the address the daily sweep mails when it removes an instance or a kept one is still there (empty: no mail); a fact, so an answer here and never a vault item"
+    default: ""
+    when: "{{ ci_strategy == 'hybrid' }}"
+
+  pr_reviewers:
+    type: str
+    help: "GitHub logins asked to review the pull requests that wait for a human, the update bot's and plx update's alike, comma-separated (empty: none); a pull request the bot merges itself asks nobody unless its checks fail"
+    default: ""
+
+  update_max_age:
+    type: int
+    help: "How old, in days, the oldest Plexus version this repo has not taken must be before it takes a minor one (§ 3 PLX-Updates): a patch is taken at once, a major only when asked; 0 takes every version, and more than 30 is discouraged"
+    default: 7
+    validator: "{% if update_max_age < 0 %}A number of days, zero or more{% endif %}"
+
+policies:
+  # The marker is born once: its body is the repo's own prose, which an update would conflict with, and
+  # its frontmatter is plx's.
+  PLEXUS.md.jinja: born-once
+
+birth:
+  - [git, init]
+  - [mise, trust]
+  - [mise, install]

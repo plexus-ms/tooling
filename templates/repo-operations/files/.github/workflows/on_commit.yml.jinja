@@ -1,0 +1,25 @@
+{% raw %}name: on_commit
+
+# Generated from plexus-ms/template-repo-operations: edit the template, never this file.
+# The check of a push to main, the trunk that takes an operator's direct pushes (§ 2 PLX-Delivery).
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: on_commit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    uses: plexus-ms/tooling/.github/workflows/_check.yml@0.130.0
+    with:
+      strategy: ${{ vars.CI_STRATEGY || '{% endraw %}{{ ci_strategy }}{% raw %}' }}
+      size: small
+      tasks: verify
+{% endraw %}
