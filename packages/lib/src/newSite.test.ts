@@ -3,7 +3,7 @@
 // through the Context's injected Io, which here records them and runs nothing;
 // git, which the verb reads the enclosing repo with, goes to the real one.
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -56,6 +56,14 @@ const TEMPLATES = {
     ].join('\n'),
     files: { 'PLEXUS.md.jinja': '- A stall of {{ tenant }}.\n', 'goods.txt.jinja': '{{ goods }} of {{ tenant }}\n' },
   },
+  kiosk: {
+    manifest: ['name: kiosk', 'reads:', '  tenant:', '  city:', ''].join('\n'),
+    files: { 'PLEXUS.md.jinja': '- A kiosk.\n', 'kiosk.txt.jinja': '{{ tenant }} in {{ city }}\n' },
+  },
+  rooted: {
+    manifest: ['name: rooted', 'questions:', '  city:', '    default: Rome', ''].join('\n'),
+    files: { 'PLEXUS.md.jinja': '- Rooted.\n' },
+  },
   nomarker: {
     manifest: ['name: nomarker', ''].join('\n'),
     files: { 'a.txt': 'a\n' },
@@ -63,20 +71,27 @@ const TEMPLATES = {
 };
 
 /** A Context whose Io runs nothing but git: what it was asked to run, with what had been narrated by then. */
-function recording(options = { yes: true }) {
+function recording(options = { yes: true }, fails: (command: string) => boolean = () => false) {
   const stderr = new PassThrough();
   let narrated = '';
   stderr.on('data', (chunk) => {
     narrated += chunk.toString();
   });
-  const ran: { command: string; args: string[]; cwd?: string; narrated: string }[] = [];
+  const ran: { command: string; args: string[]; cwd?: string; narrated: string; tree: boolean }[] = [];
   const real = realIo();
   const ctx = new Context(options, {
     ...real,
     stderr,
     exec: async (command, args, execOptions) => {
       if (command === 'git' && args[0] === 'rev-parse') return real.exec(command, args, execOptions);
-      ran.push({ command, args, cwd: execOptions?.cwd, narrated });
+      ran.push({
+        command,
+        args,
+        cwd: execOptions?.cwd,
+        narrated,
+        tree: existsSync(join(execOptions?.cwd ?? '', 'PLEXUS.md')),
+      });
+      if (fails(command)) throw new Error(`${command} failed`);
       return '';
     },
   });
@@ -320,4 +335,95 @@ test('a repo from repo-turbo and an app from app-nextjs in it: the trees and the
   );
   assert.equal(report.units.length, 2);
   delete process.env.MISE_TRUSTED_CONFIG_PATHS;
+});
+
+// The version the repo is on is the running plx's: the bundled templates are that version's.
+
+/** A repo whose root marker is `marker`, committed. */
+const repoMarked = (marker: string) => repoWith(scratch.fresh('marked'), { 'PLEXUS.md': marker });
+
+test('an app is refused in a repo that is on another version, and nothing is written', async () => {
+  const root = roots();
+  const repo = repoMarked('---\nversion: 0.130.0\ntemplates: [shop]\ntenant: acme\n---\n');
+  const target = join(repo, 'apps', 'fruit');
+  await assert.rejects(
+    newSite(recording().ctx, create(target, ['stall'], { goods: 'apples' }, root)),
+    (error: Error) => {
+      assert.match(error.message, /0\.130\.0/);
+      assert.match(error.message, /0\.131\.0/);
+      return true;
+    },
+  );
+  assert.equal(existsSync(target), false);
+});
+
+test('an app is refused in a repo whose root marker lists templates and names no version', async () => {
+  const root = roots();
+  const repo = repoMarked('---\ntemplates: [shop]\ntenant: acme\n---\n');
+  await assert.rejects(
+    newSite(recording().ctx, create(join(repo, 'apps', 'fruit'), ['stall'], { goods: 'apples' }, root)),
+    /names no version/,
+  );
+});
+
+test('an app is created in a repo whose root marker lists no templates, with or without a version', async () => {
+  const root = roots();
+  const repo = repoMarked('---\ntenant: acme\n---\n');
+  const created = await newSite(recording().ctx, create(join(repo, 'apps', 'fruit'), ['stall'], { goods: 'a' }, root));
+  assert.equal(created.kind, 'app');
+});
+
+// An app is rendered with the root's resolved answers, the defaults of its templates included.
+
+test('an app reads a root default that the root marker does not write', async () => {
+  const root = roots();
+  const repo = repoMarked(`---\nversion: ${VERSION}\ntemplates: [shop]\ntenant: acme\n---\n`);
+  const created = await newSite(recording().ctx, create(join(repo, 'apps', 'k'), ['kiosk'], {}, root));
+  assert.equal(created.kind, 'app');
+  assert.equal(text(repo, 'apps/k/kiosk.txt'), 'acme in Oslo\n');
+});
+
+test('an app refuses an answer that is a root default, though the root marker does not write it', async () => {
+  const root = roots();
+  const repo = repoMarked(`---\nversion: ${VERSION}\ntemplates: [shop]\ntenant: acme\n---\n`);
+  const target = join(repo, 'apps', 'k');
+  await assert.rejects(
+    newSite(recording().ctx, create(target, ['kiosk'], { city: 'Rome' }, root)),
+    /`city`.*root marker/,
+  );
+  assert.equal(existsSync(target), false);
+});
+
+// A template that cannot be read is reported with every other.
+
+test('every template that cannot be read is named in one error', async () => {
+  const root = roots();
+  await assert.rejects(
+    newSite(recording().ctx, create(scratch.fresh('unknowns'), ['barn', 'shed'], {}, root)),
+    (error: Error) => {
+      assert.match(error.message, /no template barn/);
+      assert.match(error.message, /no template shed/);
+      return true;
+    },
+  );
+});
+
+// A birth command that fails leaves the files written, and says what is left to do by hand.
+
+test('a failed birth command says that the tree is written and lists the commands still to run', async () => {
+  const root = roots();
+  const target = scratch.fresh('failed');
+  await assert.rejects(
+    newSite(
+      recording({ yes: true }, (command) => command === 'git').ctx,
+      create(target, ['shop'], { tenant: 'acme' }, root),
+    ),
+    (error: Error) => {
+      assert.match(error.message, /git failed/);
+      assert.match(error.message, /files are written/);
+      assert.match(error.message, /git init\n.*mise trust/s);
+      return true;
+    },
+  );
+  assert.ok(existsSync(join(target, 'PLEXUS.md')));
 });

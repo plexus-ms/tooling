@@ -137,6 +137,24 @@ test('an answers file that is no JSON object is a usage error', async () => {
   await assert.rejects(plx('new', '--templates', templates, '--answers', file, fresh(), 'shop'), UsageError);
 });
 
+test('a missing answers file is a usage error naming the option', async () => {
+  const { UsageError } = await import('@plexus-ms/lib');
+  await assert.rejects(
+    plx('new', '--templates', templates, '--answers', join(dir, 'absent.json'), fresh(), 'shop'),
+    (error: Error) => error instanceof UsageError && /--answers/.test(error.message),
+  );
+});
+
+test('an answers file that is no JSON is a usage error naming the option', async () => {
+  const { UsageError } = await import('@plexus-ms/lib');
+  const file = join(dir, 'broken.json');
+  writeFileSync(file, '{');
+  await assert.rejects(
+    plx('new', '--templates', templates, '--answers', file, fresh(), 'shop'),
+    (error: Error) => error instanceof UsageError && /--answers/.test(error.message),
+  );
+});
+
 test('new is in the help, with its options', () => {
   const help = buildProgram()
     .commands.find((c) => c.name() === 'new')
