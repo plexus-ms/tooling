@@ -57,7 +57,7 @@ export function copierAnswersAsEngine(recorded: Answers): Answers {
  */
 export function withMarkerFrontmatter(recorded: Answers, copied: Tree): Answers {
   const marker = copied.get(MARKER);
-  return marker ? { ...recorded, ...splitFrontmatter(decoder.decode(marker.bytes)).data } : recorded;
+  return marker ? { ...splitFrontmatter(decoder.decode(marker.bytes)).data, ...recorded } : recorded;
 }
 
 /** A copier tree as the engine's would be: without its answers file, and its marker without frontmatter. */
