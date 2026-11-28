@@ -36,7 +36,7 @@ export {
   parseCompose,
 } from './compose.ts';
 export { filesWithConflictMarkers, hasConflictMarkers, hasUnmergedEntries } from './conflicts.ts';
-export { type Consumer, expectedBranch, findConsumers, type Site } from './consumers.ts';
+export { type Consumer, expectedBranch, findConsumers, findRepos, type Site } from './consumers.ts';
 export { Context, type Options } from './context.ts';
 export {
   ANSWERS_FILE,
@@ -201,16 +201,18 @@ export {
   type StandardIndex,
 } from './standardIndex.ts';
 export { isClean, mergeLine, renderSummary, type Summary, summarize } from './summary.ts';
-export { planSync, type Rendered, type SiteMerge, type SiteSides, type Source, type SyncPlan } from './sync.ts';
 export {
-  copierIn,
-  type SiteResult,
-  type SiteUpdate,
-  scratchCommit,
-  type Take,
-  type Taken,
-  takeVersion,
-} from './take.ts';
+  planSync,
+  type Rendered,
+  type RenderTemplates,
+  type SiteMerge,
+  type SiteSides,
+  type Source,
+  type SyncPlan,
+  type TemplateSides,
+  type Templates,
+} from './sync.ts';
+export { type SiteResult, type SitesStep, type Take, type Taken, takeVersion } from './take.ts';
 export { RENAMED_TEMPLATES, TEMPLATES, templateOf, templateSource } from './templates.ts';
 export { templatesRoot } from './templatesRoot.ts';
 export {
@@ -240,3 +242,10 @@ export {
   UsageError,
   VERSIONED_REPOS,
 } from './version.ts';
+export {
+  type Fetched,
+  type FetchVersion,
+  fromRegistry,
+  templatesOf,
+  type VersionOptions,
+} from './versionTemplates.ts';

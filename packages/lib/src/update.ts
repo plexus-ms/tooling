@@ -5,25 +5,51 @@
 // Which version it takes, if any, is need.ts's decision, by the step of the
 // version number: a patch (a hotfix) at once, a minor (routine) at the repo's
 // next scheduled pull, once the oldest version it has not taken is as old as
-// its interval (`update_max_age` in its answers, in days; 7 when they do not
-// say, zero for every version), a major (a changed contract) only when asked.
-// Asked (`--now`, or a version named), it takes the newest version, or the one
-// named, whatever its step. Otherwise the repo rests: one line saying why,
-// exit 0.
+// its interval (`update_max_age` in its root marker, in days; 7 when it does
+// not say, zero for every version), a major (a changed contract) only when
+// asked. Asked (`--now`, or a version named), it takes the newest version, or
+// the one named, whatever its step. Otherwise the repo rests: one line saying
+// why, exit 0.
 //
 // The versions are the compendium's GitHub releases (every version tag is locked
 // by one, § 1.6 PLX, and the compendium is released last, so a version shows
 // there once it is cut everywhere), asked of the forge as an operator would
 // (`gh api repos/plexus-ms/compendium/releases`): their numbers are the steps,
-// and their dates are what the interval is measured against. The work happens in a
-// worktree of origin's branch, never in the checkout: a developer's branch and
-// edits stay as they are, and in CI the worktree shares the checkout's
-// credentials, so the push and the pull request need no second token. Then
-// `takeVersion` (take.ts): copier update at every site, lockfile,
-// workflow refs, one commit on `plexus/<version>`, one pull request. The
-// sites are those origin's branch holds, by the walk's rule
-// (`sitesOfTree`, consumers.ts), as a later run reads them at the version
-// branch's tip; a site the checkout lacks is updated all the same.
+// and their dates are what the interval is measured against.
+//
+// The repo is judged by what origin has on the branch the version lands on
+// (consumers.ts), never by the checkout, which may be behind it or on a branch
+// of its own. Its markers there are its configuration (sites.ts): the root
+// marker's `version` is the version the repo is on, and refusing a downgrade,
+// the interval and readiness all read it. A repo that still tracks a copier
+// answers file there has not crossed over to the markers, and is refused with
+// the crossover runbook: that refusal is the only crossover code. So is a
+// marker that cannot be read, and a root marker that names no version.
+//
+// Taking the version happens in a worktree of origin's branch, never in the
+// checkout: a developer's branch and edits stay as they are, and in CI the
+// worktree shares the checkout's credentials, so the push and the pull request
+// need no second token. The template step, then `takeVersion` (take.ts):
+//   1. Every site the worktree's markers list templates for (sites.ts), the
+//      root first, has two sides, its markers' answers and templates as they
+//      are: the old side rendered with the templates of the version the repo
+//      is on, the new side with those of the version it takes. The templates
+//      of the running plx's own version are the ones it bundles, rendered by
+//      its own engine; any other version's are fetched from the registry and
+//      rendered by that version's plx-template (versionTemplates.ts). A version
+//      that cannot be fetched or rendered fails the run, which pushes nothing.
+//   2. The two renders are merged into each site by the engine's rules
+//      (sync.ts): a local edit merges, a conflict stays in the file between
+//      `<<<<<<< current` and `>>>>>>> new render`, a file the version drops and
+//      the user edited is kept, and a born-once file the old render holds
+//      stays as the user left it. The defaults of questions that became
+//      applicable and the new `version` are spliced into the markers in one
+//      write each. Birth commands are never run, and neither is `mise
+//      install`: tools serve a developer's checkout, not a pull request.
+//   3. The lockfile where a manifest moved, the workflow refs, one commit on
+//      `plexus/<version>`, and one pull request (take.ts). The `plx` pin is a
+//      line of a template's mise.toml, so it moves in the same commit as the
+//      version.
 //
 // What the run came to is returned as data, one `Outcome` for the repo, which
 // the caller folds into the summary (summary.ts). Run over many repos
@@ -36,52 +62,62 @@
 // deleting the branch is how a pull is redone. With its pull request open, the
 // run looks at it again (pull.ts): the branch read as origin has it, the body
 // rewritten to what still needs a hand, ready once no conflict marker remains
-// and every site's answers record the version.
+// and the root marker names the version.
 // With no pull request in any state (opening it failed after the push), the
 // run opens it then; a closed or merged one stays as a human left it.
-// A repo whose every site already records the newest version does nothing at
+// A repo whose root marker already names the newest version does nothing at
 // all.
 //
 // The pull request it opens asks for a review from the users the repo's root
-// answers name (`pr_reviewers`), or from those `reviewers` names instead
+// marker names (`pr_reviewers`), or from those `reviewers` names instead
 // (pull.ts), once, when it is opened. The answer is read and checked only
-// then, from the answers as the pull request's branch has them, after copier
-// ran: a renamed or changed answer counts in the very pull request that
-// brings it, a bad one fails no run that opens nothing, and the pull request
-// is opened all the same, with the refused answer reported.
+// then, from the root marker as the pull request's branch has it: a bad one
+// fails no run that opens nothing, and the pull request is opened all the
+// same, with the refused answer reported.
 //
 //   plx update                      # the version the repo's schedule takes, if any
 //   plx update --now                # the newest version, whatever its step
 //   plx -n update --now             # preview in a worktree, push nothing
 //   plx -y update --to 0.102.0      # unattended, an explicit version
 //   plx update --recursive ~/dev    # every repo under a directory (recursive.ts)
-import { basename, join, relative } from 'node:path';
-import { type Consumer, findConsumers, sitesOfTree } from './consumers.ts';
+import { basename, join } from 'node:path';
+import { CROSSOVER_RUNBOOK } from './apply.ts';
+import { type Consumer, findRepos } from './consumers.ts';
 import type { Context } from './context.ts';
-import { ANSWERS_FILE, type Answers, parseAnswers } from './copier.ts';
+import { ANSWERS_FILE } from './copier.ts';
+import { crossedOver } from './doctor.ts';
 import { run } from './effects.ts';
 import { detailOf, ExecError } from './io.ts';
+import { MARKER_FILE } from './marker.ts';
 import { maxAgeOf, type Need, needOf, type Release } from './need.ts';
 import { overview } from './overview.ts';
 import { openLate, pullOf, type Review, type Reviewers, revisit, tipOnOrigin, versionBranch } from './pull.ts';
-import { type Taken, takeVersion } from './take.ts';
-import { TEMPLATES, templateSource } from './templates.ts';
+import { findSites, type MarkerSite, siteAnswers } from './sites.ts';
+import { planSync, type Source } from './sync.ts';
+import { type SiteResult, type Taken, takeVersion } from './take.ts';
 import { COMPENDIUM, compareVersions, isPlexusVersion, preflightForge, UsageError } from './version.ts';
+import { type FetchVersion, templatesOf } from './versionTemplates.ts';
 
 export interface UpdateOptions {
-  /** The repo to update: a checkout whose root is a site of a repo template. */
+  /** The repo to update: a checkout whose root marker names the version it is on. */
   repo: string;
   /** What the repo is called in the narration and the summary; default: its directory's name. */
   name?: string;
-  /** The version to take, which is asking for it; default: the template's newest release. */
+  /** The Plexus version of the running plx, whose templates are bundled. */
+  plxVersion: string;
+  /** The templates the running plx bundles; default `templatesRoot()`. */
+  templates?: string;
+  /** How another version's templates are fetched; default: from the npm registry (versionTemplates.ts). */
+  fetch?: FetchVersion;
+  /** The version to take, which is asking for it; default: the newest release. */
   to?: string;
   /** Take the newest version whatever its step: somebody asks. */
   now?: boolean;
-  /** The interval in days; default: the repo's answer `update_max_age`, else 7. */
+  /** The interval in days; default: the root marker's answer `update_max_age`, else 7. */
   maxAge?: number;
   /** The clock the interval is measured against, as a date; default: now. */
   today?: string;
-  /** The users asked to review the pull request it opens; default: the repo's answer `pr_reviewers`, else none. */
+  /** The users asked to review the pull request it opens; default: the root marker's answer `pr_reviewers`, else none. */
   reviewers?: string[];
 }
 
@@ -98,13 +134,13 @@ export interface Known {
 
 /**
  * What one repo's run came to; `version` is the one it took, looked at, or
- * would take. `current`: every site records it already. `skipped`: left
+ * would take. `current`: its root marker names it already. `skipped`: left
  * untouched, with why. `resting`: needs no version yet (need.ts), with what
  * would end the rest. `found`: its version branch is on origin already, with
  * the pull request found or, when there was none, opened there, the files of
- * the branch that hold conflict markers, its sites whose answers do not
- * record the version, whether it is ready to merge, why
- * looking at it failed, if it did, and the review request of one opened.
+ * the branch that hold conflict markers, its sites not at the version (its
+ * root, when the root marker does not name it), whether it is ready to merge,
+ * why looking at it failed, if it did, and the review request of one opened.
  * A closed or merged one is no pull to list.
  * `taken`: it took the version. `failed`: it could not be worked on, with why.
  */
@@ -132,58 +168,38 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
     throw new UsageError(`'${options.to}' is not plain semver (X.Y.Z, no v)`);
   const consumer = known?.consumer ?? (await repoAt(ctx, options.repo, options.name ?? basename(options.repo)));
   const { path: repo, rel: name } = consumer;
-  const root = consumer.sites.find((s) => s.path === consumer.path);
-  if (!root) throw new Error(`${name}: its root is not a site of a repo template`);
 
   if (!known) await preflightForge(ctx);
   const releases = known?.releases ?? (options.to === undefined ? await releasesOf(ctx) : []);
   const newest = options.to ?? newestOf(releases);
 
-  // The repo is judged by what its origin has on the branch the version lands
-  // on, not by the checkout, which may be behind it or on a branch of its own.
-  // Without that branch on origin there is nothing to take the version on.
+  // Without the branch the version lands on there is nothing to take it on.
   if ((await onOrigin(ctx, repo, consumer.branch)) === false) {
     const reason = `origin has no branch \`${consumer.branch}\`, the one the version lands on`;
     ctx.say(`⚠ ${name}: ${reason} — skipped`);
     return { repo: name, version: newest, kind: 'skipped', reason };
   }
   await ctx.read('git', ['fetch', '--quiet', 'origin', consumer.branch], { cwd: repo }).catch(() => '');
-  // The sites origin's branch holds, by the walk's rule; the checkout's, read on origin where they can be, when it cannot be read.
-  const onBranch = await sitesOfTree(ctx, repo, `refs/remotes/origin/${consumer.branch}`).catch(() => undefined);
-  const answers: Answers[] = onBranch
-    ? onBranch.sites.map((s) => s.answers ?? { answers: {} })
-    : await Promise.all(
-        consumer.sites.map(async (s) => {
-          const file = join(relative(consumer.path, s.path), ANSWERS_FILE);
-          const onOrigin = await ctx
-            .read('git', ['show', `origin/${consumer.branch}:${file}`], { cwd: repo })
-            .catch(() => undefined);
-          return parseAnswers(onOrigin ?? (await ctx.readFile(join(s.path, ANSWERS_FILE))));
-        }),
-      );
-  const rootAnswers = onBranch
-    ? onBranch.sites.find((s) => s.dir === '.')?.answers
-    : answers[consumer.sites.indexOf(root)];
-  const recorded = answers.map((a) => a.commit);
-  if (recorded.every((c) => c === newest)) {
+  const base = `refs/remotes/origin/${consumer.branch}`;
+  const on = await versionOn(ctx, consumer, base);
+  if (on.version === newest) {
     ctx.say(`• ${name}: already at ${newest}`);
     return { repo: name, version: newest, kind: 'current' };
   }
-  // copier refuses a downgrade; say so before a worktree is made for nothing.
-  const past = recorded.find((c) => c && isPlexusVersion(c) && compareVersions(c, newest) > 0);
-  if (past) throw new Error(`${name} is at ${past}, past ${newest}; a repo is never taken back to an older version`);
+  if (compareVersions(on.version, newest) > 0)
+    throw new Error(`${name} is at ${on.version}, past ${newest}; a repo is never taken back to an older version`);
 
   const asked = options.to !== undefined || options.now === true;
   const need: Need = asked
     ? { take: true, version: newest, why: `asked for (${options.to !== undefined ? `--to ${newest}` : '--now'})` }
     : needOf({
-        recorded,
+        recorded: [on.version],
         releases,
-        maxAge: options.maxAge ?? maxAgeOf(rootAnswers?.answers ?? {}),
+        maxAge: options.maxAge ?? maxAgeOf(on.answers),
         now: options.today === undefined ? new Date() : new Date(options.today),
       });
   if (need.held) ctx.say(`• ${name}: ${need.held} (plx update --now takes it)`);
-  // Unless named, read where the pull request is opened, from its branch's answers, and only then.
+  // Unless named, read where the pull request is opened, from its branch's root marker, and only then.
   const reviewers: Reviewers | undefined = options.reviewers ? { named: options.reviewers } : undefined;
   // A repo that rests is looked at for the newest version: one asked for earlier may be on origin.
   const version = need.take ? need.version : newest;
@@ -262,21 +278,27 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
       ctx.say(`  ✗ FAILED — worktree of origin/${consumer.branch}${why ? `: ${why}` : ''}`);
       return { repo: name, version, kind: 'failed', detail: `worktree of origin/${consumer.branch}: ${why}` };
     }
-    // The sites the worktree of origin's branch holds, which is what is judged, not the checkout's.
-    const held = (await sitesOfTree(ctx, dir, 'HEAD')).sites;
-    const sites = held.flatMap((s) =>
-      s.template
-        ? [{ path: join(repo, s.dir), rel: s.dir === '.' ? name : join(name, s.dir), template: s.template }]
-        : [],
-    );
-    const taken = await takeVersion(ctx, { ...consumer, sites }, dir, {
-      version,
-      ref: version,
-      opener: '`plx update`',
-      why: need.why,
-      ...(reviewers ? { reviewers } : {}),
-    });
-    return { repo: name, version, kind: 'taken', taken };
+    try {
+      const taken = await takeVersion(ctx, consumer, dir, {
+        version,
+        opener: '`plx update`',
+        why: need.why,
+        sites: (ctx, consumer, dir) =>
+          renderSites(
+            ctx,
+            consumer,
+            dir,
+            { from: on.version, to: version, scratch: join(scratch, 'versions') },
+            options,
+          ),
+        ...(reviewers ? { reviewers } : {}),
+      });
+      return { repo: name, version, kind: 'taken', taken };
+    } catch (error) {
+      const why = (error as Error).message;
+      ctx.say(`  ✗ FAILED — ${name}: ${why}`);
+      return { repo: name, version, kind: 'failed', detail: why };
+    }
   } finally {
     await ctx.stage(run('git', ['worktree', 'remove', '--force', dir], { cwd: repo })).catch(() => undefined);
     if (scratch) await ctx.stage(run('rm', ['-rf', scratch]));
@@ -284,22 +306,96 @@ export async function update(ctx: Context, options: UpdateOptions, known?: Known
 }
 
 /**
- * The repo at `path`, which must be generated from a repo template, as a
- * consumer whose sites are named from `name` rather than from a workspace.
+ * The version the repo is on at `ref`, origin's branch: its root marker's
+ * `version`, with the root marker's answers. Refuses a repo that still tracks
+ * a copier answers file there, any marker that cannot be read, and a root
+ * marker that names no version.
  */
+async function versionOn(
+  ctx: Context,
+  consumer: Consumer,
+  ref: string,
+): Promise<{ version: string; answers: Record<string, unknown> }> {
+  const where = `on origin's \`${consumer.branch}\``;
+  const tracked = (await ctx.read('git', ['ls-tree', '-r', '-z', '--name-only', ref], { cwd: consumer.path }))
+    .split('\0')
+    .filter(Boolean);
+  if (!crossedOver(tracked))
+    throw new Error(
+      `${consumer.rel} still tracks a ${ANSWERS_FILE} ${where}: it has not crossed over from copier to the markers, which plx update reads; follow ${CROSSOVER_RUNBOOK}`,
+    );
+  const sites = await findSites(ctx, consumer.path, ref);
+  const problems = sites.filter((s) => s.problem !== undefined);
+  if (problems.length > 0)
+    throw new Error(problems.map((s) => `${join(s.dir, MARKER_FILE)} ${where}: ${s.problem}`).join('\n'));
+  const root = sites.find((s) => s.dir === '.')?.config;
+  if (root?.version === undefined)
+    throw new Error(
+      `the root ${MARKER_FILE} of ${consumer.rel} ${where} names no version, so plx update cannot tell which version it is on`,
+    );
+  return { version: root.version, answers: root.answers };
+}
+
+/**
+ * The template step of a version taken (the header's steps 1 and 2), in the
+ * worktree `dir`: every site its markers list templates for, rendered at
+ * `from` and at `to` and merged, the defaults and the version written into the
+ * markers. What became of each site is what the merge reported.
+ */
+async function renderSites(
+  ctx: Context,
+  consumer: Consumer,
+  dir: string,
+  versions: { from: string; to: string; scratch: string },
+  options: UpdateOptions,
+): Promise<SiteResult[]> {
+  const sites = await findSites(ctx, dir, 'HEAD');
+  const sourceOf = (site: MarkerSite): Source => ({
+    templates: site.config?.templates ?? [],
+    answers: siteAnswers(sites, site.dir),
+  });
+  const taken = sites.filter((s) => s.dir === '.' || s.config?.templates !== undefined);
+  const sides = taken.map((s) => ({
+    dir: s.dir,
+    old: sourceOf(s),
+    new: sourceOf(s),
+    ...(s.config?.templates === undefined ? { contextOnly: true } : {}),
+  }));
+  const siblings = sites
+    .filter((s) => s.dir !== '.')
+    .map((s) => ({ dir: s.dir, templates: s.config?.templates ?? [], answers: s.config?.answers ?? {} }));
+  ctx.say(`→ ${consumer.rel}: the templates of ${versions.from} and ${versions.to}, merged`);
+  const of = (version: string) =>
+    templatesOf(ctx, version, {
+      plxVersion: options.plxVersion,
+      scratch: versions.scratch,
+      ...(options.templates ? { bundled: options.templates } : {}),
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+    });
+  const plan = await planSync(ctx, dir, { old: await of(versions.from), new: await of(versions.to) }, sides, {
+    labels: { old: `the templates of ${versions.from}`, new: `the templates of ${versions.to}` },
+    siblings,
+    version: versions.to,
+  });
+  await plan.perform();
+  return plan.sites.map((s) => {
+    const rel = s.dir === '.' ? consumer.rel : join(consumer.rel, s.dir);
+    const conflicted = s.report.some((e) => e.outcome === 'conflicted');
+    ctx.say(conflicted ? `  ✗ CONFLICTS at ${rel}, committed with their markers` : `  ✓ merged clean: ${rel}`);
+    return { rel, dir: s.dir, outcome: conflicted ? 'conflicted' : 'clean' };
+  });
+}
+
+/** The repo at `path`, which must be generated from the templates, named `name` rather than from a workspace. */
 async function repoAt(ctx: Context, path: string, name: string): Promise<Consumer> {
   const tree = await overview(ctx, path);
-  const found = (await findConsumers(ctx, tree, TEMPLATES)).find((c) => c.path === tree.path);
+  const found = (await findRepos(ctx, tree)).find((c) => c.path === tree.path);
   if (!found)
     throw new Error(
-      `${path} is not a repo generated from the templates: no ${ANSWERS_FILE} at its root naming one of ${TEMPLATES.map(templateSource).join(', ')}`,
+      `${path} is not a repo generated from the templates: its root ${MARKER_FILE} names no version and lists no templates`,
     );
   if (found.skipped) throw new Error(`${name}: ${found.skipped}`);
-  return {
-    ...found,
-    rel: name,
-    sites: found.sites.map((s) => ({ ...s, rel: s.rel === '.' ? name : join(name, s.rel) })),
-  };
+  return { ...found, rel: name };
 }
 
 /**

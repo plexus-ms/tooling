@@ -9,14 +9,23 @@
 // against it with the real Io, and asserts on tags, releases, the consumers'
 // origins, the summary and the narration.
 //
-// Fake copier: `copier update` writes "updated from <ref>" into
-// template-owned.txt, bumps _commit in the answers file, and touches
-// package.json at a web root (so the lockfile refresh triggers). Knobs:
-//   FAKE_COPIER_FAIL=<substring>      exit 1 at a site whose path matches
-//   FAKE_COPIER_CONFLICT=<substring>  leave <<<<<<< markers at a matching site
-//   FAKE_COPIER_NOOP=1                change nothing
-//   FAKE_COPIER_UNMERGED=<path>       in a site whose path contains it, leave unmerged index entries, then fail
-//   FAKE_COPIER_RENAME_REVIEWERS=1    rename the answer renovate_reviewers to pr_reviewers, as the templates do
+// The tenant's repos come in two kinds. On the engine (the default), their
+// markers carry `version` and `templates`, and `update` takes a version with
+// the engine: the templates of a version are written by `templatesFor`, the
+// running plx is 0.1.0 with those of 0.1.0 bundled, and every other version is
+// "fetched" by `fakeFetch`, which writes that version's templates and hands
+// this workspace's plx-template to render them, as an installed one would be
+// run. A template renders template-owned.txt and notes.txt, "generated" at
+// 0.1.0 and "updated from <version>" after it, and the root of the web repo
+// its package.json and, after 0.1.0, a new question `lint` with a default;
+// the app's template a born-once layout.txt, which the fixture's app lacks.
+// On copier, for the preview of `ship`'s dry run, their answers files name
+// the template repos.
+//
+// Fake copier, for the preview of `ship`'s dry run: `copier update` writes
+// "updated from <ref>" into template-owned.txt, bumps _commit in the answers
+// file, and touches package.json at a web root (so the lockfile refresh
+// triggers).
 // Fake gh: releases and pull requests are files under the forge, keyed by the
 // repo (the basename of origin); `release create` checks the tag is on origin,
 // keeps the release's notes (notes-<tag>) and, on tooling, "publishes" the
@@ -60,6 +69,7 @@ import { after, test } from 'node:test';
 import {
   COPIER_VERSION,
   Context,
+  type FetchVersion,
   isClean,
   type Options,
   type RecursiveOptions,
@@ -131,19 +141,9 @@ script(
 echo "$PWD $src $*" >> "$FAKE_LOG"
 ref="latest-tag"
 while [ $# -gt 0 ]; do [ "$1" = --vcs-ref ] && ref="$2"; shift; done
-[ -z "\${FAKE_COPIER_FAIL:-}" ] || case "$PWD" in *"$FAKE_COPIER_FAIL"*) echo "fake copier: failing on purpose" >&2; exit 1 ;; esac
-[ -z "\${FAKE_COPIER_NOOP:-}" ] || exit 0
-# A three-way apply that stops half way: template-owned.txt unmerged in the index, then a failure.
-[ -z "\${FAKE_COPIER_UNMERGED:-}" ] || case "$PWD" in *"$FAKE_COPIER_UNMERGED"*)
-  p="$(git rev-parse --show-prefix)template-owned.txt"; b="$(echo theirs | git hash-object -w --stdin)"
-  git update-index --force-remove template-owned.txt
-  printf '100644 %s 1\t%s\n100644 %s 2\t%s\n100644 %s 3\t%s\n' "$b" "$p" "$b" "$p" "$b" "$p" | git update-index --index-info
-  echo "fake copier: stopped mid-merge" >&2; exit 1 ;; esac
 echo "updated from $ref" > template-owned.txt
 sed -i.bak "s/^_commit: .*/_commit: $ref/" .copier-answers.yml && rm -f .copier-answers.yml.bak
-[ -z "\${FAKE_COPIER_RENAME_REVIEWERS:-}" ] || { sed -i.bak 's/^renovate_reviewers:/pr_reviewers:/' .copier-answers.yml && rm -f .copier-answers.yml.bak; }
 [ ! -f package.json ] || echo '{"name": "touched"}' > package.json
-[ -z "\${FAKE_COPIER_CONFLICT:-}" ] || case "$PWD" in *"$FAKE_COPIER_CONFLICT"*) printf '<<<<<<< before\\nx\\n=======\\ny\\n>>>>>>> after\\n' > template-owned.txt ;; esac
 `,
 );
 // Fake mise: logs, and runs the pinned copier (`mise exec copier@X -- copier …`)
@@ -295,8 +295,73 @@ const commit = (repo: string, message: string) => {
   git(repo, 'commit', '--quiet', '-m', message);
 };
 const TOOLING_REF = 'plexus-ms/tooling/.github/workflows/';
-/** A tenant repo's marker: nothing to state, so an empty frontmatter (§ 1.4 PLX). */
+/** A tenant repo's marker on copier: nothing to state, so an empty frontmatter (§ 1.4 PLX). */
 const MARKER = '---\n---\n\n- A tenant repo.\n';
+/** A marker on the engine with `keys` in its frontmatter. */
+const marker = (keys: string) => `---\n${keys}---\n\n- A tenant repo.\n`;
+
+/** What a template writes into the files it owns at `version`: "generated" at 0.1.0, which the fixture's repos hold. */
+const owned = (version: string) => (version === '0.1.0' ? 'generated' : `updated from ${version}`);
+/** notes.txt at `version`: its first line moves with the version, its last a person may edit without a conflict. */
+const notes = (version: string) => `${owned(version)}\n1\n2\n3\nend\n`;
+
+/** A template of the fixture refuses to render: it gains a question without a default (`templatesFor`). */
+let REQUIRING: string | undefined;
+
+/**
+ * The templates of `version` below `root`: the web repo's root (`repo-turbo`),
+ * its app (`app-nextjs`), and the operations repo (`repo-operations`). After
+ * 0.1.0 the web root's template asks `lint`, with a default.
+ */
+function templatesFor(version: string, root: string): string {
+  const files = (template: string) =>
+    ({
+      'files/template-owned.txt': `${owned(version)}\n`,
+      'files/notes.txt': notes(version),
+      ...(template === 'repo-turbo'
+        ? { 'files/package.json': version === '0.1.0' ? '{"name": "web"}\n' : '{"name": "touched"}\n' }
+        : {}),
+    }) as Record<string, string>;
+  for (const template of ['repo-turbo', 'app-nextjs', 'repo-operations']) {
+    // The app's layout is born once, and the fixture's apps leave it out, as a route-group app does.
+    const born =
+      template === 'app-nextjs'
+        ? { 'files/layout.txt': `layout of ${version}\n`, policies: ['policies:', '  layout.txt: born-once'] }
+        : undefined;
+    const questions = [
+      ...(template === 'repo-turbo' && version !== '0.1.0' ? ['  lint:', '    default: strict'] : []),
+      ...(REQUIRING === template && version !== '0.1.0' ? ['  region:', '    type: str'] : []),
+    ];
+    const manifest = [
+      `name: ${template}`,
+      ...(questions.length ? ['questions:', ...questions] : []),
+      ...(born?.policies ?? []),
+      '',
+    ].join('\n');
+    const extra = born ? { 'files/layout.txt': born['files/layout.txt'] } : {};
+    for (const [path, text] of Object.entries({ 'template.yml': manifest, ...files(template), ...extra }))
+      put(join(root, template, path), text);
+  }
+  return root;
+}
+
+/** This workspace's plx-template, standing in for the one a fetched version brings. */
+const PLX_TEMPLATE = join(import.meta.dirname, '..', '..', 'cli-template', 'src', 'bin.ts');
+
+/** The versions the fake fetch was asked for, in order. */
+let FETCHED: string[] = [];
+/** The fake fetch fails, as an unreachable registry would. */
+let FETCH_FAILS = false;
+
+/** Another version's templates and plx-template, from the fixture instead of the registry. */
+const fakeFetch: FetchVersion = async (_ctx, version, into) => {
+  FETCHED.push(version);
+  if (FETCH_FAILS) throw new Error(`npm error 404 Not Found - @plexus-ms/cli@${version}`);
+  return { plxTemplate: PLX_TEMPLATE, templates: templatesFor(version, join(into, 'templates')) };
+};
+
+/** How `update` runs in the fixture: plx 0.1.0, with its templates bundled, and the fake fetch. */
+const engine = () => ({ plxVersion: '0.1.0', templates: templatesFor('0.1.0', join(WS, 'bundled')), fetch: fakeFetch });
 
 let WS = '';
 const FAKE_LOG = () => join(WS, 'fake.log');
@@ -314,8 +379,11 @@ const withOrigin = (path: string, name: string) => {
   git(path, 'push', '--quiet', 'origin', '--tags');
 };
 
-function fixture(name: string): void {
+function fixture(name: string, kind: 'engine' | 'copier' = 'engine'): void {
   WS = join(TMP, `ws-${name}`);
+  REQUIRING = undefined;
+  FETCHED = [];
+  FETCH_FAILS = false;
   rmSync(WS, { recursive: true, force: true });
   mkdirSync(join(WS, 'plexus-ms'), { recursive: true });
   mkdirSync(join(WS, 'remotes'));
@@ -409,9 +477,16 @@ function fixture(name: string): void {
   const tplat = join(WS, 'acme/platform');
   git(WS, 'init', '--quiet', tweb);
   git(tweb, 'checkout', '--quiet', '-b', 'develop');
-  put(join(tweb, 'PLEXUS.md'), MARKER.trimEnd());
-  put(join(tweb, '.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-turbo\n');
-  put(join(tweb, 'apps/site/.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-app-nextjs\n');
+  if (kind === 'copier') {
+    put(join(tweb, 'PLEXUS.md'), MARKER.trimEnd());
+    put(join(tweb, '.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-turbo\n');
+    put(join(tweb, 'apps/site/.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-app-nextjs\n');
+  } else {
+    put(join(tweb, 'PLEXUS.md'), marker('version: 0.1.0\ntemplates: [repo-turbo]\n'));
+    put(join(tweb, 'apps/site/PLEXUS.md'), marker('templates: [app-nextjs]\n'));
+    put(join(tweb, 'notes.txt'), notes('0.1.0'));
+    put(join(tweb, 'apps/site/notes.txt'), notes('0.1.0'));
+  }
   put(
     join(tweb, '.github/workflows/ci.yml'),
     `jobs:\n  changes:\n    uses: ${TOOLING_REF}changes.yml@0.1.0\n  pipeline:\n    uses: ${TOOLING_REF}pipeline.yml@0.1.0\n`,
@@ -424,8 +499,13 @@ function fixture(name: string): void {
   withOrigin(tweb, 'acme-web');
 
   git(WS, 'init', '--quiet', tplat);
-  put(join(tplat, 'PLEXUS.md'), MARKER);
-  put(join(tplat, '.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\n');
+  if (kind === 'copier') {
+    put(join(tplat, 'PLEXUS.md'), MARKER);
+    put(join(tplat, '.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\n');
+  } else {
+    put(join(tplat, 'PLEXUS.md'), marker('version: 0.1.0\ntemplates: [repo-operations]\n'));
+    put(join(tplat, 'notes.txt'), notes('0.1.0'));
+  }
   put(join(tplat, '.github/workflows/apps.yml'), `jobs:\n  apps:\n    uses: ${TOOLING_REF}deploy.yml@0.1.0\n`);
   put(join(tplat, 'template-owned.txt'), 'generated\n');
   commit(tplat, 'initial');
@@ -471,8 +551,11 @@ interface UpdateRun {
   out: string;
 }
 
-/** `update` run from inside a tenant repo, like its CI or a developer would. */
-async function runUpdate(options: Options, args: UpdateOptions): Promise<UpdateRun> {
+/** `update` run from inside a tenant repo, like its CI or a developer would, as plx 0.1.0 (`engine`). */
+async function runUpdate(
+  options: Options,
+  args: Omit<UpdateOptions, 'plxVersion'> & Partial<UpdateOptions>,
+): Promise<UpdateRun> {
   const stderr = new PassThrough();
   let out = '';
   stderr.on('data', (c: Buffer) => {
@@ -483,7 +566,7 @@ async function runUpdate(options: Options, args: UpdateOptions): Promise<UpdateR
   try {
     // The clock: two months past the fixture's epoch, so a release without a
     // date of its own is older than the interval and the version is taken.
-    const outcome = await coloured(() => update(ctx, { today: '2026-03-01', ...args }));
+    const outcome = await coloured(() => update(ctx, { today: '2026-03-01', ...engine(), ...args }));
     return { result: summarize([outcome], ctx.dryRun), out };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error), out };
@@ -500,7 +583,7 @@ async function runRecursive(options: Options, args: Partial<RecursiveOptions> = 
   const io = { ...realIo(), stdout: new PassThrough(), stderr };
   const ctx = new Context(options, io);
   try {
-    const outcomes = await coloured(() => updateRecursive(ctx, { dir: WS, today: '2026-03-01', ...args }));
+    const outcomes = await coloured(() => updateRecursive(ctx, { dir: WS, today: '2026-03-01', ...engine(), ...args }));
     return { result: summarize(outcomes, ctx.dryRun, args.to), out };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error), out };
@@ -566,7 +649,7 @@ const newbornsRemoved = () => {
 
 // ── scenarios ────────────────────────────────────────────────────────────────
 test('dry run previews both phases and the consumers in scratch clones, and changes nothing', async () => {
-  fixture('dry');
+  fixture('dry', 'copier');
   const { result, error, out } = await run({ dryRun: true, yes: true });
   assert.equal(error, undefined, out);
   assert.ok(noneTagged('0.2.0'), 'no 0.2.0 tag anywhere');
@@ -784,30 +867,33 @@ test('update --recursive: every repo under the directory takes the version in a 
   const { result, error, out } = await runRecursive({ yes: true });
   assert.equal(error, undefined, out);
   consumersUntouched();
+  assert.equal(copierRuns().length, 0, 'copier never ran');
+  assert.ok(!fakeLog().some((l) => has(l, 'copier')), 'nor through mise');
   assert.deepEqual(
-    copierRuns().map((l) => l.split(' ')[0]?.replace(/^.*\/acme\//, 'acme/')),
-    ['acme/platform', 'acme/web', 'acme/web/apps/site'],
-    'copier ran in the worktrees, repos in tree order, a repo root before its app',
-  );
-  assert.ok(
-    copierRuns().every((l) => has(l, '--vcs-ref 0.2.0') && has(l, '--skip-tasks') && !l.startsWith(`${WS}/`)),
-    'the published version, tasks skipped, outside the checkouts',
-  );
-  assert.equal(copierRuns().filter((l) => has(l, '--defaults')).length, 3, 'unattended run lets copier take defaults');
-  assert.equal(
-    fakeLog().filter((l) => l.startsWith('mise exec copier@') && / ignored=\/\S+\/acme\/(web|platform)$/.test(l))
-      .length,
-    3,
-    "copier ran with the worktree's mise config ignored",
+    FETCHED,
+    ['0.2.0', '0.2.0'],
+    "the version taken, fetched for each repo; the one they are on is the running plx's, from its bundled templates",
   );
   for (const [r, f] of [
     ['acme-web', 'template-owned.txt'],
     ['acme-web', 'apps/site/template-owned.txt'],
     ['acme-platform', 'template-owned.txt'],
   ] as const)
-    assert.match(onVersion(r, '0.2.0', f), /updated from 0\.2\.0/, `${r}:${f}`);
-  assert.equal(onVersion('acme-web', '0.2.0', 'PLEXUS.md'), MARKER.trimEnd(), 'the marker is not written');
-  assert.equal(onVersion('acme-platform', '0.2.0', 'PLEXUS.md'), MARKER.trimEnd());
+    assert.match(onVersion(r, '0.2.0', f), /^updated from 0\.2\.0$/, `${r}:${f}`);
+  assert.equal(
+    onVersion('acme-web', '0.2.0', 'PLEXUS.md'),
+    marker('version: 0.2.0\ntemplates: [repo-turbo]\nlint: strict\n').trimEnd(),
+    'the version and the default of the new question, in the commit with the files',
+  );
+  assert.equal(
+    onVersion('acme-web', '0.2.0', 'apps/site/PLEXUS.md'),
+    marker('templates: [app-nextjs]\n').trimEnd(),
+    'a nested marker names no version',
+  );
+  assert.equal(
+    onVersion('acme-platform', '0.2.0', 'PLEXUS.md'),
+    marker('version: 0.2.0\ntemplates: [repo-operations]\n').trimEnd(),
+  );
   const ci = onVersion('acme-web', '0.2.0', '.github/workflows/ci.yml');
   assert.match(ci, /changes\.yml@0\.2\.0/);
   assert.match(ci, /pipeline\.yml@0\.2\.0/);
@@ -831,7 +917,10 @@ test('update --recursive: every repo under the directory takes the version in a 
   assert.equal(pull('acme-web', '0.2.0'), 'https://forge/acme-web/pull/1');
   assert.equal(pull('acme-web', '0.2.0', '.base'), 'develop');
   assert.equal(pull('acme-platform', '0.2.0', '.base'), 'main');
-  assert.match(pull('acme-web', '0.2.0', '.body'), /Plexus 0\.2\.0 .*`copier update` at the root, `apps\/site`/);
+  assert.match(
+    pull('acme-web', '0.2.0', '.body'),
+    /Plexus 0\.2\.0 .*the templates at the root, `apps\/site`, the version in the root marker/,
+  );
   assert.match(pull('acme-web', '0.2.0', '.body'), /^Nothing needs a hand: every site merged clean\.$/m);
   assert.equal(pull('acme-web', '0.2.0', '.draft'), 'false', 'ready for review');
   assert.ok(has(out, '--force-with-lease=refs/heads/plexus/0.2.0: origin'), 'the push only creates the branch');
@@ -857,11 +946,8 @@ test('update --recursive: a directory of tenant repos and no upstream checkout; 
   fixture('recursive-tenant');
   versionCut('0.2.0', '2026-02-25');
   const acme = join(WS, 'acme');
-  // The platform repo's answers set three days; the web repo's say nothing, which is a week.
-  put(
-    join(acme, 'platform/.copier-answers.yml'),
-    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\nupdate_max_age: 3\n',
-  );
+  // The platform repo's marker sets three days; the web repo's says nothing, which is a week.
+  put(join(acme, 'platform/PLEXUS.md'), marker('version: 0.1.0\ntemplates: [repo-operations]\nupdate_max_age: 3\n'));
   commit(join(acme, 'platform'), 'three days at most');
   git(join(acme, 'platform'), 'push', '--quiet', 'origin', 'main');
   const { result, error, out } = await runRecursive({ yes: true }, { dir: acme });
@@ -919,7 +1005,7 @@ test('update --recursive: a second run finds the version branches on origin and 
   assert.equal(fakeLog().filter((l) => has(l, '--method PATCH')).length, patched + 2, 'the body is written each run');
   assert.ok(!fakeLog().some((l) => has(l, 'pr view')), 'and never read');
   assert.equal(git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0'), tip, 'the branch is where it was');
-  assert.equal(copierRuns().length, 3, 'copier not run again');
+  assert.deepEqual(FETCHED, ['0.2.0', '0.2.0'], 'nothing fetched or rendered again');
   assert.deepEqual(second.result?.pulls, ['https://forge/acme-platform/pull/1', 'https://forge/acme-web/pull/1']);
 });
 
@@ -1381,40 +1467,37 @@ test('a push failure mid-release names the recovery, and the re-run finishes the
   assert.ok(!fakeLog().some((l) => has(l, 'pr create')), 'no pull request, before or after');
 });
 
-test('update --recursive: a failing site does not stop the others, and the summary says so', async () => {
+test('update --recursive: a repo whose templates refuse to render fails, pushes nothing, and the others go on', async () => {
   fixture('failsite');
   versionCut('0.2.0');
-  process.env.FAKE_COPIER_FAIL = 'acme/platform';
+  REQUIRING = 'repo-operations';
   const { result, error, out } = await runRecursive({ yes: true });
-  delete process.env.FAKE_COPIER_FAIL;
   assert.equal(error, undefined, out);
   assert.match(onVersion('acme-web', '0.2.0', 'template-owned.txt'), /updated from/);
-  assert.match(
-    onVersion('acme-platform', '0.2.0', '.github/workflows/apps.yml'),
-    /@0\.2\.0/,
-    'workflow refs still bumped and proposed for the failed site',
-  );
-  assert.match(onVersion('acme-platform', '0.2.0', 'template-owned.txt'), /generated/, 'failed site left as it was');
-  assert.ok(has(out, '✗ FAILED — copier update exited nonzero: fake copier: failing on purpose'));
+  assert.throws(() => onVersion('acme-platform', '0.2.0', 'template-owned.txt'), 'no branch for the repo that failed');
+  assert.ok(has(out, /✗ FAILED — acme\/platform: .*region.*\[the templates of 0\.2\.0\]/), out);
   assert.deepEqual(result?.failed, ['acme/platform']);
-  assert.deepEqual(result?.mergeable, ['https://forge/acme-web/pull/1'], 'a repo with a failed site is not offered');
-  assert.match(pull('acme-platform', '0.2.0', '.body'), /^\*\*Needs a hand\.\*\*/, 'the body opens with it');
-  assert.match(pull('acme-platform', '0.2.0', '.body'), /^- `copier update` failed at the root, left as it was/m);
-  assert.equal(pull('acme-platform', '0.2.0', '.draft'), 'true', 'a draft');
-  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'false');
+  assert.deepEqual(result?.mergeable, ['https://forge/acme-web/pull/1']);
   assert.deepEqual(result?.clean, ['acme/web', 'acme/web/apps/site']);
+  assert.equal(git(join(WS, 'acme/platform'), 'worktree', 'list').split('\n').length, 1, 'worktree removed');
 });
 
 test('update --recursive: a conflict is committed with its markers and the pull request says so', async () => {
   fixture('conflict');
   versionCut('0.2.0');
-  process.env.FAKE_COPIER_CONFLICT = 'acme/web/apps';
+  const web = join(WS, 'acme/web');
+  put(join(web, 'apps/site/template-owned.txt'), 'edited by hand\n');
+  commit(web, 'an edit the template meets');
+  git(web, 'push', '--quiet', 'origin', 'develop');
   const { result, out } = await runRecursive({ yes: true });
-  delete process.env.FAKE_COPIER_CONFLICT;
   assert.ok(has(out, '✗ CONFLICTS'));
   assert.deepEqual(result?.conflicted, ['acme/web/apps/site']);
   assert.deepEqual(result?.clean, ['acme/platform', 'acme/web']);
-  assert.match(onVersion('acme-web', '0.2.0', 'apps/site/template-owned.txt'), /^<<<<<<< /m, 'markers in the branch');
+  assert.match(
+    onVersion('acme-web', '0.2.0', 'apps/site/template-owned.txt'),
+    /^<<<<<<< current$/m,
+    'markers in the branch',
+  );
   assert.match(pull('acme-web', '0.2.0', '.body'), /^- Conflicts at `apps\/site`, committed with their markers\.$/m);
   assert.match(
     pull('acme-web', '0.2.0', '.body'),
@@ -1433,15 +1516,18 @@ test('update --recursive: a conflict is committed with its markers and the pull 
 test('update --recursive: a conflict at the repo root does not stop its apps', async () => {
   fixture('rootconflict');
   versionCut('0.2.0');
-  process.env.FAKE_COPIER_CONFLICT = 'acme/web';
+  const web = join(WS, 'acme/web');
+  put(join(web, 'template-owned.txt'), 'edited by hand\n');
+  put(join(web, 'apps/site/template-owned.txt'), 'edited by hand\n');
+  commit(web, 'an edit the template meets');
+  git(web, 'push', '--quiet', 'origin', 'develop');
   const { result, out } = await runRecursive({ yes: true });
-  delete process.env.FAKE_COPIER_CONFLICT;
   assert.deepEqual(result?.conflicted, ['acme/web', 'acme/web/apps/site'], out);
   assert.deepEqual(result?.failed, []);
   assert.match(
     onVersion('acme-web', '0.2.0', 'apps/site/template-owned.txt'),
     /^<<<<<<< /m,
-    'the app was updated after the root conflicted',
+    'the app was merged after the root conflicted',
   );
   assert.equal(git(remote('acme-web'), 'rev-list', '--count', 'develop..plexus/0.2.0'), '1', 'still one commit');
 });
@@ -1485,6 +1571,90 @@ test('the confirmation aborts cleanly without a terminal', async () => {
 });
 
 // ── the tenant-side pull: update ─────────────────────────────────────────────
+test('update: takes a version with the engine, without copier: two sites, a local edit that merges and one that conflicts', async () => {
+  fixture('update-engine');
+  versionCut('0.2.0');
+  const web = join(WS, 'acme/web');
+  put(join(web, 'notes.txt'), notes('0.1.0').replace('end\n', 'end, and mine\n'));
+  put(join(web, 'apps/site/template-owned.txt'), 'edited by hand\n');
+  commit(web, 'an edit the template meets');
+  git(web, 'push', '--quiet', 'origin', 'develop');
+  const { result, error, out } = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(error, undefined, out);
+  assert.ok(!fakeLog().some((l) => has(l, 'copier')), 'copier never ran');
+  assert.equal(
+    onVersion('acme-web', '0.2.0', 'notes.txt'),
+    'updated from 0.2.0\n1\n2\n3\nend, and mine',
+    "the template's line and the local edit, merged",
+  );
+  assert.equal(onVersion('acme-web', '0.2.0', 'apps/site/notes.txt'), notes('0.2.0').trimEnd());
+  assert.equal(
+    onVersion('acme-web', '0.2.0', 'apps/site/template-owned.txt'),
+    '<<<<<<< current\nedited by hand\n=======\nupdated from 0.2.0\n>>>>>>> new render',
+    'the edit and the template, both kept between the markers',
+  );
+  assert.equal(
+    onVersion('acme-web', '0.2.0', 'PLEXUS.md'),
+    marker('version: 0.2.0\ntemplates: [repo-turbo]\nlint: strict\n').trimEnd(),
+  );
+  assert.equal(onVersion('acme-web', '0.2.0', 'package.json'), '{"name": "touched"}');
+  assert.ok(
+    fakeLog().some((l) => l.startsWith('mise exec -- pnpm install')),
+    'a manifest moved: the lockfile refreshed',
+  );
+  assert.equal(git(remote('acme-web'), 'rev-list', '--count', 'develop..plexus/0.2.0'), '1', 'one commit');
+  assert.deepEqual(result?.clean, ['web']);
+  assert.deepEqual(result?.conflicted, ['web/apps/site']);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true');
+  assert.match(pull('acme-web', '0.2.0', '.body'), /^- Conflicts at `apps\/site`, committed with their markers\.$/m);
+  assert.match(
+    pull('acme-web', '0.2.0', '.body'),
+    /^- Files that hold conflict markers: `apps\/site\/template-owned\.txt`\.$/m,
+  );
+  assert.equal(result && isClean(result), false, 'the run exits nonzero');
+});
+
+test('update: a born-once file the old render holds and a site lacks stays missing, as the user left it', async () => {
+  fixture('update-born-once');
+  versionCut('0.2.0');
+  const { error, out } = await runUpdate({ yes: true }, { repo: join(WS, 'acme/web') });
+  assert.equal(error, undefined, out);
+  assert.match(onVersion('acme-web', '0.2.0', 'apps/site/template-owned.txt'), /^updated from 0\.2\.0$/);
+  assert.throws(
+    () => onVersion('acme-web', '0.2.0', 'apps/site/layout.txt'),
+    'both sides render it from the markers on the branch, so it is no birth',
+  );
+});
+
+test('update: a repo that still tracks a copier answers file is refused, pointing to the crossover runbook', async () => {
+  fixture('update-copier', 'copier');
+  versionCut('0.2.0');
+  const alone = await runUpdate({ yes: true }, { repo: join(WS, 'acme/web') });
+  assert.match(alone.error ?? '', /still tracks a \.copier-answers\.yml/, alone.out);
+  assert.match(alone.error ?? '', /crossover runbook/);
+  const many = await runRecursive({ yes: true }, { dir: join(WS, 'acme') });
+  assert.equal(many.error, undefined, many.out);
+  assert.deepEqual(many.result?.failed, ['platform', 'web'], 'each repo refused, the run goes on');
+  assert.equal(copierRuns().length, 0);
+  assert.deepEqual(FETCHED, []);
+  assert.throws(() => onVersion('acme-web', '0.2.0', 'template-owned.txt'), 'nothing pushed');
+});
+
+test('update: a version whose templates cannot be fetched fails the run, and pushes nothing', async () => {
+  fixture('update-unfetched');
+  versionCut('0.2.0');
+  FETCH_FAILS = true;
+  const web = join(WS, 'acme/web');
+  const { result, error, out } = await runUpdate({ yes: true }, { repo: web });
+  assert.equal(error, undefined, out);
+  assert.ok(has(out, '✗ FAILED — web: cannot take the templates of 0.2.0: npm error 404 Not Found'), out);
+  assert.deepEqual(result?.failed, ['web']);
+  assert.deepEqual(result?.pulls, []);
+  assert.equal(result && isClean(result), false, 'never "no changes"');
+  assert.throws(() => onVersion('acme-web', '0.2.0', 'template-owned.txt'), 'nothing pushed');
+  assert.equal(git(web, 'worktree', 'list').split('\n').length, 1, 'worktree removed');
+});
+
 test('update: a repo takes the newest version itself, in a worktree, and leaves its checkout alone', async () => {
   fixture('update');
   versionCut('0.1.0');
@@ -1495,21 +1665,15 @@ test('update: a repo takes the newest version itself, in a worktree, and leaves 
   const { result, error, out } = await runUpdate({ yes: true }, { repo: web });
   assert.equal(error, undefined, out);
   assert.ok(has(out, '→ web: worktree of origin/develop'));
-  const runs = copierRuns();
-  assert.equal(runs.length, 2, 'copier ran at the root and the app');
+  assert.equal(copierRuns().length, 0, 'copier never ran');
+  assert.deepEqual(FETCHED, ['0.2.0'], "the version taken, fetched; the one the repo is on is the running plx's");
   assert.ok(
-    runs.every(
-      (l) => has(l, '--vcs-ref 0.2.0') && has(l, '--skip-tasks') && has(l, '--defaults') && !l.startsWith(`${WS}/`),
-    ),
-    `copier updated to the version, outside the checkout:\n${runs.join('\n')}`,
-  );
-  assert.ok(
-    fakeLog().some((l) => l.startsWith('mise exec copier@') && !/ ignored=$/.test(l) && !has(l, `ignored=${WS}`)),
-    "the worktree's mise config ignored",
+    !fakeLog().some((l) => has(l, 'mise install')),
+    "no mise install: the tools are a checkout's, not a pull request's",
   );
   assert.match(onVersion('acme-web', '0.2.0', 'template-owned.txt'), /updated from 0\.2\.0/);
   assert.match(onVersion('acme-web', '0.2.0', 'apps/site/template-owned.txt'), /updated from 0\.2\.0/);
-  assert.equal(onVersion('acme-web', '0.2.0', 'PLEXUS.md'), MARKER.trimEnd(), 'the marker is not written');
+  assert.match(onVersion('acme-web', '0.2.0', 'PLEXUS.md'), /^version: 0\.2\.0$/m, 'the version moves with the files');
   assert.match(onVersion('acme-web', '0.2.0', '.github/workflows/ci.yml'), /pipeline\.yml@0\.2\.0/, 'refs bumped');
   assert.equal(git(remote('acme-web'), 'rev-list', '--count', 'develop..plexus/0.2.0'), '1', 'one commit');
   assert.equal(pull('acme-web', '0.2.0', '.base'), 'develop');
@@ -1540,7 +1704,7 @@ test('update: a repo takes the newest version itself, in a worktree, and leaves 
   assert.ok(
     has(again.out, 'web: plexus/0.2.0 is on origin (https://forge/acme-web/pull/1); no conflict marker remains'),
   );
-  assert.equal(copierRuns().length, 2, 'copier not run again');
+  assert.deepEqual(FETCHED, ['0.2.0'], 'nothing fetched again');
   assert.deepEqual(again.result?.pulls, ['https://forge/acme-web/pull/1']);
   assert.deepEqual(
     again.result?.mergeable,
@@ -1559,7 +1723,7 @@ test('update: a repo already at the version does nothing, and one without a rele
   const { result, error, out } = await runUpdate({ yes: true }, { repo: plat });
   assert.equal(error, undefined, out);
   assert.ok(has(out, '• platform: already at 0.1.0'));
-  assert.equal(copierRuns().length, 0);
+  assert.deepEqual(FETCHED, []);
   assert.throws(() => onVersion('acme-platform', '0.1.0', 'template-owned.txt'), 'no branch pushed');
   assert.deepEqual(result?.pulls, []);
   const notConsumer = await runUpdate({ yes: true }, { repo: up('compendium') });
@@ -1576,8 +1740,8 @@ test('update: the dry run previews in the worktree and pushes nothing', async ()
   const web = join(WS, 'acme/web');
   const { result, error, out } = await runUpdate({ dryRun: true, yes: true }, { repo: web });
   assert.equal(error, undefined, out);
-  assert.equal(copierRuns().filter((l) => has(l, '--vcs-ref 0.2.0')).length, 2, 'copier previewed both sites');
-  assert.ok(has(out, 'M template-owned.txt'), 'preview shows the change');
+  assert.ok(has(out, '[dry-run] clean template-owned.txt'), out);
+  assert.ok(has(out, '[dry-run] clean apps/site/template-owned.txt'), 'the preview shows what each site would get');
   assert.ok(has(out, '(preview) web: would commit, push plexus/0.2.0 and open a pull request against develop'));
   assert.throws(() => onVersion('acme-web', '0.2.0', 'template-owned.txt'), 'nothing pushed');
   assert.ok(!fakeLog().some((l) => has(l, 'pr create')), 'no pull request');
@@ -1592,11 +1756,11 @@ test("update: after a recursive run opened the version's pull request, the repo'
   versionCut('0.2.0');
   const recursive = await runRecursive({ yes: true });
   assert.equal(recursive.error, undefined, recursive.out);
-  const before = copierRuns().length;
+  const before = FETCHED.length;
   const { result, error, out } = await runUpdate({ yes: true }, { repo: join(WS, 'acme/platform') });
   assert.equal(error, undefined, out);
   assert.ok(has(out, 'platform: plexus/0.2.0 is on origin (https://forge/acme-platform/pull/1)'), out);
-  assert.equal(copierRuns().length, before);
+  assert.equal(FETCHED.length, before, 'nothing rendered again');
   assert.deepEqual(result?.pulls, ['https://forge/acme-platform/pull/1']);
   assert.deepEqual(result?.failed, []);
 });
@@ -1604,9 +1768,11 @@ test("update: after a recursive run opened the version's pull request, the repo'
 test('update: a conflict is committed with its markers, the pull request opened, the exit nonzero', async () => {
   fixture('update-conflict');
   versionCut('0.2.0');
-  process.env.FAKE_COPIER_CONFLICT = 'apps/site';
-  const { result, error, out } = await runUpdate({ yes: true }, { repo: join(WS, 'acme/web') });
-  delete process.env.FAKE_COPIER_CONFLICT;
+  const web = join(WS, 'acme/web');
+  put(join(web, 'apps/site/template-owned.txt'), 'edited by hand\n');
+  commit(web, 'an edit the template meets');
+  git(web, 'push', '--quiet', 'origin', 'develop');
+  const { result, error, out } = await runUpdate({ yes: true }, { repo: web });
   assert.equal(error, undefined, out);
   assert.deepEqual(result?.conflicted, ['web/apps/site']);
   assert.deepEqual(result?.clean, ['web']);
@@ -1619,10 +1785,11 @@ test('update: a pull request that needs a hand is a draft; later runs follow its
   fixture('update-hand');
   versionCut('0.2.0');
   const web = join(WS, 'acme/web');
-  process.env.FAKE_COPIER_CONFLICT = 'apps/site';
+  put(join(web, 'apps/site/template-owned.txt'), 'edited by hand\n');
+  commit(web, 'an edit the template meets');
+  git(web, 'push', '--quiet', 'origin', 'develop');
   process.env.FAKE_PNPM_FAIL = '1';
   const first = await runUpdate({ yes: true }, { repo: web });
-  delete process.env.FAKE_COPIER_CONFLICT;
   delete process.env.FAKE_PNPM_FAIL;
   assert.equal(first.error, undefined, first.out);
   const url = 'https://forge/acme-web/pull/1';
@@ -1654,7 +1821,7 @@ test('update: a pull request that needs a hand is a draft; later runs follow its
   assert.deepEqual(second.result?.conflicted, ['web/apps/site/template-owned.txt'], 'still needs a human');
   assert.deepEqual(second.result?.mergeable, []);
   assert.equal(git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0'), tip, 'the branch is where it was');
-  assert.equal(copierRuns().length, 2, 'copier not run again');
+  assert.deepEqual(FETCHED, ['0.2.0'], 'nothing rendered again');
 
   // Somebody resolves the conflict on the branch.
   const human = join(WS, 'human');
@@ -1704,10 +1871,11 @@ test('update: where the forge refuses a draft the pull request is an ordinary on
   versionCut('0.2.0');
   const web = join(WS, 'acme/web');
   const url = 'https://forge/acme-web/pull/1';
+  put(join(web, 'apps/site/template-owned.txt'), 'edited by hand\n');
+  commit(web, 'an edit the template meets');
+  git(web, 'push', '--quiet', 'origin', 'develop');
   process.env.FAKE_GH_NO_DRAFTS = '1';
-  process.env.FAKE_COPIER_CONFLICT = 'apps/site';
   const first = await runUpdate({ yes: true }, { repo: web });
-  delete process.env.FAKE_COPIER_CONFLICT;
   assert.equal(first.error, undefined, first.out);
   const creates = fakeLog().filter((l) => has(l, 'gh[acme-web] pr create'));
   assert.equal(creates.length, 2, 'a draft asked for, then an ordinary one');
@@ -1761,7 +1929,7 @@ test('update: where the forge refuses a draft the pull request is an ordinary on
   assert.equal(third.result && isClean(third.result), true);
 });
 
-test('update: a pull request is ready only once every site the branch holds records the version', async () => {
+test('update: a pull request is ready only once the root marker on its branch names the version', async () => {
   fixture('update-behind');
   versionCut('0.2.0');
   const web = join(WS, 'acme/web');
@@ -1769,38 +1937,35 @@ test('update: a pull request is ready only once every site the branch holds reco
   commit(web, 'lockfile');
   git(web, 'push', '--quiet', 'origin', 'develop');
   const url = 'https://forge/acme-web/pull/1';
-  process.env.FAKE_COPIER_FAIL = 'apps/site';
   const first = await runUpdate({ yes: true }, { repo: web });
-  delete process.env.FAKE_COPIER_FAIL;
   assert.equal(first.error, undefined, first.out);
-  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'a site whose copier run failed: a draft');
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'false');
 
-  // A site the default branch gained since is none of the branch's.
-  put(join(web, 'apps/blog/.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-app-nextjs\n');
-  commit(web, 'blog');
-  git(web, 'push', '--quiet', 'origin', 'develop');
+  // Somebody sets the version back on the branch.
+  const human = join(WS, 'human');
+  git(WS, 'clone', '--quiet', '--branch', 'plexus/0.2.0', remote('acme-web'), human);
+  put(join(human, 'PLEXUS.md'), marker('version: 0.1.0\ntemplates: [repo-turbo]\nlint: strict\n'));
+  commit(human, 'the version back');
+  git(human, 'push', '--quiet', 'origin', 'plexus/0.2.0');
   const second = await runUpdate({ yes: true }, { repo: web });
   assert.equal(second.error, undefined, second.out);
   assert.ok(
-    has(second.out, `web: plexus/0.2.0 is on origin (${url}); \`apps/site\` not at 0.2.0: copier did not run there`),
+    has(second.out, `web: plexus/0.2.0 is on origin (${url}); the root marker does not name 0.2.0 — a draft again`),
     second.out,
   );
-  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'no marker, but a site not at the version: still a draft');
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'no conflict marker, but the version not named: a draft');
   const body = pull('acme-web', '0.2.0', '.body');
   assert.match(
     body,
-    /^- The answers at `apps\/site` do not record 0\.2\.0: copier did not run here\. On this branch, in `apps\/site`, run `mise exec copier@[0-9.]+ -- copier update --trust --skip-answered --vcs-ref 0\.2\.0` and commit what it changes\.$/m,
+    /^- The root `PLEXUS\.md` does not name version 0\.2\.0, which `plx update` writes with the templates: restore it, or delete this branch and run `plx update --to 0\.2\.0` again\.$/m,
   );
   assert.match(body, /^- Run `pnpm install` once resolved, and commit the lockfile\.$/m, 'not ready, and a lockfile');
-  assert.doesNotMatch(body, /apps\/blog/, "the tip's sites, not the default branch's");
-  assert.deepEqual(second.result?.failed, ['web/apps/site (not at 0.2.0)'], 'the run needs a human');
+  assert.deepEqual(second.result?.failed, ['web (not at 0.2.0)'], 'the run needs a human');
   assert.deepEqual(second.result?.mergeable, []);
 
-  // Somebody runs copier for it on the branch.
-  const human = join(WS, 'human');
-  git(WS, 'clone', '--quiet', '--branch', 'plexus/0.2.0', remote('acme-web'), human);
-  put(join(human, 'apps/site/.copier-answers.yml'), '_commit: 0.2.0\n_src_path: gh:plexus-ms/template-app-nextjs\n');
-  commit(human, 'copier update at apps/site');
+  // Restored on the branch.
+  put(join(human, 'PLEXUS.md'), marker('version: 0.2.0\ntemplates: [repo-turbo]\nlint: strict\n'));
+  commit(human, 'the version restored');
   git(human, 'push', '--quiet', 'origin', 'plexus/0.2.0');
   const third = await runUpdate({ yes: true }, { repo: web });
   assert.equal(third.error, undefined, third.out);
@@ -1816,19 +1981,16 @@ test('update: a pull request is ready only once every site the branch holds reco
   assert.equal(third.result && isClean(third.result), true);
 });
 
-test("update: plx's pull request is one commit, scratch ones folded in; a later run asks for no lockfile on it", async () => {
+test("update: plx's pull request is one commit; a later run asks for no lockfile on it", async () => {
   fixture('update-one-commit');
   versionCut('0.2.0');
   const web = join(WS, 'acme/web');
-  put(join(web, '.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/preset-repo-web\n');
   put(join(web, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
-  commit(web, 'old template name, lockfile');
+  commit(web, 'lockfile');
   git(web, 'push', '--quiet', 'origin', 'develop');
   const first = await runUpdate({ yes: true }, { repo: web });
   assert.equal(first.error, undefined, first.out);
-  assert.ok(has(first.out, 'the template is gh:plexus-ms/template-repo-turbo now'), first.out);
   assert.equal(git(remote('acme-web'), 'rev-list', '--count', 'develop..plexus/0.2.0'), '1', 'one commit');
-  assert.match(onVersion('acme-web', '0.2.0', '.copier-answers.yml'), /template-repo-turbo/, 'the rename in it');
   assert.equal(pull('acme-web', '0.2.0', '.draft'), 'false');
 
   const second = await runUpdate({ yes: true }, { repo: web });
@@ -1886,22 +2048,6 @@ test("update: in CI's shallow checkout a later run fetches the tip alone and ask
   assert.equal(git(web, 'rev-parse', '--is-shallow-repository'), 'false');
 });
 
-test('update: a site whose copier run failed mid-merge leaves unmerged entries; the pull request is opened all the same', async () => {
-  fixture('update-unmerged');
-  versionCut('0.2.0');
-  const web = join(WS, 'acme/web');
-  process.env.FAKE_COPIER_UNMERGED = 'apps/site';
-  const first = await runUpdate({ yes: true }, { repo: web });
-  delete process.env.FAKE_COPIER_UNMERGED;
-  assert.equal(first.error, undefined, first.out);
-  assert.ok(has(first.out, 'fake copier: stopped mid-merge'), first.out);
-  assert.doesNotMatch(first.out, /soft reset/, first.out);
-  assert.equal(pull('acme-web', '0.2.0'), 'https://forge/acme-web/pull/1', 'opened');
-  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true');
-  assert.equal(git(remote('acme-web'), 'rev-list', '--count', 'develop..plexus/0.2.0'), '1', 'one commit');
-  assert.deepEqual(first.result?.failed, ['web/apps/site']);
-});
-
 test("update: the opening run updates the sites origin's branch holds, not the checkout's", async () => {
   fixture('update-origin-sites');
   versionCut('0.2.0');
@@ -1909,15 +2055,15 @@ test("update: the opening run updates the sites origin's branch holds, not the c
   // An app on origin's develop that the checkout has not pulled yet.
   const other = join(WS, 'other');
   git(WS, 'clone', '--quiet', '--branch', 'develop', remote('acme-web'), other);
-  put(join(other, 'apps/blog/.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-app-nextjs\n');
+  put(join(other, 'apps/blog/PLEXUS.md'), marker('templates: [app-nextjs]\n'));
   put(join(other, 'apps/blog/template-owned.txt'), 'generated\n');
+  put(join(other, 'apps/blog/notes.txt'), notes('0.1.0'));
   commit(other, 'blog');
   git(other, 'push', '--quiet', 'origin', 'develop');
   const first = await runUpdate({ yes: true }, { repo: web });
   assert.equal(first.error, undefined, first.out);
-  assert.ok(has(first.out, '→ web/apps/blog: copier update to 0.2.0'), first.out);
-  assert.match(onVersion('acme-web', '0.2.0', 'apps/blog/.copier-answers.yml'), /^_commit: 0\.2\.0$/m);
-  assert.match(pull('acme-web', '0.2.0', '.body'), /`copier update` at the root, `apps\/blog`, `apps\/site`/);
+  assert.match(onVersion('acme-web', '0.2.0', 'apps/blog/template-owned.txt'), /^updated from 0\.2\.0$/);
+  assert.match(pull('acme-web', '0.2.0', '.body'), /the templates at the root, `apps\/blog`, `apps\/site`/);
   assert.equal(pull('acme-web', '0.2.0', '.draft'), 'false');
   assert.deepEqual(first.result?.clean, ['web', 'web/apps/blog', 'web/apps/site']);
 
@@ -1928,68 +2074,54 @@ test("update: the opening run updates the sites origin's branch holds, not the c
   assert.deepEqual(later.result?.mergeable, ['https://forge/acme-web/pull/1']);
 });
 
-test('update: a later run opening the missing pull request makes it a draft for a site not at the version, markers or not', async () => {
+test('update: a later run opening the missing pull request makes it a draft while the root marker does not name the version', async () => {
   fixture('update-late-behind');
   versionCut('0.2.0');
   const web = join(WS, 'acme/web');
-  process.env.FAKE_COPIER_FAIL = 'apps/site';
   process.env.FAKE_GH_PR_CREATE_FAIL = '1';
   const first = await runUpdate({ yes: true }, { repo: web });
-  delete process.env.FAKE_COPIER_FAIL;
   delete process.env.FAKE_GH_PR_CREATE_FAIL;
   assert.equal(first.error, undefined, first.out);
   assert.throws(() => pull('acme-web', '0.2.0'), 'no pull request');
+  const human = join(WS, 'human');
+  git(WS, 'clone', '--quiet', '--branch', 'plexus/0.2.0', remote('acme-web'), human);
+  put(join(human, 'PLEXUS.md'), marker('version: 0.1.0\ntemplates: [repo-turbo]\nlint: strict\n'));
+  commit(human, 'the version back');
+  git(human, 'push', '--quiet', 'origin', 'plexus/0.2.0');
   const second = await runUpdate({ yes: true }, { repo: web });
   assert.equal(second.error, undefined, second.out);
   assert.ok(has(second.out, 'web: plexus/0.2.0 is on origin with no pull request — opening it as a draft'), second.out);
-  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'no marker, but a site behind: a draft');
-  assert.deepEqual(second.result?.failed, ['web/apps/site (not at 0.2.0)']);
+  assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'no conflict marker, but the version not named: a draft');
+  assert.deepEqual(second.result?.failed, ['web (not at 0.2.0)']);
   assert.deepEqual(second.result?.mergeable, []);
 });
 
-test("update: answers that do not parse are a site behind; another template's answers are no site", async () => {
-  fixture('update-answers-kinds');
+test('update: a marker that lists no templates is no site; a root marker that cannot be read is not at the version', async () => {
+  fixture('update-marker-kinds');
   versionCut('0.2.0');
   const web = join(WS, 'acme/web');
-  put(join(web, 'tools/gen/.copier-answers.yml'), '_commit: 1.0.0\n_src_path: gh:someone/else\n');
+  put(join(web, 'tools/gen/PLEXUS.md'), marker(''));
   put(join(web, 'tools/gen/README.md'), 'x\n');
-  commit(web, 'a project of another template');
+  commit(web, 'a directory with a marker of its own and no templates');
   git(web, 'push', '--quiet', 'origin', 'develop');
   const first = await runUpdate({ yes: true }, { repo: web });
   assert.equal(first.error, undefined, first.out);
+  assert.deepEqual(first.result?.clean, ['web', 'web/apps/site'], 'the marker without templates renders nothing');
   const later = await runUpdate({ yes: true }, { repo: web });
   assert.equal(later.error, undefined, later.out);
-  assert.ok(has(later.out, 'every site is at 0.2.0'), "another template's answers are not counted behind");
+  assert.ok(has(later.out, 'every site is at 0.2.0'), later.out);
   assert.deepEqual(later.result?.mergeable, ['https://forge/acme-web/pull/1']);
 
-  // Somebody breaks the app's answers: no marker in them, but no version can be read.
+  // Somebody breaks the root marker: no conflict marker in it, but no version can be read.
   const human = join(WS, 'human');
   git(WS, 'clone', '--quiet', '--branch', 'plexus/0.2.0', remote('acme-web'), human);
-  put(join(human, 'apps/site/.copier-answers.yml'), '- not a mapping\n');
+  put(join(human, 'PLEXUS.md'), '---\nversion: [\n---\n');
   commit(human, 'oops');
   git(human, 'push', '--quiet', 'origin', 'plexus/0.2.0');
   const broken = await runUpdate({ yes: true }, { repo: web });
   assert.equal(broken.error, undefined, broken.out);
   assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true', 'a draft again');
-  assert.deepEqual(broken.result?.failed, ['web/apps/site (not at 0.2.0)']);
-});
-
-test('update: a template rename is a pull request of its own when copier changes nothing else', async () => {
-  fixture('update-rename-only');
-  versionCut('0.2.0');
-  const plat = join(WS, 'acme/platform');
-  put(join(plat, '.copier-answers.yml'), '_commit: 0.1.0\n_src_path: gh:plexus-ms/preset-repo-platform\n');
-  git(plat, 'rm', '--quiet', '-r', '.github');
-  commit(plat, 'old template name, no workflow refs');
-  git(plat, 'push', '--quiet', 'origin', 'main');
-  process.env.FAKE_COPIER_NOOP = '1';
-  const first = await runUpdate({ yes: true }, { repo: plat });
-  delete process.env.FAKE_COPIER_NOOP;
-  assert.equal(first.error, undefined, first.out);
-  assert.doesNotMatch(first.out, /nothing changed/, first.out);
-  assert.equal(pull('acme-platform', '0.2.0'), 'https://forge/acme-platform/pull/1');
-  assert.match(onVersion('acme-platform', '0.2.0', '.copier-answers.yml'), /template-repo-operations/);
-  assert.equal(git(remote('acme-platform'), 'rev-list', '--count', 'main..plexus/0.2.0'), '1');
+  assert.deepEqual(broken.result?.failed, ['web (not at 0.2.0)']);
 });
 
 test('update: a pending minor rests inside the interval; past it the newest is taken, the versions skipped in one pull', async () => {
@@ -2007,7 +2139,7 @@ test('update: a pending minor rests inside the interval; past it the newest is t
     ),
     rest.out,
   );
-  assert.equal(copierRuns().length, 0, 'copier not run');
+  assert.deepEqual(FETCHED, [], 'nothing fetched');
   assert.equal(git(web, 'worktree', 'list').split('\n').length, 1, 'no worktree made');
   assert.ok(!fakeLog().some((l) => has(l, 'pr create')), 'no pull request');
   assert.deepEqual(rest.result?.resting, [
@@ -2030,16 +2162,12 @@ test('update: a version branch on origin with no pull request gets one from a la
   fixture('update-dead-end');
   versionCut('0.2.0');
   const web = join(WS, 'acme/web');
-  put(
-    join(web, '.copier-answers.yml'),
-    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-turbo\npr_reviewers: erin\n',
-  );
-  commit(web, 'erin reviews');
+  put(join(web, 'PLEXUS.md'), marker('version: 0.1.0\ntemplates: [repo-turbo]\npr_reviewers: erin\n'));
+  put(join(web, 'apps/site/template-owned.txt'), 'edited by hand\n');
+  commit(web, 'an edit the template meets');
   git(web, 'push', '--quiet', 'origin', 'develop');
-  process.env.FAKE_COPIER_CONFLICT = 'apps/site';
   process.env.FAKE_GH_PR_CREATE_FAIL = '1';
   const first = await runUpdate({ yes: true }, { repo: web });
-  delete process.env.FAKE_COPIER_CONFLICT;
   delete process.env.FAKE_GH_PR_CREATE_FAIL;
   assert.equal(first.error, undefined, first.out);
   assert.ok(
@@ -2070,7 +2198,11 @@ test('update: a version branch on origin with no pull request gets one from a la
     /^- Files that hold conflict markers: `apps\/site\/template-owned\.txt`\.$/m,
   );
   assert.match(pull('acme-web', '0.2.0', '.body'), /a later run found the branch on origin with no pull request/);
-  assert.equal(pull('acme-web', '0.2.0', '.reviewers'), 'erin', "with the review request, from the branch's answers");
+  assert.equal(
+    pull('acme-web', '0.2.0', '.reviewers'),
+    'erin',
+    "with the review request, from the branch's root marker",
+  );
   assert.deepEqual(second.result?.pulls, ['https://forge/acme-web/pull/1']);
   assert.deepEqual(second.result?.conflicted, ['web/apps/site/template-owned.txt']);
   assert.equal(git(remote('acme-web'), 'rev-parse', 'plexus/0.2.0'), tip, 'the branch is where it was');
@@ -2132,10 +2264,7 @@ test('update: the review is asked of the users pr_reviewers names, or --reviewer
   fixture('update-reviewers');
   versionCut('0.2.0');
   const plat = join(WS, 'acme/platform');
-  put(
-    join(plat, '.copier-answers.yml'),
-    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\npr_reviewers: alice, bob\n',
-  );
+  put(join(plat, 'PLEXUS.md'), marker('version: 0.1.0\ntemplates: [repo-operations]\npr_reviewers: alice, bob\n'));
   commit(plat, 'reviewers');
   git(plat, 'push', '--quiet', 'origin', 'main');
   const requests = () => fakeLog().filter((l) => has(l, '/requested_reviewers'));
@@ -2151,9 +2280,11 @@ test('update: the review is asked of the users pr_reviewers names, or --reviewer
   assert.equal(requests().length, 1, 'requested once');
 
   // --reviewer overrides the answer, on a draft as on any other; a recursive run passes it through.
-  process.env.FAKE_COPIER_CONFLICT = '/web';
+  const web = join(WS, 'acme/web');
+  put(join(web, 'apps/site/template-owned.txt'), 'edited by hand\n');
+  commit(web, 'an edit the template meets');
+  git(web, 'push', '--quiet', 'origin', 'develop');
   const asked = await runRecursive({ yes: true }, { dir: join(WS, 'acme'), reviewers: ['carol'] });
-  delete process.env.FAKE_COPIER_CONFLICT;
   assert.equal(asked.error, undefined, asked.out);
   assert.equal(pull('acme-web', '0.2.0', '.draft'), 'true');
   assert.equal(pull('acme-web', '0.2.0', '.reviewers'), 'carol', 'requested on the draft');
@@ -2161,20 +2292,16 @@ test('update: the review is asked of the users pr_reviewers names, or --reviewer
 
   // An answer that names a team is read only when a pull request is opened.
   const bad = join(WS, 'acme/platform');
-  put(
-    join(bad, '.copier-answers.yml'),
-    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\npr_reviewers: acme/ops\n',
-  );
+  put(join(bad, 'PLEXUS.md'), marker('version: 0.1.0\ntemplates: [repo-operations]\npr_reviewers: acme/ops\n'));
   commit(bad, 'a team');
   git(bad, 'push', '--quiet', 'origin', 'main');
   const found = await runUpdate({ yes: true }, { repo: bad, to: '0.2.0' });
   assert.equal(found.error, undefined, found.out);
   assert.deepEqual(found.result?.failed, [], 'a run that finds the branch on origin opens nothing and reads nothing');
   // Once on 0.2.0, with 0.3.0 cut the day before: it rests, then is asked.
-  put(
-    join(bad, '.copier-answers.yml'),
-    '_commit: 0.2.0\n_src_path: gh:plexus-ms/template-repo-operations\npr_reviewers: acme/ops\n',
-  );
+  put(join(bad, 'PLEXUS.md'), marker('version: 0.2.0\ntemplates: [repo-operations]\npr_reviewers: acme/ops\n'));
+  put(join(bad, 'template-owned.txt'), `${owned('0.2.0')}\n`);
+  put(join(bad, 'notes.txt'), notes('0.2.0'));
   commit(bad, 'Plexus 0.2.0');
   git(bad, 'push', '--quiet', 'origin', 'main');
   versionCut('0.3.0', '2026-02-28');
@@ -2189,28 +2316,6 @@ test('update: the review is asked of the users pr_reviewers names, or --reviewer
   );
   assert.equal(pull('acme-platform', '0.3.0'), 'https://forge/acme-platform/pull/2', 'opened all the same');
   assert.deepEqual(opened.result?.failed, ['platform (review request)'], 'and the run needs a human');
-});
-
-test('update: pr_reviewers is read as copier leaves it, so the pull request that renames the answer already uses it', async () => {
-  fixture('update-reviewers-renamed');
-  versionCut('0.2.0');
-  const plat = join(WS, 'acme/platform');
-  put(
-    join(plat, '.copier-answers.yml'),
-    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\nrenovate_reviewers: dana\n',
-  );
-  commit(plat, 'the old answer');
-  git(plat, 'push', '--quiet', 'origin', 'main');
-  process.env.FAKE_COPIER_RENAME_REVIEWERS = '1';
-  const { error, out } = await runUpdate({ yes: true }, { repo: plat });
-  delete process.env.FAKE_COPIER_RENAME_REVIEWERS;
-  assert.equal(error, undefined, out);
-  assert.match(onVersion('acme-platform', '0.2.0', '.copier-answers.yml'), /^pr_reviewers: dana$/m);
-  assert.equal(
-    pull('acme-platform', '0.2.0', '.reviewers'),
-    'dana',
-    'the renamed answer, in the pull request that renames it',
-  );
 });
 
 test("update: the pull request's author is left out of the review request, and the run says so", async () => {
@@ -2271,15 +2376,12 @@ test('update: asking takes the version whatever its age, by --now or by naming i
   assert.match(pull('acme-platform', '0.2.0', '.body'), /asked for \(--to 0\.2\.0\)/);
 });
 
-test('update: the interval is the answer of the repo template, a week by default, zero takes every version, and the option overrides both', async () => {
+test('update: the interval is the answer in the root marker, a week by default, zero takes every version, and the option overrides both', async () => {
   fixture('update-age');
   versionCut('0.2.0', '2026-02-25');
-  // The platform repo's answers set three days: four days is past it.
+  // The platform repo's marker sets three days: four days is past it.
   const plat = join(WS, 'acme/platform');
-  put(
-    join(plat, '.copier-answers.yml'),
-    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-operations\nupdate_max_age: 3\n',
-  );
+  put(join(plat, 'PLEXUS.md'), marker('version: 0.1.0\ntemplates: [repo-operations]\nupdate_max_age: 3\n'));
   commit(plat, 'three days at most');
   git(plat, 'push', '--quiet', 'origin', 'main');
   const short = await runUpdate({ yes: true }, { repo: plat });
@@ -2293,10 +2395,7 @@ test('update: the interval is the answer of the repo template, a week by default
   const long = await runUpdate({ yes: true }, { repo: web, maxAge: 90, today: '2026-04-15' });
   assert.ok(has(long.out, 'cut 49 days ago; the interval is 90 days'), long.out);
   // The repo is judged by what origin has on the branch the version lands on.
-  put(
-    join(web, '.copier-answers.yml'),
-    '_commit: 0.1.0\n_src_path: gh:plexus-ms/template-repo-turbo\nupdate_max_age: soon\n',
-  );
+  put(join(web, 'PLEXUS.md'), marker('version: 0.1.0\ntemplates: [repo-turbo]\nupdate_max_age: soon\n'));
   const local = await runUpdate({ yes: true }, { repo: web });
   assert.ok(has(local.out, 'the interval is 7 days'), 'an edit in the checkout is not what origin says');
   commit(web, 'soon');
@@ -2331,7 +2430,10 @@ test('update: a pending patch is taken at once; a pending major is named, and ta
   assert.throws(() => onVersion('acme-web', '1.0.0', 'template-owned.txt'), 'the major is not taken');
 
   // The platform repo, once on the hotfix, has only the major ahead: it rests, a month on as well.
-  put(join(plat, '.copier-answers.yml'), '_commit: 0.1.1\n_src_path: gh:plexus-ms/template-repo-operations\n');
+  // Its pull request merged: the files and the version of 0.1.1.
+  put(join(plat, 'PLEXUS.md'), marker('version: 0.1.1\ntemplates: [repo-operations]\n'));
+  put(join(plat, 'template-owned.txt'), `${owned('0.1.1')}\n`);
+  put(join(plat, 'notes.txt'), notes('0.1.1'));
   commit(plat, 'Plexus 0.1.1');
   git(plat, 'push', '--quiet', 'origin', 'main');
   const rest = await runUpdate({ yes: true }, { repo: plat, today: '2026-04-01' });
@@ -2345,7 +2447,12 @@ test('update: a pending patch is taken at once; a pending major is named, and ta
   const asked = await runUpdate({ yes: true }, { repo: plat, now: true });
   assert.equal(asked.error, undefined, asked.out);
   assert.ok(has(asked.out, '• platform: takes 1.0.0 — asked for (--now)'), asked.out);
-  assert.match(onVersion('acme-platform', '1.0.0', 'template-owned.txt'), /updated from 1\.0\.0/);
+  assert.match(onVersion('acme-platform', '1.0.0', 'template-owned.txt'), /^updated from 1\.0\.0$/);
+  assert.deepEqual(
+    FETCHED.slice(-2),
+    ['0.1.1', '1.0.0'],
+    'a repo on another version than the running plx: both sides fetched, each rendered by its own plx-template',
+  );
 });
 
 test('ship to update, end to end: a minor rests inside the interval, a patch cut after it arrives at once with it', async () => {

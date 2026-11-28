@@ -113,22 +113,24 @@
 // git-merge-file.ts, that touches the filesystem or runs a command
 // (boundary.test.ts).
 import { readFile, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { text as readAll } from 'node:stream/consumers';
 import { parseArgs } from 'node:util';
-import { applyChanges, planMerge, readTree, requireDirectory, requireEmpty } from './directory.ts';
+import {
+  applyChanges,
+  isObject,
+  POLICIES_VERSION,
+  planMerge,
+  policiesOf,
+  readJson,
+  readRender,
+  readTree,
+  requireDirectory,
+  requireEmpty,
+} from './directory.ts';
 import { InputError, messageOf } from './errors.ts';
 import { render } from './render.ts';
-import {
-  type Answers,
-  MODE_TYPE,
-  type Policies,
-  type Policy,
-  type RenderError,
-  type RenderResult,
-  SYMLINK,
-  type Tree,
-} from './types.ts';
+import type { Answers, RenderError, RenderResult, Tree } from './types.ts';
 
 /** The exit codes. */
 export const EXIT = { ok: 0, failed: 1, usage: 2, input: 3 } as const;
@@ -200,8 +202,6 @@ and on standard error, with nothing written.
 
 class UsageError extends Error {}
 
-const POLICIES: readonly string[] = ['merge', 'born-once'] satisfies Policy[];
-
 /** Runs steps that may fail with an input error, keeping each failure, so that a command reports them all. */
 function collector() {
   const problems: RenderError[] = [];
@@ -221,9 +221,6 @@ function collector() {
   return { problems, attempt, holds };
 }
 
-/** Where `render` writes the policies of the render in `dir`: beside it, so that no file of the render is one it did not render. */
-export const policiesOf = (dir: string): string => `${resolve(dir)}.plx-template.json`;
-
 /** Writes `value` as JSON to standard output. */
 function print(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -242,21 +239,6 @@ function complain(errors: readonly RenderError[]): void {
   }
 }
 
-/** The JSON of `path`, read by `read`; what goes wrong is an input error about `what`, with `hint` after a failed read. */
-async function readJson(read: () => Promise<string>, path: string, what: string, hint = ''): Promise<unknown> {
-  let text: string;
-  try {
-    text = await read();
-  } catch (error) {
-    throw new InputError(`cannot read the ${what}: ${messageOf(error)}${hint}`, path);
-  }
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw new InputError(`the ${what} is no JSON: ${messageOf(error)}`, path);
-  }
-}
-
 /** The answers: a JSON object from `source`, a file or, for `-`, standard input; none without one. */
 async function readAnswers(source: string | undefined): Promise<Answers> {
   if (source === undefined) return {};
@@ -267,43 +249,6 @@ async function readAnswers(source: string | undefined): Promise<Answers> {
   );
   if (!isObject(answers)) throw new InputError('the answers are not a JSON object', source);
   return answers;
-}
-
-/** The version of the policies file `render` writes and `merge` reads. */
-const POLICIES_VERSION = 1;
-
-/** The policies `render` wrote beside the render in `dir`, which holds `tree`; each way it can be wrong is an input error. */
-async function readPolicies(dir: string, tree: Tree): Promise<Policies> {
-  const file = policiesOf(dir);
-  const fail = (what: string): never => {
-    throw new InputError(`the policies file ${what}`, file);
-  };
-  const parsed = await readJson(
-    () => readFile(file, 'utf8'),
-    file,
-    'policies file',
-    '; `render` writes one beside the render it writes',
-  );
-  if (!isObject(parsed)) return fail('is not a JSON object with a version and files');
-  if (parsed.version === undefined) return fail('has no version');
-  if (parsed.version !== POLICIES_VERSION)
-    return fail(
-      `is version ${String(parsed.version)}, and this plx-template reads version ${POLICIES_VERSION} only; was it written by a later plx-template?`,
-    );
-  if (!isObject(parsed.files)) return fail('has no files: a map of path to { template, policy }');
-  const files = Object.entries(parsed.files);
-  const bad = files.filter(([, v]) => !isObject(v) || !POLICIES.includes(v.policy as string)).map(([path]) => path);
-  if (bad.length > 0) return fail(`gives no policy, merge or born-once, to ${bad.join(', ')}`);
-  const lacking = [...tree.keys()].filter((path) => !(path in (parsed.files as object)));
-  if (lacking.length > 0) return fail(`lacks ${lacking.join(', ')}, which its render holds`);
-  const extra = files.map(([path]) => path).filter((path) => !tree.has(path));
-  if (extra.length > 0) return fail(`names ${extra.join(', ')}, which its render does not hold`);
-  return new Map(files as [string, { policy: Policy }][]);
-}
-
-/** Whether `value` is a JSON object: not null, not a list. */
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** The JSON a render prints: the core's result, but for its tree. */
@@ -324,20 +269,6 @@ function refuse(errors: readonly RenderError[], json: unknown = { errors }): num
   return EXIT.input;
 }
 
-/** A render directory as a tree with its policies; a symlink in it is an input error, for it is no render. */
-async function readRender(
-  dir: string,
-  { problems, attempt }: ReturnType<typeof collector>,
-): Promise<{ tree: Tree; policies: Policies } | undefined> {
-  const tree = await attempt(() => readTree(dir));
-  if (tree === undefined) return undefined;
-  const links = [...tree].filter(([, e]) => (e.mode & MODE_TYPE) === SYMLINK).map(([path]) => join(dir, path));
-  for (const path of links) problems.push({ message: 'is a symlink, and a render holds none', path });
-  if (links.length > 0) return undefined;
-  const policies = await attempt(() => readPolicies(dir, tree));
-  return policies && { tree, policies };
-}
-
 async function mergeCommand(oldDir: string, newDir: string, target: string): Promise<number> {
   const found = collector();
   const { problems, attempt, holds } = found;
@@ -345,8 +276,8 @@ async function mergeCommand(oldDir: string, newDir: string, target: string): Pro
   if (oldPath === newPath) problems.push({ message: 'the old and the new render are one directory', path: oldDir });
   if (targetPath === oldPath || targetPath === newPath)
     problems.push({ message: 'the target is one of the renders, which merge must not change', path: target });
-  const oldRender = await readRender(oldDir, found);
-  const newRender = await readRender(newDir, found);
+  const oldRender = await attempt(() => readRender(oldDir));
+  const newRender = await attempt(() => readRender(newDir));
   const present = await holds(() => requireDirectory(target));
   const plan = present && oldRender && newRender && (await attempt(() => planMerge(target, oldRender, newRender)));
   if (!plan || problems.length > 0) return refuse(problems);

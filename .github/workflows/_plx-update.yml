@@ -4,13 +4,16 @@ name: _plx-update
 # its step and a schedule, not whenever one is cut. `plx update` asks the forge
 # for the versions (the compendium's releases) and decides: a patch (a hotfix)
 # is taken at once; a minor (routine) once the oldest version the repo has not
-# taken is as old as its interval (the repo's answer `update_max_age`, 7 days
-# unless it says otherwise); a major (a changed contract) only when asked
-# (`now`, or a `version` named), which takes the newest version, or the one
-# named, whatever its step. Otherwise the repo rests, and the run says why in
-# one line and ends green. Taking a version is copier update at every
-# site in a worktree of the branch the version lands on, the marker, the
-# lockfile, the workflow refs, and the pull request on `plexus/<version>`. A
+# taken is as old as its interval (the answer `update_max_age` in the repo's
+# root marker, 7 days unless it says otherwise); a major (a changed contract)
+# only when asked (`now`, or a `version` named), which takes the newest
+# version, or the one named, whatever its step. Otherwise the repo rests, and
+# the run says why in one line and ends green. Taking a version is the
+# templates of the version the repo is on and of the one it takes, rendered
+# and merged at every site in a worktree of the branch the version lands on
+# (another version's fetched from the npm registry, with the npm of the node
+# the repo pins), the version in the root marker, the lockfile, the workflow
+# refs, and the pull request on `plexus/<version>`. A
 # branch already on origin is never moved, so a scheduled run cannot overwrite
 # a conflict somebody is resolving. The caller pins plx in its mise.toml, so
 # the pull is made by the tool of the version the repo rests on; a change to the

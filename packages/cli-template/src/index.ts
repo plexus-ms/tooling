@@ -9,12 +9,13 @@
 // merge of one file that the caller hands to `merge`, is the one function
 // that does: it writes temporary files and runs git. The functions that touch
 // a directory for a caller of the library are exported beside them, `readTree`,
-// `readManifest` and `planMerge` (directory.ts).
+// `readManifest`, `readRender` and `planMerge` (directory.ts).
 export {
   type MergePlan,
   planMerge,
   type RenderedSide,
   readManifest,
+  readRender,
   readTemplateDirectory,
   readTree,
   type TemplateDirectory,
