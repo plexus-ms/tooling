@@ -126,7 +126,7 @@ function problemsOf(now: readonly MarkerSite[], before: readonly MarkerSite[]): 
 }
 
 /** The refusal that the root marker's `version` is not the running plx's, at HEAD and in the working tree; none when it is. */
-function versionRefusal(
+export function versionRefusal(
   now: readonly MarkerSite[],
   before: readonly MarkerSite[],
   plxVersion: string,
