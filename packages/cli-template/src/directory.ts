@@ -29,13 +29,12 @@
 // paths it is given, an entry to write or nothing to delete, and touches
 // nothing else. It never writes or deletes through a symlink: a path whose
 // directory above it is a symlink or a file, or that is itself a symlink, is
-// skipped.
-// The core answers `kept` where a directory above a path is a symlink or the path is one (rules 1 and 4 of merge.ts), but it still reports such a path.
-// A reported path that the merged tree lacks reaches this as a deletion.
-// These guards are what keeps a `kept` or `conflicted` path untouched.
-// A file is written only where its bytes differ from what is there.
-// A
-// file that exists keeps its permissions but for its executable bits, which
+// skipped. The core answers `kept` where a directory above a path is a
+// symlink or the path is one (rules 1 and 4 of merge.ts), but it still reports
+// such a path, and a reported path that the merged tree lacks reaches this as a
+// deletion. These guards are what keeps a `kept` or `conflicted` path
+// untouched. A file is written only where its bytes differ from what is there.
+// A file that exists keeps its permissions but for its executable bits, which
 // follow the entry's, and never widen beyond that: where the entry is
 // executable, a mode gains the owner's execute bit and the group's and others'
 // only where they may read (0o600 becomes 0o700, 0o644 becomes 0o755); where it
