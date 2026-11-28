@@ -419,6 +419,7 @@ test('major is asked of a repo with display versions, and of no other', async ()
   assert.ok(!(await turboMarker({})).includes('major:'));
   assert.ok(!(await turboMarker({ display_versions: false })).includes('major:'));
   assert.ok(!(await turboMarker({ publishes_packages: true })).includes('major:'));
+  assert.ok(!(await turboMarker({ publishes_packages: true, display_versions: true })).includes('major:'));
 });
 
 // The version the repo is on is the running plx's: the bundled templates are that version's.
