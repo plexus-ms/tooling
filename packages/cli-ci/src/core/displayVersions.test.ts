@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { Context, UsageError } from '@plexus-ms/lib';
+import { Context, newSite, realIo, templatesRoot, UsageError } from '@plexus-ms/lib';
 import { appsOfDeploys } from '../commands/displayVersions.ts';
 import { fakeIo, notThere } from '../testing/fakeIo.ts';
 import {
   displayVersions,
+  majorOf,
   nextVersion,
   notesOf,
   parseVersion,
@@ -155,6 +159,30 @@ test('a marker without a whole-number major of 1 or higher is a usage error, on 
   await assert.rejects(run(repo({ tags: ['1.0'], digests: unchanged }), 'production', ['web']), /states no major/);
   await assert.rejects(run(repo({ tags: ['1.0'], digests: {} }), 'staging'), /states no major/);
   await assert.rejects(run(repo({ tags: ['2.3'], major: 1, digests: {} }), 'staging'), /never goes back/);
+});
+
+test('the major a newborn repo-turbo repo with display versions states is the one this reads', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'plx-ci-major-'));
+  try {
+    for (const [answers, major] of [
+      [{}, 1],
+      [{ major: 3 }, 3],
+    ] as const) {
+      const target = join(dir, `major-${major}`);
+      // The birth commands and git are not the matter here: nothing but the tree is written.
+      const ctx = new Context({ yes: true }, { ...realIo(), exec: async () => '' });
+      await newSite(ctx, {
+        dir: target,
+        templates: ['repo-turbo'],
+        answers: { tenant: 'acme', display_versions: true, ...answers },
+        plxVersion: '0.0.0',
+        root: templatesRoot(),
+      });
+      assert.equal(await majorOf(new Context({}, realIo()), target), major);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('production: an image that is not published is an error, since publish runs first', async () => {
