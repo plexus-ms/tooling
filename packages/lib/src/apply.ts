@@ -125,20 +125,21 @@ function problemsOf(now: readonly MarkerSite[], before: readonly MarkerSite[]): 
       ];
 }
 
-/** The refusal that the root marker's `version` is not the running plx's, at HEAD and in the working tree; none when it is. */
+/** The refusal that the root marker's `version` is not the running plx's, at HEAD and in the working tree, naming `verb` in what to do; none when it is. */
 export function versionRefusal(
   now: readonly MarkerSite[],
   before: readonly MarkerSite[],
   plxVersion: string,
+  verb = 'apply',
 ): string | undefined {
   const [current, committed] = [now, before].map((sites) => sites.find((s) => s.dir === '.')?.config?.version);
   const root = MARKER_FILE;
   if (current === undefined)
-    return `the root ${root} names no version, so plx cannot tell which templates the files were rendered with: set \`version: ${plxVersion}\` there (the plx pin in mise.toml names it) and commit it, then run apply again`;
+    return `the root ${root} names no version, so plx cannot tell which templates the files were rendered with: set \`version: ${plxVersion}\` there (the plx pin in mise.toml names it) and commit it, then run ${verb} again`;
   if (committed !== current)
     return `the root ${root} names version ${current} in the working tree and ${committed ?? 'none'} at HEAD: the version is not edited by hand, only \`plx update\` writes it; restore it with git checkout HEAD -- ${root} (or undo that line)`;
   if (current !== plxVersion)
-    return `the root ${root} names version ${current}, and this plx is ${plxVersion}: apply with the plx that version pins (mise.toml)`;
+    return `the root ${root} names version ${current}, and this plx is ${plxVersion}: ${verb} with the plx that version pins (mise.toml)`;
   return undefined;
 }
 
