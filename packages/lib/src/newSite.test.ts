@@ -421,7 +421,7 @@ test('a failed birth command says that the tree is written and lists the command
     (error: Error) => {
       assert.match(error.message, /git failed/);
       assert.match(error.message, /files are written/);
-      assert.match(error.message, /git init\n.*mise trust/s);
+      assert.match(error.message, /git init\)\n.*mise trust\)/s);
       return true;
     },
   );

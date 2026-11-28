@@ -9,15 +9,20 @@
 //   1. Refuse a target that holds anything (a file, or a directory with
 //      entries). Nothing is written before every refusal below has been made.
 //   2. Tell a repo from an app. The directory is an app when the git repo it
-//      lies in has a `PLEXUS.md` at its top, read from the working tree: a
-//      repo just born has committed nothing, and its marker is not tracked
-//      yet. Anything else is a new repo, one nested in another repo without a
-//      marker included.
-//   3. Render. An app is rendered with the root marker's answers and the given
-//      ones; a root answer given again is refused (§ 5 of Decisions: a key is
-//      answered in one marker only), and so is a question of the app's
-//      templates that the root marker answers, which would stand in two
-//      markers. Every render error is reported together.
+//      lies in has a `PLEXUS.md` at its top, read from the working tree, so
+//      that an untracked one counts: a repo just born has committed nothing.
+//      Anything else is a new repo, one nested in another repo without a
+//      marker included. An app is refused, by the rule of `plx apply`
+//      (`versionRefusal`), where the root marker lists templates and its
+//      `version` is not the running plx's or is absent: the templates are the
+//      running version's, and all sites of a repo are on one version.
+//   3. Render. An app is rendered with the root's resolved answers, as a
+//      nested site is by `apply`: the root marker's and the defaults of its
+//      templates, plus the given ones. A root answer given again is refused
+//      (§ 5 of Decisions: a key is answered in one marker only), and so is a
+//      question of the app's templates that the root answers, which would
+//      stand in two markers. A template that cannot be read, and every render
+//      error, are reported together.
 //   4. Write the tree, then the marker's frontmatter into the file the render
 //      produced (`PLEXUS.md`; a render without one is refused, as the marker
 //      is where the answers go). The frontmatter is `version`, for a repo
@@ -27,7 +32,9 @@
 //      marker holds its own answers only: the root's are the root's.
 //   5. Run the birth commands in the target directory, each printed before it
 //      runs (the Context narrates every effect) and not run under --dry-run,
-//      which also writes nothing.
+//      which also writes nothing. A command that fails stops the run with its
+//      error, the note that the files are written, and the commands left to
+//      do by hand, the failed one first.
 //
 // The files are written through the engine's `planMerge` against an empty old
 // render, the one writer of directories (modes, symlinks, directories that
@@ -35,12 +42,13 @@
 import { mkdir, readdir, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import type { Answers } from '@plexus-ms/cli-template';
+import { versionRefusal } from './apply.ts';
 import { readTemplate } from './bundled.ts';
 import type { Context } from './context.ts';
 import { run } from './effects.ts';
 import { engine } from './engine.ts';
-import { MARKER_FILE, parseMarkerConfig, setMarkerKeys } from './marker.ts';
-import { describeError } from './sync.ts';
+import { MARKER_FILE, type MarkerConfig, parseMarkerConfig, setMarkerKeys } from './marker.ts';
+import { describeError, resolvedAnswers } from './sync.ts';
 import { templatesRoot } from './templatesRoot.ts';
 
 export interface NewOptions {
@@ -99,8 +107,8 @@ async function existingAbove(dir: string): Promise<string> {
   }
 }
 
-/** The answers of the root marker of the repo `dir` lies in, or undefined when `dir` is no app of a Plexus repo. */
-async function rootAnswers(ctx: Context, dir: string): Promise<Answers | undefined> {
+/** The root marker of the repo `dir` lies in, read from the working tree; undefined when `dir` is no app of a Plexus repo. */
+async function rootMarker(ctx: Context, dir: string): Promise<MarkerConfig | undefined> {
   let top: string;
   try {
     top = (await ctx.read('git', ['rev-parse', '--show-toplevel'], { cwd: await existingAbove(dir) })).trim();
@@ -114,7 +122,7 @@ async function rootAnswers(ctx: Context, dir: string): Promise<Answers | undefin
   });
   if (text === undefined) return undefined;
   try {
-    return parseMarkerConfig(text).answers;
+    return parseMarkerConfig(text);
   } catch (error) {
     throw new Error(`${file}: ${(error as Error).message}`);
   }
@@ -124,7 +132,19 @@ export async function newSite(ctx: Context, options: NewOptions): Promise<Create
   const dir = resolve(options.dir);
   const root = options.root ?? templatesRoot();
   await requireEmpty(dir);
-  const inherited = await rootAnswers(ctx, dir);
+  const rootConfig = await rootMarker(ctx, dir);
+  if (rootConfig?.templates !== undefined) {
+    // The bundled templates are the running version's, and all sites of a repo are on one version.
+    const refusal = versionRefusal(
+      [{ dir: '.', config: rootConfig }],
+      [{ dir: '.', config: rootConfig }],
+      options.plxVersion,
+    );
+    if (refusal !== undefined) throw new Error(refusal);
+  }
+  // A nested site's answers are the root's resolved ones, the defaults of its templates included.
+  const inherited =
+    rootConfig && (await resolvedAnswers(root, { templates: rootConfig.templates ?? [], answers: rootConfig.answers }));
   const kind = inherited === undefined ? 'repo' : 'app';
   const given = Object.keys(options.answers);
   const doubled = given.filter((key) => inherited && Object.hasOwn(inherited, key));
@@ -135,7 +155,14 @@ export async function newSite(ctx: Context, options: NewOptions): Promise<Create
 
   const { render, planMerge } = await engine();
   const trees = [];
-  for (const name of options.templates) trees.push((await readTemplate(root, name)).tree);
+  const unreadable: string[] = [];
+  for (const name of options.templates)
+    try {
+      trees.push((await readTemplate(root, name)).tree);
+    } catch (error) {
+      unreadable.push((error as Error).message);
+    }
+  if (unreadable.length > 0) throw new Error(unreadable.join('\n'));
   const result = render(trees, { ...inherited, ...options.answers });
   if (result.errors.length > 0) throw new Error(result.errors.map((e) => describeError(dir, e)).join('\n'));
   const own = Object.keys(result.answers).filter((key) => inherited && Object.hasOwn(inherited, key));
@@ -165,7 +192,15 @@ export async function newSite(ctx: Context, options: NewOptions): Promise<Create
     await plan.apply();
   }
   const birth = result.birth.map((b) => [...b.command]);
-  await ctx.apply(birth.map(([command, ...args]) => run(command as string, args, { cwd: dir })));
+  for (const [at, [command, ...args]] of birth.entries())
+    try {
+      await ctx.apply([run(command as string, args, { cwd: dir })]);
+    } catch (error) {
+      const left = birth.slice(at).map((c) => `  (cd ${dir} && ${c.join(' ')})`);
+      throw new Error(
+        `${(error as Error).message}\nthe files are written; run the commands still to do by hand, in order:\n${left.join('\n')}`,
+      );
+    }
   return {
     dir,
     kind,
