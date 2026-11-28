@@ -172,11 +172,14 @@ async function relatesTo(root: string, names: readonly string[], keys: readonly 
 async function sitesToTake(
   now: readonly MarkerSite[],
   before: readonly MarkerSite[],
-  root: string,
+  templates: () => string,
 ): Promise<SiteSides[]> {
   const configOf = (sites: readonly MarkerSite[], dir: string) => sites.find((s) => s.dir === dir)?.config;
   const [oldRoot, newRoot] = [sourceAt(before, '.', AT_HEAD), sourceAt(now, '.', IN_TREE)];
-  const rootChanged = changedKeys(await resolvedAnswers(root, oldRoot), await resolvedAnswers(root, newRoot));
+  // Equal root sources resolve to equal answers, so the templates are looked for only once the root changed.
+  const rootChanged = isDeepStrictEqual(oldRoot, newRoot)
+    ? []
+    : changedKeys(await resolvedAnswers(templates(), oldRoot), await resolvedAnswers(templates(), newRoot));
   const sides: SiteSides[] = [];
   for (const dir of new Set([...now, ...before].map((s) => s.dir))) {
     const [old, next] = [sourceAt(before, dir, AT_HEAD), sourceAt(now, dir, IN_TREE)];
@@ -185,7 +188,7 @@ async function sitesToTake(
     const own =
       !isDeepStrictEqual(was?.templates ?? [], is?.templates ?? []) ||
       !isDeepStrictEqual(was?.answers ?? {}, is?.answers ?? {});
-    if (own || (rootChanged.length > 0 && (await relatesTo(root, next.templates, rootChanged))))
+    if (own || (rootChanged.length > 0 && (await relatesTo(templates(), next.templates, rootChanged))))
       sides.push({ dir, old, new: next });
   }
   if (sides.length > 0 && !sides.some((s) => s.dir === '.'))
@@ -219,12 +222,13 @@ export async function apply(ctx: Context, options: ApplyOptions): Promise<Applie
     const refusal = versionRefusal(now, before, plxVersion);
     if (refusal !== undefined) throw new Error(refusal);
   }
-  const root = options.templates ?? templatesRoot();
-  const sides = await sitesToTake(now, before, root);
+  const templates = () => options.templates ?? templatesRoot();
+  const sides = await sitesToTake(now, before, templates);
+  if (sides.length === 0) return { sites: [], conflicted: 0, applied: false, declined: false };
   const siblings = now
     .filter((s) => s.dir !== '.')
     .map((s) => ({ dir: s.dir, templates: s.config?.templates ?? [], answers: s.config?.answers ?? {} }));
-  const plan = await planSync(ctx, repo, root, sides, {
+  const plan = await planSync(ctx, repo, templates(), sides, {
     labels: { old: 'the markers at HEAD', new: 'the markers in the working tree' },
     siblings,
   });
