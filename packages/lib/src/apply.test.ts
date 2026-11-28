@@ -710,13 +710,22 @@ test('planSync renders the root first, whatever order the sites are given in', a
   );
 });
 
-test('apply says a doubled key is at HEAD when only HEAD has it', async () => {
+test('apply says whether a doubled key is at HEAD or in the working tree', async () => {
   const { repo, templates } = fixture({
     'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: apple\nlid_color: red\n`),
     'apps/x/PLEXUS.md': marker('templates: [lid]\nlid_color: green\n'),
   });
   write(repo, { 'apps/x/PLEXUS.md': marker('templates: [lid]\n') });
   await assert.rejects(apply(quietContext(), options(repo, templates)), /lid_color.*the markers at HEAD/s);
+  const tree = fixture({ 'apps/x/PLEXUS.md': marker('templates: [lid]\n') });
+  write(tree.repo, {
+    'PLEXUS.md': marker(`version: ${VERSION}\ntemplates: [basket]\nfruit: apple\nlid_color: red\n`),
+    'apps/x/PLEXUS.md': marker('templates: [lid]\nlid_color: green\n'),
+  });
+  await assert.rejects(
+    apply(quietContext(), options(tree.repo, tree.templates)),
+    /lid_color.*the markers in the working tree/s,
+  );
 });
 
 test('apply refuses a root default for a key that a nested marker answers although its templates only read it', async () => {
