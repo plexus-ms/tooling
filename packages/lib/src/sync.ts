@@ -98,7 +98,7 @@ interface Side extends Rendered {
 const isRendered = (side: Source | Rendered): side is Rendered => 'tree' in side;
 
 /** An error as a line naming the site and what it concerns. */
-const describeError = (dir: string, e: RenderError): string => {
+export const describeError = (dir: string, e: RenderError): string => {
   const about = [e.template && `template ${e.template}`, e.path, e.question && `question ${e.question}`].filter(
     Boolean,
   );
