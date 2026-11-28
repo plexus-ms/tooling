@@ -111,3 +111,25 @@ test('planSync writes the version into a root marker that renders nothing, and n
   await plan.perform();
   assert.equal(text(repo, 'PLEXUS.md'), marker('version: 0.2.0\n'));
 });
+
+test('planSync refuses a root default when a nested site lists a template it cannot read, and writes nothing', async () => {
+  const old = templatesAt(scratch.fresh('v1'), { basket: BASKET });
+  const next = templatesAt(scratch.fresh('v2'), { basket: BASKET_NEXT });
+  const repo = repoWith(scratch.fresh('repo'), { 'PLEXUS.md': ROOT, 'list.txt': 'apples\nfresh\n' });
+  await assert.rejects(
+    planSync(
+      quietContext(),
+      repo,
+      { old: { root: old }, new: { root: next } },
+      [{ dir: '.', old: basket, new: basket }],
+      { siblings: [{ dir: 'apps/x', templates: ['gone'], answers: {} }] },
+    ),
+    (error: Error) => {
+      assert.match(error.message, /`count`/);
+      assert.match(error.message, /template gone of apps\/x\/PLEXUS\.md cannot be read/);
+      return true;
+    },
+  );
+  assert.equal(text(repo, 'list.txt'), 'apples\nfresh\n');
+  assert.equal(text(repo, 'PLEXUS.md'), ROOT);
+});
