@@ -49,6 +49,11 @@ test("copier's answers are completed with the keys of its marker's frontmatter, 
   assert.deepEqual(withMarkerFrontmatter(recorded, tree({})), recorded);
 });
 
+test("where copier's answers and its marker's frontmatter hold the same key, the recorded answer stands", () => {
+  const copied = tree({ 'PLEXUS.md': '---\nprofile: stateful-app\n---\n\nbody\n' });
+  assert.deepEqual(withMarkerFrontmatter({ profile: 'stateful' }, copied), { profile: 'stateful' });
+});
+
 test('the marker strip takes a marker with a frontmatter and no body to be empty', () => {
   assert.equal(dec(stripCopierMarker(enc('---\nplexus: 0.119.0\nmodules: [a, b]\n---\n'))), '');
 });
