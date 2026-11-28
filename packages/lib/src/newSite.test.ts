@@ -8,8 +8,8 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { after, test } from 'node:test';
-import { Context, diagnose, examine, newSite, realIo, templatesRoot } from './index.ts';
-import { git, repoWith, scratchDir, templatesAt, text, write } from './testing/siteRepo.ts';
+import { apply, Context, diagnose, examine, newSite, realIo, templatesRoot } from './index.ts';
+import { git, quietContext, repoWith, scratchDir, templatesAt, text, write } from './testing/siteRepo.ts';
 
 const scratch = scratchDir('new');
 after(scratch.remove);
@@ -63,6 +63,26 @@ const TEMPLATES = {
   rooted: {
     manifest: ['name: rooted', 'questions:', '  city:', '    default: Rome', ''].join('\n'),
     files: { 'PLEXUS.md.jinja': '- Rooted.\n' },
+  },
+  orphan: {
+    manifest: ['name: orphan', 'reads:', '  tenant:', 'questions:', '  profile:', '    default: stateless', ''].join(
+      '\n',
+    ),
+    files: { 'PLEXUS.md.jinja': '- Orphan.\n', 'profile.txt.jinja': '{{ profile }} of {{ tenant }}\n' },
+  },
+  toggle: {
+    manifest: [
+      'name: toggle',
+      'questions:',
+      '  on:',
+      '    type: bool',
+      '    default: false',
+      '  extra:',
+      '    default: x',
+      '    when: "{{ on }}"',
+      '',
+    ].join('\n'),
+    files: { 'PLEXUS.md.jinja': '- Toggle.\n' },
   },
   nomarker: {
     manifest: ['name: nomarker', ''].join('\n'),
@@ -517,4 +537,82 @@ test('the templates are listed in the marker in the order they were given', asyn
   const target = scratch.fresh('order2');
   await newSite(recording().ctx, create(target, ['shop', 'nomarker'], { tenant: 'acme' }, root));
   assert.match(text(target, 'PLEXUS.md'), /\ntemplates: \[shop, nomarker\]\n/);
+});
+
+// A given answer that a template reads and none owns stands in the marker, beside the resolved ones, so
+// that `plx apply` can render the site again. A read has no cast: the value is written as it was given.
+
+test('a repo from a template that reads a key keeps the given value in its marker', async () => {
+  const root = roots();
+  const target = scratch.fresh('orphan');
+  const created = await newSite(recording().ctx, create(target, ['orphan'], { tenant: 'acme' }, root));
+  assert.equal(
+    text(target, 'PLEXUS.md'),
+    '---\nversion: 0.131.0\ntemplates: [orphan]\nprofile: stateless\ntenant: acme\n---\n\n- Orphan.\n',
+  );
+  assert.deepEqual(created.answers, { profile: 'stateless', tenant: 'acme' });
+});
+
+test('an app from a template that reads a key its root lacks keeps the given value in its marker', async () => {
+  const root = roots();
+  const repo = repoMarked(`---\nversion: ${VERSION}\n---\n`);
+  const target = join(repo, 'apps', 'o');
+  await newSite(recording().ctx, create(target, ['orphan'], { tenant: 'acme' }, root));
+  assert.equal(
+    text(target, 'PLEXUS.md'),
+    '---\ntemplates: [orphan]\nprofile: stateless\ntenant: acme\n---\n\n- Orphan.\n',
+  );
+});
+
+test('a read is written as it was given, not cast', async () => {
+  const root = roots();
+  const target = scratch.fresh('orphan-string');
+  await newSite(recording().ctx, create(target, ['orphan'], { tenant: '7' }, root));
+  assert.match(text(target, 'PLEXUS.md'), /\ntenant: "7"\n/);
+});
+
+test('an answer to a question whose `when` is false is written nowhere, and the engine reports it nowhere', async () => {
+  const root = roots();
+  const target = scratch.fresh('toggle');
+  const created = await newSite(recording().ctx, create(target, ['toggle'], { extra: 'y' }, root));
+  assert.ok(!text(target, 'PLEXUS.md').includes('extra'));
+  assert.deepEqual(created.unused, []);
+});
+
+test('an unused answer stays out of the marker of a template that reads other keys', async () => {
+  const root = roots();
+  const target = scratch.fresh('orphan-unused');
+  const created = await newSite(recording().ctx, create(target, ['orphan'], { tenant: 'acme', cty: 'x' }, root));
+  assert.deepEqual(created.unused, ['cty']);
+  assert.ok(!text(target, 'PLEXUS.md').includes('cty'));
+});
+
+test('after plx new, a commit and an edit of an answer, apply renders the site, and apply right after the commit has nothing to do', async () => {
+  const root = roots();
+  const target = scratch.fresh('orphan-apply');
+  await newSite(recording().ctx, create(target, ['orphan'], { tenant: 'acme' }, root));
+  git(target, 'init', '-q', '-b', 'main');
+  git(target, 'add', '-A');
+  git(target, 'commit', '-q', '-m', 'born');
+  const options = { repo: target, plxVersion: VERSION, templates: root };
+  const nothing = await apply(quietContext({ yes: true, dryRun: true }), options);
+  assert.deepEqual(nothing.sites, []);
+  write(target, { 'PLEXUS.md': text(target, 'PLEXUS.md').replace('profile: stateless', 'profile: stateful') });
+  const applied = await apply(quietContext(), options);
+  assert.equal(applied.conflicted, 0);
+  assert.equal(text(target, 'profile.txt'), 'stateful of acme\n');
+});
+
+test('the version refusal names this verb, not apply', async () => {
+  const root = roots();
+  const repo = repoMarked('---\nversion: 0.130.0\ntemplates: [shop]\ntenant: acme\n---\n');
+  await assert.rejects(
+    newSite(recording().ctx, create(join(repo, 'apps', 'x'), ['stall'], { goods: 'a' }, root)),
+    (error: Error) => /plx new/.test(error.message) && !/apply/.test(error.message),
+  );
+  const unversioned = repoMarked('---\ntemplates: [shop]\ntenant: acme\n---\n');
+  await assert.rejects(
+    newSite(recording().ctx, create(join(unversioned, 'apps', 'x'), ['stall'], { goods: 'a' }, root)),
+    (error: Error) => /plx new/.test(error.message) && !/apply/.test(error.message),
+  );
 });
