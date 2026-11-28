@@ -84,6 +84,10 @@ const TEMPLATES = {
     ].join('\n'),
     files: { 'PLEXUS.md.jinja': '- Toggle.\n' },
   },
+  reader: {
+    manifest: ['name: reader', 'reads:', '  stalls:', ''].join('\n'),
+    files: { 'reader.txt.jinja': '{{ stalls }}\n' },
+  },
   nomarker: {
     manifest: ['name: nomarker', ''].join('\n'),
     files: { 'a.txt': 'a\n' },
@@ -615,4 +619,12 @@ test('the version refusal names this verb, not apply', async () => {
     newSite(recording().ctx, create(join(unversioned, 'apps', 'x'), ['stall'], { goods: 'a' }, root)),
     (error: Error) => /plx new/.test(error.message) && !/apply/.test(error.message),
   );
+});
+
+test('a read of a key another rendered template owns is written once, as the owner casts it', async () => {
+  const root = roots();
+  const target = scratch.fresh('owned-read');
+  await newSite(recording().ctx, create(target, ['shop', 'reader'], { tenant: 'acme', stalls: '3' }, root));
+  assert.match(text(target, 'PLEXUS.md'), /\nstalls: 3\n/);
+  assert.equal(text(target, 'PLEXUS.md').match(/stalls/g)?.length, 1);
 });

@@ -28,8 +28,14 @@
 //      is where the answers go). The frontmatter is `version`, for a repo
 //      only and the version of the running plx, then `templates`, then the
 //      answers the render resolved, defaults included, so that a later change
-//      of a default upstream does not silently change the repo. An app's
-//      marker holds its own answers only: the root's are the root's.
+//      of a default upstream does not silently change the repo, then the
+//      given answers that a rendered template reads and none owns, as they
+//      were given (the engine casts only what a template owns): without them
+//      `plx apply` could not render the site again. A given answer that
+//      nothing owns or reads is written nowhere and reported unused; one for
+//      a question whose `when` is false is written nowhere and not reported,
+//      as the engine does not. An app's marker holds its own answers only:
+//      the root's are the root's.
 //   5. Run the birth commands in the target directory, each printed before it
 //      runs (the Context narrates every effect) and not run under --dry-run,
 //      which also writes nothing. A command that fails stops the run with its
@@ -41,7 +47,7 @@
 // stay), so that a tree is written as an update would write it.
 import { mkdir, readdir, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import type { Answers } from '@plexus-ms/cli-template';
+import type { Answers, Manifest } from '@plexus-ms/cli-template';
 import { versionRefusal } from './apply.ts';
 import { readTemplate } from './bundled.ts';
 import type { Context } from './context.ts';
@@ -68,7 +74,7 @@ export interface Created {
   dir: string;
   kind: 'repo' | 'app';
   templates: readonly string[];
-  /** The answers written into the marker: the resolved ones of the render, the root's not among them. */
+  /** The answers written into the marker: the resolved ones of the render and the given ones it reads, the root's not among them. */
   answers: Answers;
   /** The paths of the tree, sorted. */
   files: string[];
@@ -139,6 +145,7 @@ export async function newSite(ctx: Context, options: NewOptions): Promise<Create
       [{ dir: '.', config: rootConfig }],
       [{ dir: '.', config: rootConfig }],
       options.plxVersion,
+      'plx new',
     );
     if (refusal !== undefined) throw new Error(refusal);
   }
@@ -155,10 +162,13 @@ export async function newSite(ctx: Context, options: NewOptions): Promise<Create
 
   const { render, planMerge } = await engine();
   const trees = [];
+  const manifests: Manifest[] = [];
   const unreadable: string[] = [];
   for (const name of options.templates)
     try {
-      trees.push((await readTemplate(root, name)).tree);
+      const template = await readTemplate(root, name);
+      trees.push(template.tree);
+      manifests.push(template.manifest);
     } catch (error) {
       unreadable.push((error as Error).message);
     }
@@ -176,10 +186,15 @@ export async function newSite(ctx: Context, options: NewOptions): Promise<Create
       `the templates render no ${MARKER_FILE}, the file that holds a site's answers: add the one that does`,
     );
 
+  // An answer a template reads and none owns is no resolved answer, and the site cannot be rendered again without it.
+  const owned = new Set(manifests.flatMap((m) => m.questions.map((q) => q.name)));
+  const read = new Set(manifests.flatMap((m) => m.reads.map((r) => r.name)));
+  const reads = Object.fromEntries(Object.entries(options.answers).filter(([key]) => read.has(key) && !owned.has(key)));
   const frontmatter = {
     ...(kind === 'repo' ? { version: options.plxVersion } : {}),
     templates: [...options.templates],
     ...result.answers,
+    ...reads,
   };
   const text = setMarkerKeys(`---\n---\n\n${new TextDecoder().decode(marker.bytes)}`, frontmatter);
   const tree = new Map(result.tree).set(MARKER_FILE, { ...marker, bytes: new TextEncoder().encode(text) });
@@ -205,7 +220,7 @@ export async function newSite(ctx: Context, options: NewOptions): Promise<Create
     dir,
     kind,
     templates: options.templates,
-    answers: result.answers,
+    answers: { ...result.answers, ...reads },
     files: [...tree.keys()].sort(),
     birth,
     unused: result.unused.filter((key) => given.includes(key)),
