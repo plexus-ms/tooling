@@ -1499,7 +1499,8 @@ test('the bundled templates are read only for a repo in which a marker lists tem
 });
 
 test("the root marker's resolved answers, defaults included, are read from the templates", async () => {
-  const report = await doctorOver(marked(BROKEN), '/ws/web', VERBS, CROSSED, {}, '0.130.0');
+  const valid = marked('---\nversion: 0.130.0\ntemplates: [repo-turbo]\ntenant: plexus\n---\n');
+  const report = await doctorOver(valid, '/ws/web', VERBS, CROSSED, {}, '0.130.0');
   assert.equal((report.facts[0] as RepoFacts).rootAnswers?.ci_strategy, 'github');
 });
 
