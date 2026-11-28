@@ -400,6 +400,28 @@ test('a repo from repo-turbo and an app from app-nextjs in it: the trees and the
   }
 });
 
+/** The marker of a repo born from repo-turbo with these answers. */
+async function turboMarker(answers: Record<string, unknown>) {
+  const target = scratch.fresh('turbo-major');
+  await newSite(recording().ctx, {
+    dir: target,
+    templates: ['repo-turbo'],
+    answers: { tenant: 'acme', ...answers },
+    plxVersion: bundled.version,
+    root: templatesRoot(),
+  });
+  return text(target, 'PLEXUS.md');
+}
+
+test('major is asked of a repo with display versions, and of no other', async () => {
+  assert.match(await turboMarker({ display_versions: true }), /\nmajor: 1\n/);
+  assert.match(await turboMarker({ display_versions: true, major: 3 }), /\nmajor: 3\n/);
+  assert.ok(!(await turboMarker({})).includes('major:'));
+  assert.ok(!(await turboMarker({ display_versions: false })).includes('major:'));
+  assert.ok(!(await turboMarker({ publishes_packages: true })).includes('major:'));
+  assert.ok(!(await turboMarker({ publishes_packages: true, display_versions: true })).includes('major:'));
+});
+
 // The version the repo is on is the running plx's: the bundled templates are that version's.
 
 /** A repo whose root marker is `marker`, committed. */

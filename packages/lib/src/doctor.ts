@@ -667,9 +667,12 @@ async function templateFacts(
   if (!sites.some((s) => (s.config?.templates?.length ?? 0) > 0)) return {};
   const root = sites.find((s) => s.dir === '.')?.config;
   if (plxVersion !== undefined && root?.version !== plxVersion) {
-    const named = root?.version === undefined ? 'names no version' : `names version ${root.version}`;
+    const skipped = 'the markers are not checked against the templates: this plx is';
     return {
-      templatesSkipped: `the markers are not checked against the templates: this plx is ${plxVersion}, the root marker ${named}; run the plx that version pins`,
+      templatesSkipped:
+        root?.version === undefined
+          ? `${skipped} ${plxVersion}, the root marker names no version, so there is nothing to check this plx against`
+          : `${skipped} ${plxVersion}, the root marker names version ${root.version}; run the plx that version pins`,
     };
   }
   return {
