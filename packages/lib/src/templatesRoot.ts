@@ -25,7 +25,8 @@ export function templatesRoot(from: string = import.meta.url): string {
   throw new Error(`no bundled templates: looked for ${beside} and ${resolve(repo)}`);
 }
 
-function isDirectory(path: string): boolean {
+/** Whether `path` is a directory. */
+export function isDirectory(path: string): boolean {
   try {
     return statSync(path).isDirectory();
   } catch {

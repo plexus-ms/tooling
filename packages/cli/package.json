@@ -30,11 +30,11 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^8.8.0",
+    "@plexus-ms/cli-template": "workspace:*",
     "@plexus-ms/lib": "workspace:*",
     "commander": "^15.1.0"
   },
   "devDependencies": {
-    "@plexus-ms/cli-template": "workspace:*",
     "@types/node": "^24.19.2",
     "esbuild": "^0.28.2",
     "typescript": "catalog:"
